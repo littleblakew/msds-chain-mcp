@@ -45,6 +45,13 @@ async def health(request: Request) -> JSONResponse:
 
 # Inject custom routes into FastMCP's Starlette app via _custom_starlette_routes.
 # This avoids the sub-app mount issue where lifespan (task group init) doesn't propagate.
+from mcp.server.transport_security import TransportSecuritySettings
+
+# Disable DNS rebinding protection (Container App handles TLS/host validation)
+mcp.settings.transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=False,
+)
+
 mcp._custom_starlette_routes.append(Route("/health", health, methods=["GET"]))
 
 if OAUTH_ENABLED:
