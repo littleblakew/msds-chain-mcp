@@ -59,6 +59,24 @@ mcp = FastMCP(
 )
 
 
+_API_KEY_REQUIRED_MSG = (
+    "⚠️ MSDS_API_KEY is required for all tools.\n\n"
+    "Get a free API key (100 calls/day) at https://msdschain.lagentbot.com:\n"
+    "1. Sign up / log in\n"
+    "2. Go to API Keys tab\n"
+    "3. Create a key\n"
+    "4. Set it: export MSDS_API_KEY=sk-msds-your-key\n\n"
+    "Then restart the MCP server."
+)
+
+
+def _require_api_key() -> str | None:
+    """Return error message if API key is missing, None if OK."""
+    if not API_KEY:
+        return _API_KEY_REQUIRED_MSG
+    return None
+
+
 def _headers() -> dict[str, str]:
     h = {"Content-Type": "application/json"}
     if API_KEY:
@@ -68,6 +86,8 @@ def _headers() -> dict[str, str]:
 
 async def _quick_chat(message: str) -> dict:
     """POST /quick-chat and return the parsed response."""
+    if err := _require_api_key():
+        raise RuntimeError(err)
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         res = await client.post(
             f"{API_URL}/quick-chat",
@@ -623,6 +643,8 @@ async def search_chemical_database(query: str) -> str:
     error_msg = None
     success = True
     try:
+        if err := _require_api_key():
+            return err
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             res = await client.get(
                 f"{API_URL}/chemicals",
