@@ -655,6 +655,51 @@ async def search_chemical_database(query: str) -> str:
 
 
 @mcp.tool()
+async def check_mixing_order(chemical_a: str, chemical_b: str, context: str = "") -> str:
+    """
+    Determine the safe order for mixing/adding two chemicals.
+
+    Returns the recommended addition sequence, the dangerous sequence to avoid,
+    reasoning (exothermic potential, gas evolution, splashing risk), and any
+    required precautions (cooling, dilution rate, inert atmosphere).
+
+    Classic examples: "acid into water, never water into acid";
+    "add oxidizer to substrate slowly, not the reverse".
+
+    Use this when reviewing liquid transfer steps in an Opentrons protocol or
+    any manual procedure involving sequential addition of reagents.
+
+    Args:
+        chemical_a: First chemical name or CAS number
+        chemical_b: Second chemical name or CAS number
+        context:    Optional context about the procedure, e.g.
+                    "diluting for titration" or "quenching a reaction"
+    """
+    t0 = time.monotonic()
+    error_msg = None
+    success = True
+    try:
+        ctx = f" Context: {context}." if context else ""
+        message = (
+            f"What is the safe order for mixing {chemical_a} and {chemical_b}?{ctx} "
+            "Specify: (1) the RECOMMENDED addition order and why, "
+            "(2) the DANGEROUS order to avoid and what happens if done wrong, "
+            "(3) required precautions (cooling, addition rate, stirring, inert atmosphere). "
+            "If order doesn't matter for this pair, say so explicitly."
+        )
+        data = await _quick_chat(message)
+        return data["answer"] + _format_tool_results(data.get("tool_results", []))
+    except Exception as e:
+        success = False
+        error_msg = str(e)[:500]
+        raise
+    finally:
+        dur = int((time.monotonic() - t0) * 1000)
+        await _log_call("check_mixing_order", [chemical_a, chemical_b], dur, success, error_msg,
+                        _json.dumps({"chemical_a": chemical_a, "chemical_b": chemical_b, "context": context}))
+
+
+@mcp.tool()
 async def get_waste_disposal(chemicals: list[str]) -> str:
     """
     Get waste classification and disposal guidance for chemicals.

@@ -16,11 +16,12 @@ When you use Claude to plan a synthesis route or set up an Opentrons protocol, s
 - Verify compliance with EU REACH, US OSHA/TSCA, and 6 other jurisdictions
 - Generate signed audit reports for GLP/GMP compliance
 
-## Tools (14)
+## Tools (15)
 
 | Tool | Description |
 |------|-------------|
 | **`batch_safety_check`** | One-call comprehensive report: compatibility + PPE + storage grouping for a chemical list |
+| **`check_mixing_order`** | Safe addition sequence for reagent pairs (e.g., acid into water) |
 | **`get_waste_disposal`** | Waste classification, container type, and disposal procedures |
 | `check_chemical_compatibility` | Pairwise compatibility for 2+ chemicals |
 | `get_chemical_risk_warnings` | GHS classification, H-codes, signal words, flash point |
@@ -184,7 +185,7 @@ npx @modelcontextprotocol/inspector python server.py
 ## Roadmap
 
 - [x] `get_waste_disposal` — waste classification and disposal guidance
-- [ ] `check_mixing_order` — safe addition sequence for reagent pairs
+- [x] `check_mixing_order` — safe addition sequence for reagent pairs
 - [ ] `get_chemical_alternatives` — safer substitutes for restricted chemicals
 - [ ] Remote MCP (HTTP SSE) for cloud-hosted access
 - [ ] OAuth 2.1 for Claude Marketplace integration
