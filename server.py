@@ -28,6 +28,7 @@ import time
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 # ---------------------------------------------------------------------------
 # Config
@@ -42,6 +43,9 @@ TIMEOUT = 30.0
 
 mcp = FastMCP(
     "MSDS Chain",
+    host="0.0.0.0",
+    port=8080,
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     instructions=textwrap.dedent("""
         MSDS Chain provides chemical safety intelligence:
         - Compatibility checks between chemicals
