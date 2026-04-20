@@ -655,6 +655,50 @@ async def search_chemical_database(query: str) -> str:
 
 
 @mcp.tool()
+async def get_waste_disposal(chemicals: list[str]) -> str:
+    """
+    Get waste classification and disposal guidance for chemicals.
+
+    Returns waste category (halogenated/non-halogenated/acidic/alkaline/
+    heavy metal/oxidizing/reactive), disposal method, container requirements,
+    and incompatible waste streams that must NOT be mixed.
+
+    Based on SDS Section 13 (Disposal Considerations) data.
+
+    Use this after an experiment to determine proper waste segregation and
+    disposal procedures for the chemicals used.
+
+    Args:
+        chemicals: List of chemical names or CAS numbers, e.g.
+                   ["dichloromethane", "acetone", "sulfuric acid"]
+    """
+    t0 = time.monotonic()
+    error_msg = None
+    success = True
+    try:
+        chem_list = ", ".join(chemicals)
+        message = (
+            f"What is the proper waste disposal procedure for: {chem_list}? "
+            "For each chemical, specify: waste classification category "
+            "(halogenated organic / non-halogenated organic / acidic / alkaline / "
+            "heavy metal / oxidizing / reactive / biological), "
+            "container type, labeling requirements, and which waste streams "
+            "they must NOT be combined with. Also note any special disposal "
+            "requirements from SDS Section 13."
+        )
+        data = await _quick_chat(message)
+        return data["answer"] + _format_tool_results(data.get("tool_results", []))
+    except Exception as e:
+        success = False
+        error_msg = str(e)[:500]
+        raise
+    finally:
+        dur = int((time.monotonic() - t0) * 1000)
+        await _log_call("get_waste_disposal", chemicals, dur, success, error_msg,
+                        _json.dumps({"chemicals": chemicals}))
+
+
+@mcp.tool()
 async def batch_safety_check(chemicals: list[str]) -> str:
     """
     Run a comprehensive safety check on a list of chemicals in one call.
