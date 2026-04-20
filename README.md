@@ -16,11 +16,12 @@ When you use Claude to plan a synthesis route or set up an Opentrons protocol, s
 - Verify compliance with EU REACH, US OSHA/TSCA, and 6 other jurisdictions
 - Generate signed audit reports for GLP/GMP compliance
 
-## Tools (15)
+## Tools (16)
 
 | Tool | Description |
 |------|-------------|
 | **`batch_safety_check`** | One-call comprehensive report: compatibility + PPE + storage grouping for a chemical list |
+| **`validate_protocol_chemicals`** | Extract & validate chemical names from protocol text or code |
 | **`check_mixing_order`** | Safe addition sequence for reagent pairs (e.g., acid into water) |
 | **`get_waste_disposal`** | Waste classification, container type, and disposal procedures |
 | `check_chemical_compatibility` | Pairwise compatibility for 2+ chemicals |

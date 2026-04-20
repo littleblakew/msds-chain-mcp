@@ -655,6 +655,55 @@ async def search_chemical_database(query: str) -> str:
 
 
 @mcp.tool()
+async def validate_protocol_chemicals(protocol_text: str) -> str:
+    """
+    Extract and validate chemical names from a protocol or experiment description.
+
+    Parses free-text or code (e.g., Opentrons Python protocol, lab notebook entry,
+    SOP paragraph) to identify all mentioned chemicals, then checks each against
+    the MSDS Chain database.
+
+    Returns a structured list with: chemical name as mentioned, canonical name,
+    CAS number (if found), and whether full safety data is available.
+
+    Use this as the FIRST step before calling batch_safety_check or
+    check_chemical_compatibility — it saves the user from manually listing chemicals.
+
+    Args:
+        protocol_text: Any text containing chemical names — can be a Python script,
+                       a natural language protocol description, or a reagent list.
+                       Maximum ~4000 characters.
+    """
+    t0 = time.monotonic()
+    error_msg = None
+    success = True
+    try:
+        if len(protocol_text) > 4000:
+            protocol_text = protocol_text[:4000] + "\n[...truncated]"
+
+        message = (
+            "Extract ALL chemical names, reagents, and solvents from the following "
+            "text. For each one, look it up in our database and report:\n"
+            "- Name as mentioned in the text\n"
+            "- Canonical name (if different)\n"
+            "- CAS number (if found)\n"
+            "- Whether we have safety data for it (yes/no)\n\n"
+            "If a name is ambiguous, note the ambiguity.\n\n"
+            f"Text to analyze:\n```\n{protocol_text}\n```"
+        )
+        data = await _quick_chat(message)
+        return data["answer"] + _format_tool_results(data.get("tool_results", []))
+    except Exception as e:
+        success = False
+        error_msg = str(e)[:500]
+        raise
+    finally:
+        dur = int((time.monotonic() - t0) * 1000)
+        await _log_call("validate_protocol_chemicals", None, dur, success, error_msg,
+                        _json.dumps({"protocol_text_length": len(protocol_text)}))
+
+
+@mcp.tool()
 async def check_mixing_order(chemical_a: str, chemical_b: str, context: str = "") -> str:
     """
     Determine the safe order for mixing/adding two chemicals.
