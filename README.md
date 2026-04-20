@@ -128,6 +128,31 @@ Claude:
   → Returns: Signed PDF URL (Ed25519 signature, suitable for GLP/GMP compliance)
 ```
 
+## Remote Mode (HTTP)
+
+For cloud deployment or shared team access, run as an HTTP server:
+
+```bash
+# Streamable HTTP (recommended for Claude Code 2026+)
+MSDS_API_KEY=sk-msds-xxx python server_remote.py
+
+# Or SSE mode
+MSDS_MCP_TRANSPORT=sse MSDS_API_KEY=sk-msds-xxx python server_remote.py
+```
+
+Connect from Claude Code:
+
+```bash
+claude mcp add msds-chain --transport http https://your-server.example.com/mcp
+```
+
+### Docker
+
+```bash
+docker build -t msds-chain-mcp .
+docker run -p 8080:8080 -e MSDS_API_KEY=sk-msds-xxx msds-chain-mcp
+```
+
 ## Configuration
 
 | Variable | Default | Description |
@@ -190,7 +215,7 @@ npx @modelcontextprotocol/inspector python server.py
 - [x] `get_waste_disposal` — waste classification and disposal guidance
 - [x] `check_mixing_order` — safe addition sequence for reagent pairs
 - [x] `get_chemical_alternatives` — safer substitutes for restricted chemicals
-- [ ] Remote MCP (HTTP SSE) for cloud-hosted access
+- [x] Remote MCP (HTTP SSE / Streamable HTTP) for cloud-hosted access
 - [ ] OAuth 2.1 for Claude Marketplace integration
 
 ## License
