@@ -655,6 +655,71 @@ async def search_chemical_database(query: str) -> str:
 
 
 @mcp.tool()
+async def get_sds_section(chemical: str, section: int) -> str:
+    """
+    Retrieve a specific SDS (Safety Data Sheet) section for a chemical.
+
+    The 16 standard GHS-SDS sections are:
+      1. Identification
+      2. Hazard(s) identification
+      3. Composition / ingredients
+      4. First-aid measures
+      5. Fire-fighting measures
+      6. Accidental release measures
+      7. Handling and storage
+      8. Exposure controls / PPE
+      9. Physical and chemical properties
+      10. Stability and reactivity
+      11. Toxicological information
+      12. Ecological information
+      13. Disposal considerations
+      14. Transport information
+      15. Regulatory information
+      16. Other information
+
+    Use this when you need detailed data from a specific section rather than
+    a general safety overview.
+
+    Args:
+        chemical: Chemical name or CAS number
+        section:  SDS section number (1-16)
+    """
+    t0 = time.monotonic()
+    error_msg = None
+    success = True
+    try:
+        if section < 1 or section > 16:
+            return "Section number must be between 1 and 16."
+
+        section_names = {
+            1: "Identification", 2: "Hazard(s) identification",
+            3: "Composition/ingredients", 4: "First-aid measures",
+            5: "Fire-fighting measures", 6: "Accidental release measures",
+            7: "Handling and storage", 8: "Exposure controls/PPE",
+            9: "Physical and chemical properties", 10: "Stability and reactivity",
+            11: "Toxicological information", 12: "Ecological information",
+            13: "Disposal considerations", 14: "Transport information",
+            15: "Regulatory information", 16: "Other information",
+        }
+        sec_name = section_names[section]
+        message = (
+            f"Provide the full SDS Section {section} ({sec_name}) data for {chemical}. "
+            "Include all sub-fields typically found in this section according to "
+            "GHS/REACH format. Present the data in a structured format."
+        )
+        data = await _quick_chat(message)
+        return data["answer"] + _format_tool_results(data.get("tool_results", []))
+    except Exception as e:
+        success = False
+        error_msg = str(e)[:500]
+        raise
+    finally:
+        dur = int((time.monotonic() - t0) * 1000)
+        await _log_call("get_sds_section", [chemical], dur, success, error_msg,
+                        _json.dumps({"chemical": chemical, "section": section}))
+
+
+@mcp.tool()
 async def get_chemical_alternatives(chemical: str, use_case: str = "") -> str:
     """
     Suggest safer alternatives for a chemical, considering its intended use.
