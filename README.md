@@ -216,7 +216,7 @@ npx @modelcontextprotocol/inspector python server.py
 - [x] `check_mixing_order` — safe addition sequence for reagent pairs
 - [x] `get_chemical_alternatives` — safer substitutes for restricted chemicals
 - [x] Remote MCP (HTTP SSE / Streamable HTTP) for cloud-hosted access
-- [ ] OAuth 2.1 for Claude Marketplace integration
+- [x] OAuth 2.1 for Claude Marketplace integration (skeleton — needs Redis/DB for production)
 
 ## License
 
