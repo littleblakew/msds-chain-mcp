@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY server.py server_remote.py ./
+COPY server.py server_remote.py oauth.py ./
 
 ENV MSDS_MCP_HOST=0.0.0.0
 ENV MSDS_MCP_PORT=8080
