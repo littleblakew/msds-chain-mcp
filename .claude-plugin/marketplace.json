@@ -1,8 +1,8 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "MSDS Chain — Chemical Safety Intelligence",
+  "name": "msds-chain-safety",
   "version": "1.0.0",
-  "description": "MCP server providing chemical safety reasoning tools for AI-assisted experiment design. Compatibility checks, hazard analysis, PPE, storage, waste disposal, mixing order, regulatory compliance, and signed audit reports.",
+  "description": "MCP server providing chemical safety reasoning tools for AI-assisted experiment design.",
   "owner": {
     "name": "LAgentBot Pte. Ltd.",
     "email": "contact@lagentbot.com"
@@ -10,30 +10,8 @@
   "plugins": [
     {
       "name": "msds-chain",
-      "description": "18 chemical safety tools — compatibility, risk warnings, PPE, storage, waste disposal, mixing order, alternatives, exposure limits, transport classification, regulatory compliance, protocol validation, SDS sections, batch audit, and signed reports. Supports 5 languages and 8 regulatory jurisdictions.",
-      "source": "https://github.com/littleblakew/msds-chain-mcp",
-      "category": "life-sciences",
-      "version": "1.0.0",
-      "author": "LAgentBot",
-      "homepage": "https://msdschain.lagentbot.com",
-      "repository": "https://github.com/littleblakew/msds-chain-mcp",
-      "license": "MIT",
-      "keywords": [
-        "chemistry",
-        "safety",
-        "MSDS",
-        "SDS",
-        "GHS",
-        "compliance",
-        "REACH",
-        "OSHA",
-        "lab-automation",
-        "opentrons",
-        "EHS",
-        "hazard",
-        "PPE",
-        "compatibility"
-      ]
+      "description": "18 chemical safety tools for compatibility, hazard, PPE, storage, waste disposal, mixing order, regulatory compliance, and signed audit reports.",
+      "source": "https://github.com/littleblakew/msds-chain-mcp"
     }
   ]
 }

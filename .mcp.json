@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "msds-chain": {
+      "command": "python",
+      "args": ["server.py"],
+      "env": {
+        "MSDS_API_KEY": "${MSDS_API_KEY}",
+        "MSDS_LANG": "${MSDS_LANG:-en}"
+      }
+    }
+  }
+}
