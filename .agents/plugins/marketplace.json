@@ -1,0 +1,16 @@
+{
+  "name": "msds-chain-safety",
+  "version": "1.0.0",
+  "description": "Chemical safety intelligence MCP tools for lab research and experiment design",
+  "owner": {
+    "name": "LAgentBot Pte. Ltd.",
+    "email": "contact@lagentbot.com"
+  },
+  "plugins": [
+    {
+      "name": "msds-chain",
+      "description": "18 chemical safety tools — compatibility, hazard, PPE, storage, waste disposal, mixing order, regulatory compliance, and signed audit reports",
+      "source": "."
+    }
+  ]
+}

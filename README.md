@@ -53,13 +53,19 @@ cd msds-chain-mcp
 pip install -r requirements.txt
 ```
 
-### 3. Add to Claude Code
+### 3. Add to your AI coding agent
 
+**Claude Code:**
 ```bash
 claude mcp add msds-chain -- python /path/to/msds-chain-mcp/server.py
 ```
 
-Or manually edit `~/.claude.json`:
+**OpenAI Codex:**
+```bash
+codex marketplace add https://github.com/littleblakew/msds-chain-mcp
+```
+
+**Manual config** (Claude Code `~/.claude.json` or Codex `.agents/`):
 
 ```json
 {

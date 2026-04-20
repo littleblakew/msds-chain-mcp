@@ -1,0 +1,15 @@
+{
+  "name": "msds-chain",
+  "version": "1.0.0",
+  "description": "Chemical safety intelligence for AI-assisted experiment design — 18 tools for compatibility, hazard, PPE, storage, waste disposal, mixing order, compliance, and signed audit reports.",
+  "author": {
+    "name": "LAgentBot Pte. Ltd.",
+    "url": "https://msdschain.lagentbot.com"
+  },
+  "mcpServers": {
+    "msds-chain": {
+      "type": "http",
+      "url": "https://mcp.lagentbot.com/mcp"
+    }
+  }
+}
