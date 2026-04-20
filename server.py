@@ -655,6 +655,50 @@ async def search_chemical_database(query: str) -> str:
 
 
 @mcp.tool()
+async def get_chemical_alternatives(chemical: str, use_case: str = "") -> str:
+    """
+    Suggest safer alternatives for a chemical, considering its intended use.
+
+    Returns 2-4 alternative chemicals with: name, CAS number, why it's safer
+    (lower toxicity, higher flash point, non-CMR, etc.), any trade-offs
+    (cost, availability, performance), and relevant regulatory context
+    (e.g., REACH SVHC substitution requirement).
+
+    Use this when a chemical is flagged as high-risk, restricted, or when the
+    user is exploring greener chemistry options.
+
+    Args:
+        chemical: Chemical name or CAS number to find alternatives for
+        use_case: Optional context about how the chemical is being used, e.g.
+                  "degreasing solvent", "extraction solvent for organic synthesis",
+                  "cleaning agent for labware"
+    """
+    t0 = time.monotonic()
+    error_msg = None
+    success = True
+    try:
+        ctx = f" It is being used as: {use_case}." if use_case else ""
+        message = (
+            f"Suggest 2-4 safer alternatives to {chemical}.{ctx} "
+            "For each alternative, provide: chemical name, CAS number, "
+            "why it's safer (specific hazard reduction), any trade-offs "
+            "(performance, cost, availability), and whether the original is "
+            "restricted under any regulation (REACH SVHC, TSCA, etc.). "
+            "Focus on drop-in replacements that serve the same function."
+        )
+        data = await _quick_chat(message)
+        return data["answer"] + _format_tool_results(data.get("tool_results", []))
+    except Exception as e:
+        success = False
+        error_msg = str(e)[:500]
+        raise
+    finally:
+        dur = int((time.monotonic() - t0) * 1000)
+        await _log_call("get_chemical_alternatives", [chemical], dur, success, error_msg,
+                        _json.dumps({"chemical": chemical, "use_case": use_case}))
+
+
+@mcp.tool()
 async def validate_protocol_chemicals(protocol_text: str) -> str:
     """
     Extract and validate chemical names from a protocol or experiment description.
