@@ -40,7 +40,7 @@ OAUTH_ENABLED = os.environ.get("MSDS_OAUTH_ENABLED", "0") == "1"
 
 async def health(request: Request) -> JSONResponse:
     """Health check endpoint for container orchestration."""
-    return JSONResponse({"status": "ok", "tools": 19, "oauth": OAUTH_ENABLED})
+    return JSONResponse({"status": "ok", "tools": 20, "oauth": OAUTH_ENABLED})
 
 
 # Inject custom routes into FastMCP's Starlette app via _custom_starlette_routes.

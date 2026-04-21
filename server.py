@@ -928,6 +928,67 @@ async def get_waste_disposal(chemicals: list[str]) -> str:
 
 
 @mcp.tool()
+async def compare_sds_versions(
+    chemical: str,
+    version_old: str,
+    version_new: str,
+) -> str:
+    """
+    Compare two versions of a Safety Data Sheet (SDS) for the same chemical.
+
+    Identifies what changed between revisions: new hazard classifications,
+    updated exposure limits, revised PPE requirements, changed storage
+    conditions, regulatory status updates, or H-code additions/removals.
+
+    Useful for tracking regulatory compliance when a supplier issues a new SDS,
+    or for auditing whether a chemical's risk profile has changed over time.
+
+    Args:
+        chemical:    Chemical name or CAS number, e.g. "acetone" or "67-64-1"
+        version_old: Description of the older SDS version — can be a version
+                     number ("v7.2"), a date ("January 2022"), or a brief
+                     summary of key fields ("NFPA H1/F3/R0, no CMR listing").
+        version_new: Description of the newer SDS version — same format as
+                     version_old, e.g. "v8.1" or "March 2024".
+
+    Returns:
+        A structured diff report covering: GHS classification changes,
+        H-code additions/removals, PPE updates, exposure limit changes,
+        storage condition changes, regulatory listing changes, and an
+        overall risk-trend assessment (increased / decreased / unchanged).
+    """
+    t0 = time.monotonic()
+    error_msg = None
+    success = True
+    try:
+        message = (
+            f"Compare two versions of the SDS for {chemical}.\n\n"
+            f"OLD version ({version_old}):\n{version_old}\n\n"
+            f"NEW version ({version_new}):\n{version_new}\n\n"
+            "Provide a structured comparison covering:\n"
+            "1. GHS hazard classification changes (signal word, pictograms)\n"
+            "2. H-code additions or removals\n"
+            "3. PPE requirement changes (gloves, respiratory, eye protection)\n"
+            "4. Exposure limit updates (TWA/STEL/Ceiling)\n"
+            "5. Storage condition changes\n"
+            "6. Regulatory listing changes (SVHC, TSCA, CMR, etc.)\n"
+            "7. Overall risk trend: increased / decreased / unchanged\n\n"
+            "If a field is unchanged, note it briefly. "
+            "Highlight any changes that require immediate action."
+        )
+        data = await _quick_chat(message)
+        return data["answer"] + _format_tool_results(data.get("tool_results", []))
+    except Exception as e:
+        success = False
+        error_msg = str(e)[:500]
+        raise
+    finally:
+        dur = int((time.monotonic() - t0) * 1000)
+        await _log_call("compare_sds_versions", [chemical], dur, success, error_msg,
+                        _json.dumps({"chemical": chemical, "version_old": version_old, "version_new": version_new}))
+
+
+@mcp.tool()
 async def upload_msds_pdf(
     pdf_source: str,
     session_id: str | None = None,
