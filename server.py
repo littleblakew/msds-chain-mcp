@@ -928,6 +928,165 @@ async def get_waste_disposal(chemicals: list[str]) -> str:
 
 
 @mcp.tool()
+async def upload_msds_pdf(
+    pdf_source: str,
+    session_id: str | None = None,
+    experiment_name: str = "MCP Upload",
+) -> str:
+    """
+    Upload an MSDS/SDS PDF file to MSDS Chain and get AI-parsed safety data.
+
+    Parses the PDF with GPT-4o-mini to extract: chemical name, CAS number,
+    GHS hazard classification, NFPA ratings, flash point, LD50, H-codes,
+    PPE requirements, storage conditions, incompatibilities, and safety rules.
+
+    If no session_id is provided, a new audit session is automatically created
+    and its ID is returned so you can call `get_audit_report` later.
+
+    Requires MSDS_API_KEY — the parsed data is stored under your account.
+
+    Args:
+        pdf_source:      Either a local file path (e.g. "/tmp/acetone_sds.pdf")
+                         or an HTTPS URL pointing to a publicly accessible PDF.
+        session_id:      Existing session ID to attach this upload to. If omitted,
+                         a new session is created automatically.
+        experiment_name: Label for the auto-created session (ignored if
+                         session_id is provided). Defaults to "MCP Upload".
+
+    Returns:
+        Parsed chemical info (name, CAS, risk level, key fields) and session_id.
+        If parsing partially failed, missing fields are listed so you can follow
+        up with `ask_chemical_safety` for the gaps.
+    """
+    t0 = time.monotonic()
+    error_msg = None
+    success = True
+    try:
+        if not API_KEY:
+            return (
+                "upload_msds_pdf requires MSDS_API_KEY to be set so the record "
+                "is stored under your account. Get one at https://msdschain.lagentbot.com "
+                "(API Keys tab) and add it to the MCP server env."
+            )
+
+        # 1. Resolve PDF bytes
+        import os as _os
+        pdf_bytes: bytes
+        filename: str
+
+        if pdf_source.startswith("http://") or pdf_source.startswith("https://"):
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as dl:
+                resp = await dl.get(pdf_source)
+                resp.raise_for_status()
+                pdf_bytes = resp.content
+                # Derive filename from URL path
+                url_path = pdf_source.rstrip("/").split("?")[0]
+                filename = url_path.split("/")[-1] or "upload.pdf"
+                if not filename.lower().endswith(".pdf"):
+                    filename += ".pdf"
+        else:
+            path = _os.path.expanduser(pdf_source)
+            if not _os.path.isfile(path):
+                return f"File not found: {pdf_source}"
+            with open(path, "rb") as f:
+                pdf_bytes = f.read()
+            filename = _os.path.basename(path)
+
+        if not pdf_bytes:
+            return "Could not read PDF content — file is empty."
+
+        # 2. Ensure session exists
+        sid = session_id
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            if not sid:
+                res = await client.post(
+                    f"{API_URL}/sessions",
+                    json={"experiment_name": experiment_name, "source": "mcp"},
+                    headers=_headers(),
+                )
+                res.raise_for_status()
+                sid = res.json()["session_id"]
+
+            # 3. Upload PDF (multipart)
+            upload_headers = {k: v for k, v in _headers().items() if k != "Content-Type"}
+            res = await client.post(
+                f"{API_URL}/sessions/{sid}/upload",
+                files={"file": (filename, pdf_bytes, "application/pdf")},
+                headers=upload_headers,
+                timeout=60.0,
+            )
+            res.raise_for_status()
+            upload_data = res.json()
+
+        results = upload_data.get("results", [])
+        summary = upload_data.get("summary", {})
+
+        if not results:
+            return (
+                f"Upload succeeded but no files were parsed.\n"
+                f"Summary: {summary}\n"
+                f"Session: `{sid}`"
+            )
+
+        lines = [f"**Session:** `{sid}`", f"**File:** {filename}", ""]
+
+        for r in results:
+            status = r.get("status", "unknown")
+            chem = r.get("chemical_name") or "Unknown"
+            cas = r.get("cas_number") or "—"
+            risk = r.get("risk_level") or "—"
+            fields = r.get("fields") or {}
+            missing = r.get("missing") or []
+
+            status_icon = {"success": "✅", "warning": "⚠️", "failed": "❌"}.get(status, "❓")
+            lines.append(f"{status_icon} **{chem}** (CAS: {cas})")
+            lines.append(f"   Risk level: {risk}")
+
+            if fields:
+                field_parts = []
+                for k in ("state", "flammability", "corrosivity", "toxicity", "temp_limit", "protection"):
+                    v = fields.get(k)
+                    if v:
+                        field_parts.append(f"{k}={v}")
+                if field_parts:
+                    lines.append(f"   Fields: {', '.join(field_parts)}")
+
+            safety_rules = r.get("safety_rules") or []
+            if safety_rules:
+                lines.append(f"   Safety rules extracted: {len(safety_rules)}")
+
+            if missing:
+                lines.append(f"   Missing fields: {', '.join(missing)}")
+                lines.append(
+                    f"   → Use `ask_chemical_safety(\"{chem} {', '.join(missing)}\")` to fill gaps."
+                )
+
+            fail_reason = r.get("fail_reason")
+            if fail_reason:
+                lines.append(f"   Reason: {fail_reason}")
+
+        lines.append("")
+        lines.append(
+            f"**Summary:** {summary.get('success', 0)} success, "
+            f"{summary.get('warning', 0)} warning, "
+            f"{summary.get('failed', 0)} failed"
+        )
+        lines.append(
+            f"\nCall `create_audit_session(\"{experiment_name}\", [...])` or "
+            f"`get_audit_report(\"{sid}\")` to generate a signed PDF report."
+        )
+        return "\n".join(lines)
+    except Exception as e:
+        success = False
+        error_msg = str(e)[:500]
+        raise
+    finally:
+        dur = int((time.monotonic() - t0) * 1000)
+        await _log_call("upload_msds_pdf", None, dur, success, error_msg,
+                        _json.dumps({"pdf_source": pdf_source, "session_id": session_id}))
+
+
+@mcp.tool()
 async def batch_safety_check(chemicals: list[str]) -> str:
     """
     Run a comprehensive safety check on a list of chemicals in one call.
