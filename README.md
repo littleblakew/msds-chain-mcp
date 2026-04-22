@@ -83,6 +83,29 @@ codex marketplace add https://github.com/littleblakew/msds-chain-mcp
 
 Restart Claude Code. You should see `msds-chain` in the MCP tools list.
 
+## Claude Code Skill
+
+For a guided experience with auto-detection and workflow orchestration, install the MSDS Safety Check skill:
+
+### Option A: From GitHub
+```bash
+# 1. Add MCP server (if not already configured)
+claude mcp add msds-chain --transport sse --url https://mcp.lagentbot.com/sse
+
+# 2. Clone skill files
+git clone https://github.com/littleblakew/msds-chain-mcp.git /tmp/msds-chain-mcp
+cp -r /tmp/msds-chain-mcp/skill .agents/skills/msds-safety-check
+ln -s ../../.agents/skills/msds-safety-check .claude/skills/msds-safety-check
+```
+
+### Option B: Manual setup
+Copy the `skill/` directory from this repo into your project's `.agents/skills/msds-safety-check/` and create a symlink in `.claude/skills/`.
+
+### What the Skill Does
+- **Auto-detects** chemicals in your conversations and offers safety checks
+- **`/msds-safety-check`** — guided audit for lab protocols or EHS compliance
+- **Freemium** — basic queries work without API key, audit reports require free registration
+
 ## Usage Examples
 
 ### Experiment Protocol Review

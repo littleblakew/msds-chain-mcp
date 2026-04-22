@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.littleblakew/msds-chain",
+  "description": "Chemical safety intelligence — 18 tools for compatibility, hazard, PPE, storage, and compliance",
+  "repository": {
+    "url": "https://github.com/littleblakew/msds-chain-mcp",
+    "source": "github"
+  },
+  "version": "1.0.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "msds-chain-mcp",
+      "version": "1.0.0",
+      "transport": {
+        "type": "streamable-http",
+        "url": "https://mcp.lagentbot.com/mcp"
+      },
+      "environmentVariables": [
+        {
+          "name": "MSDS_API_KEY",
+          "description": "API key from msdschain.lagentbot.com (free: 100 calls/month)",
+          "isRequired": true,
+          "format": "string",
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

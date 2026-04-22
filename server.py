@@ -134,6 +134,46 @@ async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: in
 
 
 # ---------------------------------------------------------------------------
+# Direct service layer helpers (bypass LLM)
+# ---------------------------------------------------------------------------
+
+async def _direct_compat(chemicals: list[str]) -> dict:
+    """POST /api/v2/compatibility/check — direct service layer, no LLM."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.post(
+            f"{API_URL}/api/v2/compatibility/check",
+            json={"chemicals": chemicals, "lang": LANG},
+            headers=_headers(),
+        )
+        res.raise_for_status()
+        return res.json()
+
+
+async def _direct_risk(chemicals: list[str]) -> dict:
+    """POST /api/v2/risk-warnings — direct service layer, no LLM."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.post(
+            f"{API_URL}/api/v2/risk-warnings",
+            json={"chemicals": chemicals, "lang": LANG},
+            headers=_headers(),
+        )
+        res.raise_for_status()
+        return res.json()
+
+
+async def _direct_batch(chemicals: list[str]) -> dict:
+    """POST /api/v2/batch-safety — combined compat + risk, no LLM."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.post(
+            f"{API_URL}/api/v2/batch-safety",
+            json={"chemicals": chemicals, "lang": LANG},
+            headers=_headers(),
+        )
+        res.raise_for_status()
+        return res.json()
+
+
+# ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
 
@@ -159,10 +199,26 @@ async def check_chemical_compatibility(chemicals: list[str]) -> str:
         if len(chemicals) < 2:
             return "Please provide at least 2 chemicals to check compatibility."
 
-        chem_list = ", ".join(chemicals)
-        message = f"Check compatibility for these chemicals used together in an experiment: {chem_list}"
-        data = await _quick_chat(message)
-        return data["answer"] + _format_tool_results(data["tool_results"])
+        data = await _direct_compat(chemicals)
+        lines = [f"**Compatibility Check** ({len(chemicals)} chemicals)\n"]
+
+        if data.get("unresolved"):
+            lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}\n")
+
+        for pair in data.get("pairs", []):
+            level = pair.get("level", "unknown").upper()
+            emoji = {"COMPATIBLE": "OK", "CAUTION": "CAUTION", "INCOMPATIBLE": "DANGER"}.get(level, level)
+            lines.append(
+                f"- **{pair.get('chem1', '?')}** + **{pair.get('chem2', '?')}**: "
+                f"[{emoji}] {pair.get('level', 'unknown')}\n"
+                f"  Reason: {pair.get('reason', 'N/A')}\n"
+                f"  Source: {pair.get('source', 'unknown')}"
+            )
+
+        if not data.get("pairs"):
+            lines.append("No compatibility pairs to check (need at least 2 resolved chemicals).")
+
+        return "\n".join(lines)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -192,10 +248,26 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
     error_msg = None
     success = True
     try:
-        chem_list = ", ".join(chemicals)
-        message = f"What are the risk warnings and hazard classifications for: {chem_list}"
-        data = await _quick_chat(message)
-        return data["answer"] + _format_tool_results(data["tool_results"])
+        data = await _direct_risk(chemicals)
+        lines = [f"**Risk Warnings** ({len(chemicals)} chemicals)\n"]
+
+        if data.get("unresolved"):
+            lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}\n")
+
+        for w in data.get("warnings", []):
+            level = w.get("level", "unknown").upper()
+            lines.append(
+                f"### {w.get('chemical', 'Unknown')} — {level} RISK\n"
+                f"- **Description:** {w.get('description', 'N/A')}\n"
+                f"- **Mitigation:** {w.get('mitigation', 'N/A')}"
+            )
+            if w.get("reference"):
+                lines.append(f"- **Reference:** {w['reference']}")
+
+        if not data.get("warnings"):
+            lines.append("No risk warnings found for the given chemicals.")
+
+        return "\n".join(lines)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -667,9 +739,7 @@ async def search_chemical_database(query: str) -> str:
                         f"  Flammability: {flam}  |  Toxicity: {tox}"
                     )
                 return "\n".join(lines)
-            # Fallback: use quick-chat for the search
-            data = await _quick_chat(f"Search for chemical: {query}")
-            return data["answer"]
+            return f"Chemical search failed (HTTP {res.status_code}). Try a different name or CAS number."
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -1175,48 +1245,45 @@ async def batch_safety_check(chemicals: list[str]) -> str:
         if len(chemicals) > 20:
             return "Maximum 20 chemicals per batch check. Please split into smaller groups."
 
-        chem_list = ", ".join(chemicals)
-
-        # Run three queries in parallel for speed
-        import asyncio
-
-        async def _compat():
-            return await _quick_chat(
-                f"Check compatibility for these chemicals used together: {chem_list}"
-            )
-
-        async def _ppe():
-            return await _quick_chat(
-                f"What PPE is required when handling all of these chemicals together: {chem_list}? "
-                "Give a consolidated recommendation covering the most protective requirements."
-            )
-
-        async def _storage():
-            return await _quick_chat(
-                f"How should I organize storage for these chemicals: {chem_list}? "
-                "Group them by storage class and indicate which ones must be separated."
-            )
-
-        compat_data, ppe_data, storage_data = await asyncio.gather(
-            _compat(), _ppe(), _storage()
-        )
-
-        # Assemble report
+        data = await _direct_batch(chemicals)
         sections = []
 
         sections.append("# Batch Safety Report")
+        chem_list = ", ".join(chemicals)
         sections.append(f"**Chemicals ({len(chemicals)}):** {chem_list}\n")
 
+        if data.get("unresolved"):
+            sections.append(f"**Unresolved:** {', '.join(data['unresolved'])}\n")
+
+        # Compatibility
         sections.append("## 1. Compatibility Matrix")
-        sections.append(compat_data["answer"])
-        if compat_data.get("tool_results"):
-            sections.append(_format_tool_results(compat_data["tool_results"]))
+        compat = data.get("compatibility", {})
+        summary = compat.get("summary", {})
+        if summary:
+            sections.append(
+                f"Total pairs: {summary.get('total', 0)} | "
+                f"Compatible: {summary.get('compatible', 0)} | "
+                f"Caution: {summary.get('caution', 0)} | "
+                f"Incompatible: {summary.get('incompatible', 0)}\n"
+            )
+        for pair in compat.get("pairs", []):
+            level = pair.get("level", "unknown").upper()
+            sections.append(
+                f"- **{pair.get('chem1', '?')}** + **{pair.get('chem2', '?')}**: "
+                f"{level} — {pair.get('reason', 'N/A')}"
+            )
 
-        sections.append("\n## 2. PPE Requirements (Consolidated)")
-        sections.append(ppe_data["answer"])
+        # Risk warnings
+        sections.append("\n## 2. Risk Warnings")
+        for w in data.get("risk_warnings", []):
+            sections.append(
+                f"### {w.get('chemical', 'Unknown')} — {w.get('level', 'unknown').upper()} RISK\n"
+                f"- {w.get('description', 'N/A')}\n"
+                f"- Mitigation: {w.get('mitigation', 'N/A')}"
+            )
 
-        sections.append("\n## 3. Storage Grouping")
-        sections.append(storage_data["answer"])
+        if not data.get("risk_warnings"):
+            sections.append("No risk data available.")
 
         sections.append(
             "\n---\n*Use `create_audit_session` if you need a signed PDF report for compliance records.*"

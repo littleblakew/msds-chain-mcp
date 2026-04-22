@@ -1,0 +1,34 @@
+{
+  "name": "msds-chain-mcp",
+  "version": "1.1.0",
+  "mcpName": "io.github.littleblakew/msds-chain",
+  "description": "Chemical safety intelligence for AI-assisted experiment design. 20 MCP tools for compatibility, hazard, PPE, storage, waste disposal, mixing order, exposure limits, transport classification, regulatory compliance, SDS version diff, PDF upload, and signed audit reports.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "chemistry",
+    "safety",
+    "msds",
+    "sds",
+    "ghs",
+    "compliance",
+    "lab-automation",
+    "life-sciences"
+  ],
+  "author": {
+    "name": "LAgentBot Pte. Ltd.",
+    "url": "https://msdschain.lagentbot.com"
+  },
+  "license": "MIT",
+  "homepage": "https://msdschain.lagentbot.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/littleblakew/msds-chain-mcp.git"
+  },
+  "mcpServers": {
+    "msds-chain": {
+      "type": "http",
+      "url": "https://mcp.lagentbot.com/mcp"
+    }
+  }
+}
