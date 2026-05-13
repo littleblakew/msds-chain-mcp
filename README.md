@@ -2,6 +2,8 @@
 
 **Chemical safety intelligence for AI-assisted experiment design.**
 
+Powered by **ChainSDS** — a verified, always-current chemical safety database. *Verified. Current. Growing.*
+
 An [MCP](https://modelcontextprotocol.io) server that gives AI agents (Claude Code, Cursor, Copilot, etc.) access to chemical safety reasoning — compatibility checks, hazard analysis, regulatory compliance, PPE recommendations, storage guidance, and more.
 
 Built for researchers who design experiments with AI and need safety verification integrated into their workflow.
@@ -16,7 +18,7 @@ When you use Claude to plan a synthesis route or set up an Opentrons protocol, s
 - Verify compliance with EU REACH, US OSHA/TSCA, and 6 other jurisdictions
 - Generate signed audit reports for GLP/GMP compliance
 
-## Tools (18)
+## Tools (20)
 
 | Tool | Description |
 |------|-------------|
@@ -26,6 +28,8 @@ When you use Claude to plan a synthesis route or set up an Opentrons protocol, s
 | **`validate_protocol_chemicals`** | Extract & validate chemical names from protocol text or code |
 | **`check_mixing_order`** | Safe addition sequence for reagent pairs (e.g., acid into water) |
 | **`get_waste_disposal`** | Waste classification, container type, and disposal procedures |
+| **`upload_msds_pdf`** | Upload MSDS PDF for AI-powered parsing and data extraction (requires API key) |
+| **`compare_sds_versions`** | Structured 7-dimension diff between SDS versions of a chemical |
 | `check_chemical_compatibility` | Pairwise compatibility for 2+ chemicals |
 | `get_chemical_risk_warnings` | GHS classification, H-codes, signal words, flash point |
 | `get_ppe_recommendation` | Gloves, eye protection, respiratory, body protection |
@@ -55,24 +59,32 @@ pip install -r requirements.txt
 
 ### 3. Add to your AI coding agent
 
-**Claude Code:**
+**Claude Code (Remote — recommended):**
 ```bash
-claude mcp add msds-chain -- python /path/to/msds-chain-mcp/server.py
+claude mcp add msds-chain --transport sse --url https://mcp.lagentbot.com/sse
 ```
 
-**OpenAI Codex:**
+**Claude Code (Plugin — includes skill + MCP):**
 ```bash
-codex marketplace add https://github.com/littleblakew/msds-chain-mcp
+/plugin install https://github.com/littleblakew/msds-chain-mcp.git
 ```
 
-**Manual config** (Claude Code `~/.claude.json` or Codex `.agents/`):
+**Claude Code (npm — local):**
+```bash
+claude mcp add msds-chain -- npx -y msds-chain-mcp@latest
+```
+
+**claude.ai (Web):**
+Search "msds-chain" in Settings > Plugins (already published).
+
+**Manual config** (Claude Code `~/.claude.json`):
 
 ```json
 {
   "mcpServers": {
     "msds-chain": {
-      "command": "python",
-      "args": ["/absolute/path/to/msds-chain-mcp/server.py"],
+      "type": "sse",
+      "url": "https://mcp.lagentbot.com/sse",
       "env": {
         "MSDS_API_KEY": "sk-msds-your-key-here"
       }
@@ -85,21 +97,19 @@ Restart Claude Code. You should see `msds-chain` in the MCP tools list.
 
 ## Claude Code Skill
 
-For a guided experience with auto-detection and workflow orchestration, install the MSDS Safety Check skill:
+The `/msds-safety-check` skill provides auto-detection and guided audit workflows.
 
-### Option A: From GitHub
+**Plugin install (includes skill + MCP automatically):**
 ```bash
-# 1. Add MCP server (if not already configured)
-claude mcp add msds-chain --transport sse --url https://mcp.lagentbot.com/sse
-
-# 2. Clone skill files
-git clone https://github.com/littleblakew/msds-chain-mcp.git /tmp/msds-chain-mcp
-cp -r /tmp/msds-chain-mcp/skill .agents/skills/msds-safety-check
-ln -s ../../.agents/skills/msds-safety-check .claude/skills/msds-safety-check
+/plugin install https://github.com/littleblakew/msds-chain-mcp.git
 ```
 
-### Option B: Manual setup
-Copy the `skill/` directory from this repo into your project's `.agents/skills/msds-safety-check/` and create a symlink in `.claude/skills/`.
+**Manual install (skill only, if MCP already configured):**
+```bash
+git clone https://github.com/littleblakew/msds-chain-mcp.git /tmp/msds-chain-mcp
+cp -r /tmp/msds-chain-mcp/skills/msds-safety-check .agents/skills/msds-safety-check
+ln -s ../../.agents/skills/msds-safety-check .claude/skills/msds-safety-check
+```
 
 ### What the Skill Does
 - **Auto-detects** chemicals in your conversations and offers safety checks
@@ -157,6 +167,40 @@ Claude:
   → Returns: Signed PDF URL (Ed25519 signature, suitable for GLP/GMP compliance)
 ```
 
+## Third-Party AI Platform Integration
+
+Connect to the hosted MSDS Chain MCP server from any AI platform that supports MCP.
+
+**Server URL:** `https://mcp.lagentbot.com`
+
+| Transport | Endpoint | When to use |
+|-----------|----------|-------------|
+| SSE | `https://mcp.lagentbot.com/sse` | Most third-party platforms (悟空, Dify, Coze, etc.) |
+| Streamable HTTP | `https://mcp.lagentbot.com/mcp` | Claude Code 2026+, newer MCP clients |
+
+**Authentication:** Add an HTTP header — `Authorization: Bearer sk-msds-your-key`
+
+### 悟空 (Wukong)
+
+1. 设置 → MCP 服务 → + 添加
+2. 类型：**SSE**
+3. 名称：`msds-chain`
+4. URL：`https://mcp.lagentbot.com/sse`
+5. HTTP Headers：`Authorization` : `Bearer sk-msds-your-key`
+6. 点击「添加」
+
+### Dify / Coze / other platforms
+
+General steps:
+1. Find MCP server / tool integration settings
+2. Select **SSE** transport type
+3. Set URL to `https://mcp.lagentbot.com/sse`
+4. Add authentication header: `Authorization: Bearer sk-msds-your-key`
+
+> **Get an API key:** Sign up at [msdschain.lagentbot.com](https://msdschain.lagentbot.com) → API Keys tab → Create Key.
+
+---
+
 ## Remote Mode (HTTP)
 
 For cloud deployment or shared team access, run as an HTTP server:
@@ -206,13 +250,16 @@ docker run -p 8080:8080 -e MSDS_API_KEY=sk-msds-xxx msds-chain-mcp
 - Multi-region regulatory pre-checks for new compounds
 - GMP-ready audit trail with signed receipts
 
-## Data Coverage
+## Data Coverage — ChainSDS
 
-- **4,200+ chemicals** with multi-language aliases (EN/ZH/JA)
+Industry-sourced, AI-verified, and cryptographically signed.
+
+- **28,000+ chemicals** with multi-language aliases (EN/ZH/JA)
 - **NFPA/GHS classification** for compatibility rules
 - **8 regulatory jurisdictions** (EU, US, CN, JP, KR, CA, AU, TW)
 - **Occupational exposure limits** from 5 standards (OSHA PEL, ACGIH TLV, EU IOELV, JP OEL, CN GBZ)
 - **UN transport data** for 16+ common lab chemicals
+- **Version tracking** with 7-dimension SDS diff for regulatory updates
 
 ## Architecture
 
@@ -255,4 +302,4 @@ MIT
 
 Built by [LAgentBot](https://lagentbot.com) — AI-powered chemical safety infrastructure.
 
-Part of the [MSDS Chain](https://msdschain.lagentbot.com) platform: the world's first AI Agent-driven chemical safety data trust network.
+Part of the [MSDS Chain](https://msdschain.lagentbot.com) platform — the world's first AI Agent-driven chemical safety data trust network, powered by [ChainSDS](https://msdschain.lagentbot.com): verified, current, and growing.

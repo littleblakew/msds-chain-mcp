@@ -1,23 +1,25 @@
 # @lagentbot/msds-chain-mcp
 
-Chemical safety intelligence for AI-assisted experiment design.
+Chemical safety intelligence for AI-assisted experiment design. Powered by **ChainSDS** — verified, current, and growing.
 
 This is a remote MCP (Model Context Protocol) server providing **20 tools** for chemical safety reasoning — compatibility checks, hazard analysis, PPE recommendations, storage guidance, waste disposal, mixing order safety, exposure limits, transport classification, regulatory compliance, and signed audit reports.
 
 ## Quick Start
 
+**Claude Code:**
 ```bash
-npx @anthropic-ai/mcp-publisher install @lagentbot/msds-chain-mcp
+claude mcp add msds-chain --transport sse --url https://mcp.lagentbot.com/sse
 ```
 
-Or configure manually in your MCP client:
+**claude.ai (Web):** Search "msds-chain" in Settings > Plugins.
 
+**Any MCP client (manual config):**
 ```json
 {
   "mcpServers": {
     "msds-chain": {
-      "type": "http",
-      "url": "https://mcp.lagentbot.com/mcp"
+      "type": "sse",
+      "url": "https://mcp.lagentbot.com/sse"
     }
   }
 }
@@ -52,12 +54,13 @@ Get a free API key (100 calls/month) at [msdschain.lagentbot.com](https://msdsch
 | `upload_msds_pdf` | Upload PDF or URL, extract & parse MSDS |
 | `compare_sds_versions` | Structured SDS version diff (7 dimensions) |
 
-## Coverage
+## Coverage — ChainSDS
 
-- 4,200+ chemicals with multi-language aliases (EN/ZH/JA)
+- 28,000+ chemicals with multi-language aliases (EN/ZH/JA)
 - 8 regulatory jurisdictions (EU/US/CN/JP/KR/CA/AU/TW)
 - 5 exposure limit standards (OSHA/ACGIH/EU/JP/CN)
 - 5 languages (EN/ZH/JA/DE/ID)
+- Version tracking with 7-dimension SDS diff
 
 ## Links
 
