@@ -231,7 +231,7 @@ docker run -p 8080:8080 -e MSDS_API_KEY=sk-msds-xxx msds-chain-mcp
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MSDS_API_KEY` | *(required)* | API key from the MSDS Chain dashboard |
-| `MSDS_API_URL` | Production URL | Override to point at dev/self-hosted instance |
+| `MSDS_API_URL` | Production URL | For development use only |
 | `MSDS_LANG` | `en` | Response language: `en`, `zh`, `ja`, `de`, `id` |
 
 ## Use Cases
@@ -254,7 +254,7 @@ docker run -p 8080:8080 -e MSDS_API_KEY=sk-msds-xxx msds-chain-mcp
 
 Industry-sourced, AI-verified, and cryptographically signed.
 
-- **28,000+ chemicals** with multi-language aliases (EN/ZH/JA)
+- **4,000,000+ chemical records** with multi-language aliases (EN/ZH/JA)
 - **NFPA/GHS classification** for compatibility rules
 - **8 regulatory jurisdictions** (EU, US, CN, JP, KR, CA, AU, TW)
 - **Occupational exposure limits** from 5 standards (OSHA PEL, ACGIH TLV, EU IOELV, JP OEL, CN GBZ)
@@ -264,18 +264,15 @@ Industry-sourced, AI-verified, and cryptographically signed.
 ## Architecture
 
 ```
-Your AI Agent (Brain)          MSDS Chain MCP (Hands)
+Your AI Agent                  MSDS Chain MCP Server
 ┌──────────────────┐           ┌─────────────────────────┐
-│ Claude Code      │──MCP────▶│ server.py (stdio/SSE)   │
-│ Cursor           │           │   ↓                     │
-│ Any MCP client   │           │ MSDS Chain Backend API  │
-└──────────────────┘           │   ↓                     │
-                               │ Safety Reasoning Engine │
-                               │ (Rules + LLM fallback)  │
-                               └─────────────────────────┘
+│ Claude Code      │           │ 20 Safety Tools         │
+│ Cursor           │──MCP────▶│   ↓                     │
+│ Any MCP client   │           │ ChainSDS Platform       │
+└──────────────────┘           └─────────────────────────┘
 ```
 
-The MCP server is a thin client — all safety reasoning happens on the MSDS Chain backend (rule engine + Azure OpenAI GPT-4o fallback for edge cases).
+The MCP server connects to the ChainSDS platform for verified safety reasoning.
 
 ## Development
 
@@ -292,7 +289,7 @@ npx @modelcontextprotocol/inspector python server.py
 - [x] `check_mixing_order` — safe addition sequence for reagent pairs
 - [x] `get_chemical_alternatives` — safer substitutes for restricted chemicals
 - [x] Remote MCP (HTTP SSE / Streamable HTTP) for cloud-hosted access
-- [x] OAuth 2.1 for Claude Marketplace integration (skeleton — needs Redis/DB for production)
+- [x] OAuth 2.1 for Claude Marketplace integration
 
 ## License
 
