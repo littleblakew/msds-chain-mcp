@@ -1300,6 +1300,43 @@ async def batch_safety_check(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
+@mcp.tool()
+async def check_regulatory_lists(chemical: str) -> str:
+    """
+    Check which international regulatory lists a chemical appears on.
+
+    Searches across 15+ regulatory databases including:
+    - US: EPA TSCA, OSHA PEL, California Prop 65, CompTox
+    - EU: SVHC Candidate List, REACH Annex XVII, CLP, Seveso III
+    - APAC: China Hazardous Chemicals, Japan CSCL, Australia AIIC, Singapore EPMA
+    - Americas: Canada DSL
+
+    Returns a summary of all matching lists, helping you understand
+    a chemical's global regulatory footprint at a glance.
+
+    Args:
+        chemical: Chemical name or CAS number
+    """
+    t0 = time.monotonic()
+    error_msg = None
+    success = True
+    try:
+        message = (
+            f"Check which regulatory lists {chemical} appears on. "
+            "Use the check_regulatory_lists tool and report all matching lists."
+        )
+        data = await _quick_chat(message)
+        return data["answer"] + _format_tool_results(data.get("tool_results", []))
+    except Exception as e:
+        success = False
+        error_msg = str(e)[:500]
+        raise
+    finally:
+        dur = int((time.monotonic() - t0) * 1000)
+        await _log_call("check_regulatory_lists", [chemical], dur, success, error_msg,
+                        _json.dumps({"chemical": chemical}))
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
