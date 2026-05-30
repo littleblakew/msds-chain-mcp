@@ -69,4 +69,23 @@ if __name__ == "__main__":
 
     mcp.settings.host = HOST
     mcp.settings.port = PORT
-    mcp.run(transport=TRANSPORT)
+
+    # Build the transport app, then wrap with CORS so browser-based clients
+    # (e.g. Claude.ai web connectors) can complete the OAuth + handshake flow.
+    # Auth is via the Authorization header (not cookies), so a wildcard origin
+    # is safe and allow_credentials stays False.
+    app = mcp.sse_app() if TRANSPORT == "sse" else mcp.streamable_http_app()
+
+    from starlette.middleware.cors import CORSMiddleware
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["Mcp-Session-Id"],
+    )
+
+    import uvicorn
+
+    uvicorn.run(app, host=HOST, port=PORT, log_level=mcp.settings.log_level.lower())
