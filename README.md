@@ -207,12 +207,14 @@ Each prompt reliably triggers the named tool. Use them to evaluate the connector
 
 Connect to the hosted MSDS Chain MCP server from any AI platform that supports MCP.
 
-**Server URL:** `https://mcp.lagentbot.com`
+**Server URL:** `https://mcp.lagentbot.com/sse`
 
-| Transport | Endpoint | When to use |
-|-----------|----------|-------------|
-| SSE | `https://mcp.lagentbot.com/sse` | Most third-party platforms (悟空, Dify, Coze, etc.) |
-| Streamable HTTP | `https://mcp.lagentbot.com/mcp` | Claude Code 2026+, newer MCP clients |
+The hosted server uses the **SSE** transport for broad client compatibility (Claude.ai, Claude Code, 悟空, Dify, Coze, etc.). Streamable HTTP is supported by the code for self-hosting (see [Remote Mode](#remote-mode-http)) but is not enabled on the hosted endpoint.
+
+| Transport | Endpoint | Notes |
+|-----------|----------|-------|
+| SSE | `https://mcp.lagentbot.com/sse` | Hosted endpoint — use this |
+| Streamable HTTP | self-hosted only | Run your own server with `MSDS_MCP_TRANSPORT=streamable-http` |
 
 **Authentication:** Add an HTTP header — `Authorization: Bearer sk-msds-your-key`
 
