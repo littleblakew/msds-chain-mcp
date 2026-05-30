@@ -25,7 +25,7 @@ import os
 import sys
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
 # Import everything from the main server module (all tools are registered on `mcp`)
@@ -43,11 +43,25 @@ async def health(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "tools": 21, "oauth": OAUTH_ENABLED})
 
 
-# Inject custom routes into FastMCP's Starlette app via _custom_starlette_routes.
-# This avoids the sub-app mount issue where lifespan (task group init) doesn't propagate.
+# OpenAI ChatGPT Apps domain-verification challenge. OpenAI fetches this
+# well-known URL and checks the body equals the token shown in the Apps
+# dashboard. The token is a public domain-ownership challenge (not a secret).
+OPENAI_APPS_CHALLENGE_TOKEN = os.environ.get(
+    "OPENAI_APPS_CHALLENGE_TOKEN",
+    "_5cUEUGJvRqCQOcsIhbasUkDJbTEPWhjU6nIZQczKTs",
+)
+
+
+async def openai_apps_challenge(request: Request) -> PlainTextResponse:
+    return PlainTextResponse(OPENAI_APPS_CHALLENGE_TOKEN)
+
+
 # Inject custom routes into FastMCP's Starlette app via _custom_starlette_routes.
 # This avoids the sub-app mount issue where lifespan (task group init) doesn't propagate.
 mcp._custom_starlette_routes.append(Route("/health", health, methods=["GET"]))
+mcp._custom_starlette_routes.append(
+    Route("/.well-known/openai-apps-challenge", openai_apps_challenge, methods=["GET"])
+)
 
 if OAUTH_ENABLED:
     from oauth import oauth_routes
