@@ -319,6 +319,19 @@ export MSDS_API_KEY=sk-msds-your-key
 npx @modelcontextprotocol/inspector python server.py
 ```
 
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `401 Unauthorized` on connect | Missing or invalid API key | Verify the `Authorization: Bearer sk-msds-...` header (or `MSDS_API_KEY` env var). Generate a fresh key at [msdschain.lagentbot.com](https://msdschain.lagentbot.com) → API Keys. |
+| Tools don't appear in the client | MCP server not loaded | Fully restart the client after adding the server. Confirm `msds-chain` shows in the MCP/tools list. |
+| Connection drops or times out | Wrong transport / endpoint | Use the SSE endpoint `https://mcp.lagentbot.com/sse`. Check `GET /health` returns `{"status":"ok"}`. |
+| `Quota exceeded` / 429 | Monthly call limit hit | Free keys are limited; upgrade your plan or wait for the monthly reset. |
+| Empty results for a known chemical | Name not matched | Retry with the CAS number or a common synonym; `search_chemical_database` accepts name, synonym, or CAS. |
+| OAuth login fails in a browser client | OAuth metadata unreachable | Confirm `GET /.well-known/oauth-authorization-server` returns 200; the client should auto-discover the authorize/token endpoints. |
+
+Still stuck? Email **contact@lagentbot.com** or open an issue at [github.com/littleblakew/msds-chain-mcp/issues](https://github.com/littleblakew/msds-chain-mcp/issues).
+
 ## Roadmap
 
 - [x] `get_waste_disposal` — waste classification and disposal guidance
