@@ -29,7 +29,7 @@ import time
 import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import ToolAnnotations
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 # ---------------------------------------------------------------------------
 # Config
@@ -76,6 +76,27 @@ def _require_api_key() -> str | None:
     if not API_KEY:
         return _API_KEY_REQUIRED_MSG
     return None
+
+
+def _text_result(text: str) -> CallToolResult:
+    """Wrap plain text as a CallToolResult (no structuredContent)."""
+    return CallToolResult(content=[TextContent(type="text", text=text)])
+
+
+def _quick_result(data: dict) -> CallToolResult:
+    """Build a CallToolResult for quick_chat-backed tools.
+
+    Preserves the human-readable answer as text content (for Claude and other
+    clients) and exposes structuredContent (answer + raw tool_results) for
+    clients that consume structured output (e.g. ChatGPT Apps SDK).
+    """
+    answer = data.get("answer", "")
+    tool_results = data.get("tool_results", [])
+    text = answer + _format_tool_results(tool_results)
+    return CallToolResult(
+        content=[TextContent(type="text", text=text)],
+        structuredContent={"answer": answer, "tool_results": tool_results},
+    )
 
 
 def _headers() -> dict[str, str]:
@@ -178,8 +199,11 @@ async def _direct_batch(chemicals: list[str]) -> dict:
 # Tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool(annotations=ToolAnnotations(title="Check Chemical Compatibility", readOnlyHint=True, openWorldHint=False))
-async def check_chemical_compatibility(chemicals: list[str]) -> str:
+@mcp.tool(
+    annotations=ToolAnnotations(title="Check Chemical Compatibility", readOnlyHint=True, openWorldHint=False),
+    structured_output=False,
+)
+async def check_chemical_compatibility(chemicals: list[str]) -> CallToolResult:
     """
     Check pairwise compatibility between a list of chemicals.
 
@@ -198,7 +222,7 @@ async def check_chemical_compatibility(chemicals: list[str]) -> str:
     success = True
     try:
         if len(chemicals) < 2:
-            return "Please provide at least 2 chemicals to check compatibility."
+            return _text_result("Please provide at least 2 chemicals to check compatibility.")
 
         data = await _direct_compat(chemicals)
         lines = [f"**Compatibility Check** ({len(chemicals)} chemicals)\n"]
@@ -206,6 +230,8 @@ async def check_chemical_compatibility(chemicals: list[str]) -> str:
         if data.get("unresolved"):
             lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}\n")
 
+        struct_pairs = []
+        counts = {"compatible": 0, "caution": 0, "incompatible": 0}
         for pair in data.get("pairs", []):
             level = pair.get("level", "unknown").upper()
             emoji = {"COMPATIBLE": "OK", "CAUTION": "CAUTION", "INCOMPATIBLE": "DANGER"}.get(level, level)
@@ -215,11 +241,30 @@ async def check_chemical_compatibility(chemicals: list[str]) -> str:
                 f"  Reason: {pair.get('reason', 'N/A')}\n"
                 f"  Source: {pair.get('source', 'unknown')}"
             )
+            lvl = (pair.get("level") or "unknown").lower()
+            if lvl in counts:
+                counts[lvl] += 1
+            struct_pairs.append({
+                "chemical_a": pair.get("chem1"),
+                "chemical_b": pair.get("chem2"),
+                "level": pair.get("level"),
+                "reason": pair.get("reason"),
+                "source": pair.get("source"),
+            })
 
         if not data.get("pairs"):
             lines.append("No compatibility pairs to check (need at least 2 resolved chemicals).")
 
-        return "\n".join(lines)
+        structured = {
+            "chemicals": chemicals,
+            "unresolved": data.get("unresolved", []),
+            "pairs": struct_pairs,
+            "summary": {"total_pairs": len(struct_pairs), **counts},
+        }
+        return CallToolResult(
+            content=[TextContent(type="text", text="\n".join(lines))],
+            structuredContent=structured,
+        )
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -230,7 +275,7 @@ async def check_chemical_compatibility(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Chemical Risk Warnings", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Get Chemical Risk Warnings", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
     """
     Get hazard and risk warnings for one or more chemicals.
@@ -268,7 +313,24 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
         if not data.get("warnings"):
             lines.append("No risk warnings found for the given chemicals.")
 
-        return "\n".join(lines)
+        structured = {
+            "chemicals": chemicals,
+            "unresolved": data.get("unresolved", []),
+            "warnings": [
+                {
+                    "chemical": w.get("chemical"),
+                    "level": w.get("level"),
+                    "description": w.get("description"),
+                    "mitigation": w.get("mitigation"),
+                    "reference": w.get("reference"),
+                }
+                for w in data.get("warnings", [])
+            ],
+        }
+        return CallToolResult(
+            content=[TextContent(type="text", text="\n".join(lines))],
+            structuredContent=structured,
+        )
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -279,7 +341,7 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Compliance", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Compliance", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def check_regulatory_compliance(
     chemicals: list[str],
     regions: list[str] | None = None,
@@ -310,7 +372,7 @@ async def check_regulatory_compliance(
             f"Regions: {region_str}"
         )
         data = await _quick_chat(message)
-        return data["answer"] + _format_tool_results(data["tool_results"])
+        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -321,7 +383,7 @@ async def check_regulatory_compliance(
                         _json.dumps({"chemicals": chemicals, "regions": regions}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Ask Chemical Safety Question", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Ask Chemical Safety Question", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def ask_chemical_safety(question: str) -> str:
     """
     Ask any chemical safety question in natural language.
@@ -344,7 +406,7 @@ async def ask_chemical_safety(question: str) -> str:
     success = True
     try:
         data = await _quick_chat(question)
-        return data["answer"] + _format_tool_results(data["tool_results"])
+        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -355,7 +417,7 @@ async def ask_chemical_safety(question: str) -> str:
                         _json.dumps({"question": question}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get PPE Recommendation", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Get PPE Recommendation", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def get_ppe_recommendation(chemicals: list[str]) -> str:
     """
     Get PPE (Personal Protective Equipment) recommendations for chemicals.
@@ -378,7 +440,7 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
             "and body/skin protection requirements."
         )
         data = await _quick_chat(message)
-        return data["answer"] + _format_tool_results(data["tool_results"])
+        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -389,7 +451,7 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Storage Guidance", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Get Storage Guidance", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def get_storage_guidance(chemicals: list[str]) -> str:
     """
     Get storage and isolation guidance for chemicals.
@@ -414,7 +476,7 @@ async def get_storage_guidance(chemicals: list[str]) -> str:
             "and what materials they must be separated from."
         )
         data = await _quick_chat(message)
-        return data["answer"] + _format_tool_results(data["tool_results"])
+        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -425,7 +487,7 @@ async def get_storage_guidance(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Emergency Response", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Get Emergency Response", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def get_emergency_response(chemical: str, scenario: str = "spill") -> str:
     """
     Get emergency response guidance for a chemical incident.
@@ -448,7 +510,7 @@ async def get_emergency_response(chemical: str, scenario: str = "spill") -> str:
             "and any special precautions."
         )
         data = await _quick_chat(message)
-        return data["answer"] + _format_tool_results(data["tool_results"])
+        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -459,7 +521,7 @@ async def get_emergency_response(chemical: str, scenario: str = "spill") -> str:
                         _json.dumps({"chemical": chemical, "scenario": scenario}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Exposure Limits", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Get Exposure Limits", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def get_exposure_limits(chemicals: list[str], region: str | None = None) -> str:
     """Get occupational exposure limits (OEL/TLV/PEL/MAC) for chemicals.
 
@@ -483,7 +545,7 @@ async def get_exposure_limits(chemicals: list[str], region: str | None = None) -
             parts.append(f"in region {region}")
         message = "What are the occupational " + " ".join(parts) + "?"
         data = await _quick_chat(message)
-        return data["answer"] + _format_tool_results(data.get("tool_results", []))
+        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -494,7 +556,7 @@ async def get_exposure_limits(chemicals: list[str], region: str | None = None) -
                         _json.dumps({"chemicals": chemicals, "region": region}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Transport Classification", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Get Transport Classification", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def get_transport_classification(chemicals: list[str]) -> str:
     """Get UN transport classification for chemicals (dangerous goods shipping).
     Returns UN number, proper shipping name, hazard class, packing group,
@@ -508,7 +570,7 @@ async def get_transport_classification(chemicals: list[str]) -> str:
     try:
         message = f"What is the UN transport classification for {', '.join(chemicals)}?"
         data = await _quick_chat(message)
-        return data["answer"] + _format_tool_results(data.get("tool_results", []))
+        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -519,7 +581,7 @@ async def get_transport_classification(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Create Audit Session", readOnlyHint=False, destructiveHint=False, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Create Audit Session", readOnlyHint=False, destructiveHint=False, openWorldHint=False), structured_output=False)
 async def create_audit_session(
     experiment_name: str,
     chemicals: list[str],
@@ -631,7 +693,30 @@ async def create_audit_session(
         lines.append(
             f"\nCall `get_audit_report(\"{session_id}\")` to retrieve the signed PDF URL."
         )
-        return "\n".join(lines)
+        structured = {
+            "session_id": session_id,
+            "experiment_name": experiment_name,
+            "chemicals_added": added_names,
+            "not_found": not_found,
+            "compatibility": {"total_pairs": len(matrix), **counts},
+            "flagged_pairs": [
+                {
+                    "level": p.get("level"),
+                    "chemical_a": p.get("chem1"),
+                    "chemical_b": p.get("chem2"),
+                    "reason": p.get("reason"),
+                }
+                for p in matrix if p.get("level") in ("caution", "incompatible")
+            ],
+            "warnings": [
+                {"level": w.get("level"), "chemical": w.get("chemical"), "description": w.get("description")}
+                for w in warnings
+            ],
+        }
+        return CallToolResult(
+            content=[TextContent(type="text", text="\n".join(lines))],
+            structuredContent=structured,
+        )
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -642,7 +727,7 @@ async def create_audit_session(
                         _json.dumps({"experiment_name": experiment_name, "chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Audit Report", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Get Audit Report", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def get_audit_report(session_id: str) -> str:
     """
     Get a short-lived signed URL to download the audit report PDF.
@@ -682,9 +767,16 @@ async def get_audit_report(session_id: str) -> str:
             relative = res.json()["url"]
 
         full_url = f"{API_URL}{relative}"
-        return (
-            f"**Signed report URL** (valid ~5 min):\n{full_url}\n\n"
-            f"Open in a browser or `curl -O` to download the PDF."
+        return CallToolResult(
+            content=[TextContent(type="text", text=(
+                f"**Signed report URL** (valid ~5 min):\n{full_url}\n\n"
+                f"Open in a browser or `curl -O` to download the PDF."
+            ))],
+            structuredContent={
+                "session_id": session_id,
+                "report_url": full_url,
+                "expires_in_seconds": 300,
+            },
         )
     except Exception as e:
         success = False
@@ -696,7 +788,7 @@ async def get_audit_report(session_id: str) -> str:
                         _json.dumps({"session_id": session_id}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Search Chemical Database", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Search Chemical Database", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def search_chemical_database(query: str) -> str:
     """
     Search the MSDS Chain database for a specific chemical.
@@ -730,6 +822,7 @@ async def search_chemical_database(query: str) -> str:
                 if not chemicals:
                     return f'No chemicals found matching "{query}" in the MSDS Chain database.'
                 lines = [f"Found {len(chemicals)} result(s) for '{query}':\n"]
+                struct_results = []
                 for c in chemicals[:5]:
                     name = c.get("name") or c.get("chemical_name", "Unknown")
                     cas = c.get("cas_number", "—")
@@ -739,7 +832,20 @@ async def search_chemical_database(query: str) -> str:
                         f"• **{name}** (CAS: {cas})\n"
                         f"  Flammability: {flam}  |  Toxicity: {tox}"
                     )
-                return "\n".join(lines)
+                    struct_results.append({
+                        "name": name,
+                        "cas_number": c.get("cas_number"),
+                        "flammability": c.get("flammability"),
+                        "toxicity": c.get("toxicity"),
+                    })
+                return CallToolResult(
+                    content=[TextContent(type="text", text="\n".join(lines))],
+                    structuredContent={
+                        "query": query,
+                        "result_count": len(chemicals),
+                        "results": struct_results,
+                    },
+                )
             return f"Chemical search failed (HTTP {res.status_code}). Try a different name or CAS number."
     except Exception as e:
         success = False
@@ -751,7 +857,7 @@ async def search_chemical_database(query: str) -> str:
                         _json.dumps({"query": query}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get SDS Section", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Get SDS Section", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def get_sds_section(chemical: str, section: int) -> str:
     """
     Retrieve a specific SDS (Safety Data Sheet) section for a chemical.
@@ -805,7 +911,7 @@ async def get_sds_section(chemical: str, section: int) -> str:
             "GHS/REACH format. Present the data in a structured format."
         )
         data = await _quick_chat(message)
-        return data["answer"] + _format_tool_results(data.get("tool_results", []))
+        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -816,7 +922,7 @@ async def get_sds_section(chemical: str, section: int) -> str:
                         _json.dumps({"chemical": chemical, "section": section}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Chemical Alternatives", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Get Chemical Alternatives", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def get_chemical_alternatives(chemical: str, use_case: str = "") -> str:
     """
     Suggest safer alternatives for a chemical, considering its intended use.
@@ -849,7 +955,7 @@ async def get_chemical_alternatives(chemical: str, use_case: str = "") -> str:
             "Focus on drop-in replacements that serve the same function."
         )
         data = await _quick_chat(message)
-        return data["answer"] + _format_tool_results(data.get("tool_results", []))
+        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -860,7 +966,7 @@ async def get_chemical_alternatives(chemical: str, use_case: str = "") -> str:
                         _json.dumps({"chemical": chemical, "use_case": use_case}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Validate Protocol Chemicals", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Validate Protocol Chemicals", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def validate_protocol_chemicals(protocol_text: str) -> str:
     """
     Extract and validate chemical names from a protocol or experiment description.
@@ -898,7 +1004,7 @@ async def validate_protocol_chemicals(protocol_text: str) -> str:
             f"Text to analyze:\n```\n{protocol_text}\n```"
         )
         data = await _quick_chat(message)
-        return data["answer"] + _format_tool_results(data.get("tool_results", []))
+        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -909,7 +1015,7 @@ async def validate_protocol_chemicals(protocol_text: str) -> str:
                         _json.dumps({"protocol_text_length": len(protocol_text)}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Check Mixing Order", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Check Mixing Order", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def check_mixing_order(chemical_a: str, chemical_b: str, context: str = "") -> str:
     """
     Determine the safe order for mixing/adding two chemicals.
@@ -943,7 +1049,7 @@ async def check_mixing_order(chemical_a: str, chemical_b: str, context: str = ""
             "If order doesn't matter for this pair, say so explicitly."
         )
         data = await _quick_chat(message)
-        return data["answer"] + _format_tool_results(data.get("tool_results", []))
+        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -954,7 +1060,7 @@ async def check_mixing_order(chemical_a: str, chemical_b: str, context: str = ""
                         _json.dumps({"chemical_a": chemical_a, "chemical_b": chemical_b, "context": context}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Waste Disposal Guidance", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Get Waste Disposal Guidance", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def get_waste_disposal(chemicals: list[str]) -> str:
     """
     Get waste classification and disposal guidance for chemicals.
@@ -987,7 +1093,7 @@ async def get_waste_disposal(chemicals: list[str]) -> str:
             "requirements from SDS Section 13."
         )
         data = await _quick_chat(message)
-        return data["answer"] + _format_tool_results(data.get("tool_results", []))
+        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -998,7 +1104,7 @@ async def get_waste_disposal(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Compare SDS Versions", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Compare SDS Versions", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def compare_sds_versions(
     chemical: str,
     version_old: str,
@@ -1048,7 +1154,7 @@ async def compare_sds_versions(
             "Highlight any changes that require immediate action."
         )
         data = await _quick_chat(message)
-        return data["answer"] + _format_tool_results(data.get("tool_results", []))
+        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -1059,7 +1165,7 @@ async def compare_sds_versions(
                         _json.dumps({"chemical": chemical, "version_old": version_old, "version_new": version_new}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Upload & Parse MSDS PDF", readOnlyHint=False, destructiveHint=False, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Upload & Parse MSDS PDF", readOnlyHint=False, destructiveHint=False, openWorldHint=False), structured_output=False)
 async def upload_msds_pdf(
     pdf_source: str,
     session_id: str | None = None,
@@ -1207,7 +1313,26 @@ async def upload_msds_pdf(
             f"\nCall `create_audit_session(\"{experiment_name}\", [...])` or "
             f"`get_audit_report(\"{sid}\")` to generate a signed PDF report."
         )
-        return "\n".join(lines)
+        structured = {
+            "session_id": sid,
+            "file": filename,
+            "summary": summary,
+            "results": [
+                {
+                    "status": r.get("status"),
+                    "chemical_name": r.get("chemical_name"),
+                    "cas_number": r.get("cas_number"),
+                    "risk_level": r.get("risk_level"),
+                    "missing": r.get("missing") or [],
+                    "fail_reason": r.get("fail_reason"),
+                }
+                for r in results
+            ],
+        }
+        return CallToolResult(
+            content=[TextContent(type="text", text="\n".join(lines))],
+            structuredContent=structured,
+        )
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -1218,7 +1343,7 @@ async def upload_msds_pdf(
                         _json.dumps({"pdf_source": pdf_source, "session_id": session_id}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Batch Safety Check", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Batch Safety Check", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def batch_safety_check(chemicals: list[str]) -> str:
     """
     Run a comprehensive safety check on a list of chemicals in one call.
@@ -1290,7 +1415,35 @@ async def batch_safety_check(chemicals: list[str]) -> str:
             "\n---\n*Use `create_audit_session` if you need a signed PDF report for compliance records.*"
         )
 
-        return "\n".join(sections)
+        structured = {
+            "chemicals": chemicals,
+            "unresolved": data.get("unresolved", []),
+            "compatibility": {
+                "summary": compat.get("summary", {}),
+                "pairs": [
+                    {
+                        "chemical_a": p.get("chem1"),
+                        "chemical_b": p.get("chem2"),
+                        "level": p.get("level"),
+                        "reason": p.get("reason"),
+                    }
+                    for p in compat.get("pairs", [])
+                ],
+            },
+            "risk_warnings": [
+                {
+                    "chemical": w.get("chemical"),
+                    "level": w.get("level"),
+                    "description": w.get("description"),
+                    "mitigation": w.get("mitigation"),
+                }
+                for w in data.get("risk_warnings", [])
+            ],
+        }
+        return CallToolResult(
+            content=[TextContent(type="text", text="\n".join(sections))],
+            structuredContent=structured,
+        )
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -1301,7 +1454,7 @@ async def batch_safety_check(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Lists", readOnlyHint=True, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Lists", readOnlyHint=True, openWorldHint=False), structured_output=False)
 async def check_regulatory_lists(chemical: str) -> str:
     """
     Check which international regulatory lists a chemical appears on.
@@ -1327,7 +1480,7 @@ async def check_regulatory_lists(chemical: str) -> str:
             "Use the check_regulatory_lists tool and report all matching lists."
         )
         data = await _quick_chat(message)
-        return data["answer"] + _format_tool_results(data.get("tool_results", []))
+        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
