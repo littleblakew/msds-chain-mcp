@@ -57,10 +57,23 @@ jobs:
 
       - name: Deploy to Container App
         run: |
+          # Pin to a single replica: the SSE transport is stateful (the GET /sse
+          # stream and POST /messages/ must hit the same replica). Without session
+          # affinity, multiple replicas cause intermittent 404s on /messages/.
+          # Keep min=max=1 until/unless we move to stateless Streamable HTTP.
           az containerapp update \
             --name ${{ env.APP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
-            --image ${{ env.IMAGE }}
+            --image ${{ env.IMAGE }} \
+            --min-replicas 1 \
+            --max-replicas 1
+
+      - name: Ensure sticky sessions (SSE affinity)
+        run: |
+          az containerapp ingress sticky-sessions set \
+            --name ${{ env.APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --affinity sticky
 
       - name: Health check
         run: |
