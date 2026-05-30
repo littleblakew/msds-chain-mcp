@@ -23,7 +23,7 @@ When you use Claude to plan a synthesis route or set up an Opentrons protocol, s
 | Tool | Description |
 |------|-------------|
 | **`batch_safety_check`** | One-call comprehensive report: compatibility + PPE + storage grouping for a chemical list |
-| **`check_regulatory_lists`** | Cross-reference a chemical against 23 regulatory watch lists across 11 regions |
+| **`check_regulatory_lists`** | Cross-reference a chemical against 23 regulatory watch lists across 10 regions |
 | **`get_sds_section`** | Retrieve a specific SDS section (1-16) for a chemical |
 | **`get_chemical_alternatives`** | Safer substitutes for restricted or high-risk chemicals |
 | **`validate_protocol_chemicals`** | Extract & validate chemical names from protocol text or code |
@@ -294,7 +294,7 @@ Industry-sourced, AI-verified, and cryptographically signed.
 
 - **4,000,000+ chemical records** with multi-language aliases (EN/ZH/JA)
 - **NFPA/GHS classification** for compatibility rules
-- **23 regulatory watch lists across 11 regions** (structured compliance for EU, US, CN, JP, KR, CA, AU, TW, SG)
+- **23 regulatory watch lists across 10 regions** (structured compliance for EU, US, CN, JP, KR, CA, AU, TW, SG)
 - **Occupational exposure limits** from 5 standards (OSHA PEL, ACGIH TLV, EU IOELV, JP OEL, CN GBZ)
 - **UN transport data** for 16+ common lab chemicals
 - **Version tracking** with 7-dimension SDS diff for regulatory updates
