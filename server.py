@@ -178,7 +178,7 @@ async def _direct_batch(chemicals: list[str]) -> dict:
 # Tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool(annotations=ToolAnnotations(title="Check Chemical Compatibility", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Check Chemical Compatibility", readOnlyHint=True, openWorldHint=False))
 async def check_chemical_compatibility(chemicals: list[str]) -> str:
     """
     Check pairwise compatibility between a list of chemicals.
@@ -230,7 +230,7 @@ async def check_chemical_compatibility(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Chemical Risk Warnings", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Get Chemical Risk Warnings", readOnlyHint=True, openWorldHint=False))
 async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
     """
     Get hazard and risk warnings for one or more chemicals.
@@ -279,7 +279,7 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Compliance", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Compliance", readOnlyHint=True, openWorldHint=False))
 async def check_regulatory_compliance(
     chemicals: list[str],
     regions: list[str] | None = None,
@@ -321,7 +321,7 @@ async def check_regulatory_compliance(
                         _json.dumps({"chemicals": chemicals, "regions": regions}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Ask Chemical Safety Question", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Ask Chemical Safety Question", readOnlyHint=True, openWorldHint=False))
 async def ask_chemical_safety(question: str) -> str:
     """
     Ask any chemical safety question in natural language.
@@ -355,7 +355,7 @@ async def ask_chemical_safety(question: str) -> str:
                         _json.dumps({"question": question}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get PPE Recommendation", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Get PPE Recommendation", readOnlyHint=True, openWorldHint=False))
 async def get_ppe_recommendation(chemicals: list[str]) -> str:
     """
     Get PPE (Personal Protective Equipment) recommendations for chemicals.
@@ -389,7 +389,7 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Storage Guidance", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Get Storage Guidance", readOnlyHint=True, openWorldHint=False))
 async def get_storage_guidance(chemicals: list[str]) -> str:
     """
     Get storage and isolation guidance for chemicals.
@@ -425,7 +425,7 @@ async def get_storage_guidance(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Emergency Response", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Get Emergency Response", readOnlyHint=True, openWorldHint=False))
 async def get_emergency_response(chemical: str, scenario: str = "spill") -> str:
     """
     Get emergency response guidance for a chemical incident.
@@ -459,7 +459,7 @@ async def get_emergency_response(chemical: str, scenario: str = "spill") -> str:
                         _json.dumps({"chemical": chemical, "scenario": scenario}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Exposure Limits", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Get Exposure Limits", readOnlyHint=True, openWorldHint=False))
 async def get_exposure_limits(chemicals: list[str], region: str | None = None) -> str:
     """Get occupational exposure limits (OEL/TLV/PEL/MAC) for chemicals.
 
@@ -494,7 +494,7 @@ async def get_exposure_limits(chemicals: list[str], region: str | None = None) -
                         _json.dumps({"chemicals": chemicals, "region": region}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Transport Classification", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Get Transport Classification", readOnlyHint=True, openWorldHint=False))
 async def get_transport_classification(chemicals: list[str]) -> str:
     """Get UN transport classification for chemicals (dangerous goods shipping).
     Returns UN number, proper shipping name, hazard class, packing group,
@@ -519,7 +519,7 @@ async def get_transport_classification(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Create Audit Session", readOnlyHint=False, destructiveHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Create Audit Session", readOnlyHint=False, destructiveHint=False, openWorldHint=False))
 async def create_audit_session(
     experiment_name: str,
     chemicals: list[str],
@@ -642,7 +642,7 @@ async def create_audit_session(
                         _json.dumps({"experiment_name": experiment_name, "chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Audit Report", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Get Audit Report", readOnlyHint=True, openWorldHint=False))
 async def get_audit_report(session_id: str) -> str:
     """
     Get a short-lived signed URL to download the audit report PDF.
@@ -696,7 +696,7 @@ async def get_audit_report(session_id: str) -> str:
                         _json.dumps({"session_id": session_id}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Search Chemical Database", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Search Chemical Database", readOnlyHint=True, openWorldHint=False))
 async def search_chemical_database(query: str) -> str:
     """
     Search the MSDS Chain database for a specific chemical.
@@ -751,7 +751,7 @@ async def search_chemical_database(query: str) -> str:
                         _json.dumps({"query": query}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get SDS Section", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Get SDS Section", readOnlyHint=True, openWorldHint=False))
 async def get_sds_section(chemical: str, section: int) -> str:
     """
     Retrieve a specific SDS (Safety Data Sheet) section for a chemical.
@@ -816,7 +816,7 @@ async def get_sds_section(chemical: str, section: int) -> str:
                         _json.dumps({"chemical": chemical, "section": section}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Chemical Alternatives", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Get Chemical Alternatives", readOnlyHint=True, openWorldHint=False))
 async def get_chemical_alternatives(chemical: str, use_case: str = "") -> str:
     """
     Suggest safer alternatives for a chemical, considering its intended use.
@@ -860,7 +860,7 @@ async def get_chemical_alternatives(chemical: str, use_case: str = "") -> str:
                         _json.dumps({"chemical": chemical, "use_case": use_case}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Validate Protocol Chemicals", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Validate Protocol Chemicals", readOnlyHint=True, openWorldHint=False))
 async def validate_protocol_chemicals(protocol_text: str) -> str:
     """
     Extract and validate chemical names from a protocol or experiment description.
@@ -909,7 +909,7 @@ async def validate_protocol_chemicals(protocol_text: str) -> str:
                         _json.dumps({"protocol_text_length": len(protocol_text)}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Check Mixing Order", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Check Mixing Order", readOnlyHint=True, openWorldHint=False))
 async def check_mixing_order(chemical_a: str, chemical_b: str, context: str = "") -> str:
     """
     Determine the safe order for mixing/adding two chemicals.
@@ -954,7 +954,7 @@ async def check_mixing_order(chemical_a: str, chemical_b: str, context: str = ""
                         _json.dumps({"chemical_a": chemical_a, "chemical_b": chemical_b, "context": context}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Waste Disposal Guidance", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Get Waste Disposal Guidance", readOnlyHint=True, openWorldHint=False))
 async def get_waste_disposal(chemicals: list[str]) -> str:
     """
     Get waste classification and disposal guidance for chemicals.
@@ -998,7 +998,7 @@ async def get_waste_disposal(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Compare SDS Versions", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Compare SDS Versions", readOnlyHint=True, openWorldHint=False))
 async def compare_sds_versions(
     chemical: str,
     version_old: str,
@@ -1059,7 +1059,7 @@ async def compare_sds_versions(
                         _json.dumps({"chemical": chemical, "version_old": version_old, "version_new": version_new}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Upload & Parse MSDS PDF", readOnlyHint=False, destructiveHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Upload & Parse MSDS PDF", readOnlyHint=False, destructiveHint=False, openWorldHint=False))
 async def upload_msds_pdf(
     pdf_source: str,
     session_id: str | None = None,
@@ -1218,7 +1218,7 @@ async def upload_msds_pdf(
                         _json.dumps({"pdf_source": pdf_source, "session_id": session_id}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Batch Safety Check", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Batch Safety Check", readOnlyHint=True, openWorldHint=False))
 async def batch_safety_check(chemicals: list[str]) -> str:
     """
     Run a comprehensive safety check on a list of chemicals in one call.
@@ -1301,7 +1301,7 @@ async def batch_safety_check(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Lists", readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Lists", readOnlyHint=True, openWorldHint=False))
 async def check_regulatory_lists(chemical: str) -> str:
     """
     Check which international regulatory lists a chemical appears on.
