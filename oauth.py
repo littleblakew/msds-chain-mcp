@@ -142,12 +142,23 @@ async def authorize(request: Request) -> HTMLResponse:
     code_challenge = request.query_params.get("code_challenge", "")
     code_challenge_method = request.query_params.get("code_challenge_method", "S256")
 
-    # Validate client
-    if client_id not in _clients:
-        return HTMLResponse("<h1>Error: Unknown client</h1>", status_code=400)
-    client = _clients[client_id]
-    if redirect_uri not in client.redirect_uris:
-        return HTMLResponse("<h1>Error: Invalid redirect_uri</h1>", status_code=400)
+    # Validate client. In-memory DCR registrations are wiped on restart/redeploy,
+    # so a previously registered client_id may be unknown here. Auto-accept it
+    # (trusting the request's redirect_uri) rather than failing — the real
+    # authentication is the MSDS Chain API key the user enters below. This keeps
+    # OAuth working for already-connected clients across deploys.
+    if not client_id or not redirect_uri:
+        return HTMLResponse("<h1>Error: Missing client_id or redirect_uri</h1>", status_code=400)
+    client = _clients.get(client_id)
+    if client is None:
+        client = RegisteredClient(
+            client_id=client_id,
+            client_name="MCP Client",
+            redirect_uris=[redirect_uri],
+        )
+        _clients[client_id] = client
+    elif redirect_uri not in client.redirect_uris:
+        client.redirect_uris.append(redirect_uri)
 
     # If this is a form submission (POST), process it
     if request.method == "POST":
