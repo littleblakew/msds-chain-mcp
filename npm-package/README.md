@@ -2,7 +2,7 @@
 
 Chemical safety intelligence for AI-assisted experiment design. Powered by **ChainSDS** — verified, current, and growing.
 
-This is a remote MCP (Model Context Protocol) server providing **20 tools** for chemical safety reasoning — compatibility checks, hazard analysis, PPE recommendations, storage guidance, waste disposal, mixing order safety, exposure limits, transport classification, regulatory compliance, and signed audit reports.
+This is a remote MCP (Model Context Protocol) server providing **21 tools** for chemical safety reasoning — compatibility checks, hazard analysis, PPE recommendations, storage guidance, waste disposal, mixing order safety, exposure limits, transport classification, regulatory compliance (23 lists, 11 regions), SDS version diff, PDF upload, chemical substitution, first aid, GHS labels, and signed audit reports.
 
 ## Quick Start
 
