@@ -4,7 +4,7 @@
 
 Powered by **ChainSDS** — a verified, always-current chemical safety database. *Verified. Current. Growing.*
 
-An [MCP](https://modelcontextprotocol.io) server that gives AI agents (Claude Code, Cursor, Copilot, etc.) access to chemical safety reasoning — compatibility checks, hazard analysis, regulatory compliance, PPE recommendations, storage guidance, and more.
+An [MCP](https://modelcontextprotocol.io) server that gives AI agents (Claude Code, Cursor, Copilot, pi, etc.) access to chemical safety reasoning — compatibility checks, hazard analysis, regulatory compliance, PPE recommendations, storage guidance, and more.
 
 Built for researchers who design experiments with AI and need safety verification integrated into their workflow.
 
@@ -209,7 +209,7 @@ Connect to the hosted MSDS Chain MCP server from any AI platform that supports M
 
 **Server URL:** `https://mcp.lagentbot.com/sse`
 
-The hosted server uses the **SSE** transport for broad client compatibility (Claude.ai, Claude Code, 悟空, Dify, Coze, etc.). Streamable HTTP is supported by the code for self-hosting (see [Remote Mode](#remote-mode-http)) but is not enabled on the hosted endpoint.
+The hosted server uses the **SSE** transport for broad client compatibility (Claude.ai, Claude Code, pi, 悟空, Dify, Coze, etc.). Streamable HTTP is supported by the code for self-hosting (see [Remote Mode](#remote-mode-http)) but is not enabled on the hosted endpoint.
 
 | Transport | Endpoint | Notes |
 |-----------|----------|-------|
@@ -305,7 +305,7 @@ Industry-sourced, AI-verified, and cryptographically signed.
 Your AI Agent                  MSDS Chain MCP Server
 ┌──────────────────┐           ┌─────────────────────────┐
 │ Claude Code      │           │ 21 Safety Tools         │
-│ Cursor           │──MCP────▶│   ↓                     │
+│ Cursor / pi      │──MCP────▶│   ↓                     │
 │ Any MCP client   │           │ ChainSDS Platform       │
 └──────────────────┘           └─────────────────────────┘
 ```
