@@ -15,14 +15,15 @@ When you use Claude to plan a synthesis route or set up an Opentrons protocol, s
 - Check if chemicals on the same deck are compatible
 - Flag dangerous mixing orders
 - Recommend PPE for the specific chemicals you're handling
-- Verify compliance with EU REACH, US OSHA/TSCA, and 6 other jurisdictions
+- Verify compliance with EU REACH, US OSHA/TSCA, and 7 other jurisdictions
 - Generate signed audit reports for GLP/GMP compliance
 
-## Tools (20)
+## Tools (21)
 
 | Tool | Description |
 |------|-------------|
 | **`batch_safety_check`** | One-call comprehensive report: compatibility + PPE + storage grouping for a chemical list |
+| **`check_regulatory_lists`** | Cross-reference a chemical against 23 regulatory watch lists across 11 regions |
 | **`get_sds_section`** | Retrieve a specific SDS section (1-16) for a chemical |
 | **`get_chemical_alternatives`** | Safer substitutes for restricted or high-risk chemicals |
 | **`validate_protocol_chemicals`** | Extract & validate chemical names from protocol text or code |
@@ -37,7 +38,7 @@ When you use Claude to plan a synthesis route or set up an Opentrons protocol, s
 | `get_emergency_response` | Spill, fire, or exposure emergency procedures |
 | `get_exposure_limits` | OEL/TLV/PEL/MAC across US, EU, JP, CN, INT |
 | `get_transport_classification` | UN number, hazard class, packing group, ADR/IATA/IMDG |
-| `check_regulatory_compliance` | Multi-region: EU, US, CN, JP, KR, CA, AU, TW |
+| `check_regulatory_compliance` | Multi-region: EU, US, CN, JP, KR, CA, AU, TW, SG |
 | `search_chemical_database` | Look up chemicals by name, synonym, or CAS number |
 | `ask_chemical_safety` | Natural language catch-all for any safety question |
 | `create_audit_session` | Full audit with signed PDF report (requires API key) |
@@ -167,6 +168,41 @@ Claude:
   → Returns: Signed PDF URL (Ed25519 signature, suitable for GLP/GMP compliance)
 ```
 
+### Try These Prompts (one per tool)
+
+Each prompt reliably triggers the named tool. Use them to evaluate the connector end-to-end.
+
+| Tool | Example prompt | What a good response shows |
+|------|----------------|----------------------------|
+| `search_chemical_database` | "Look up the chemical with CAS 67-64-1." | Acetone identified with synonyms + CAS |
+| `ask_chemical_safety` | "Is it safe to store bleach next to ammonia?" | Plain-language hazard answer (toxic chloramine gas) |
+| `check_chemical_compatibility` | "Are acetone and hydrogen peroxide compatible?" | Pairwise verdict + reaction risk |
+| `get_chemical_risk_warnings` | "What are the GHS hazards of toluene?" | H-codes, signal word, flash point |
+| `get_ppe_recommendation` | "What PPE do I need to handle concentrated sulfuric acid?" | Gloves/eye/respiratory/body guidance |
+| `get_storage_guidance` | "How should I store sodium hydroxide and nitric acid?" | Storage class, cabinet, isolation rules |
+| `get_emergency_response` | "What do I do if I spill chloroform?" | Step-by-step spill procedure |
+| `get_exposure_limits` | "What's the OEL for benzene in the EU?" | OEL/TLV/PEL values by region |
+| `get_transport_classification` | "How is acetone classified for air freight?" | UN number, hazard class, packing group |
+| `check_regulatory_compliance` | "Is dichloromethane restricted in Japan and the EU?" | Per-region compliance status |
+| `check_regulatory_lists` | "Which regulatory watch lists include formaldehyde?" | Matched lists across regions |
+| `get_waste_disposal` | "How do I dispose of waste acetonitrile?" | Waste class, container, procedure |
+| `check_mixing_order` | "What's the safe order to mix sulfuric acid and water?" | Correct addition sequence + why |
+| `get_chemical_alternatives` | "Is there a safer substitute for hexane in extraction?" | Lower-hazard alternatives |
+| `validate_protocol_chemicals` | "Validate the chemicals in this protocol: [paste text]" | Extracted + verified chemical list |
+| `get_sds_section` | "Show me section 4 (first aid) of the SDS for methanol." | Requested SDS section content |
+| `compare_sds_versions` | "What changed between SDS versions for acetone?" | 7-dimension structured diff |
+| `batch_safety_check` | "Run a full safety check on acetone, methanol, and hexane." | Compatibility + PPE + storage report |
+| `upload_msds_pdf` | "Parse this MSDS PDF and extract its hazard data." *(API key)* | Structured extraction from the PDF |
+| `create_audit_session` | "Create a signed audit report for our solvent cabinet." *(API key)* | Audit session + signed PDF |
+| `get_audit_report` | "Give me the download link for that audit report." *(API key)* | Signed PDF URL |
+
+## Privacy & Data Handling
+
+- **Privacy Policy:** [msdschain.lagentbot.com/privacy](https://msdschain.lagentbot.com/privacy)
+- Read-only tools send only the chemical names / queries you provide; no personal data is required.
+- API-key tools (`upload_msds_pdf`, `create_audit_session`, `get_audit_report`) associate activity with your account for audit traceability.
+- Uploaded MSDS PDFs are processed for data extraction and contribute to the verified ChainSDS database per your account's data-sharing settings.
+
 ## Third-Party AI Platform Integration
 
 Connect to the hosted MSDS Chain MCP server from any AI platform that supports MCP.
@@ -256,7 +292,7 @@ Industry-sourced, AI-verified, and cryptographically signed.
 
 - **4,000,000+ chemical records** with multi-language aliases (EN/ZH/JA)
 - **NFPA/GHS classification** for compatibility rules
-- **8 regulatory jurisdictions** (EU, US, CN, JP, KR, CA, AU, TW)
+- **23 regulatory watch lists across 11 regions** (structured compliance for EU, US, CN, JP, KR, CA, AU, TW, SG)
 - **Occupational exposure limits** from 5 standards (OSHA PEL, ACGIH TLV, EU IOELV, JP OEL, CN GBZ)
 - **UN transport data** for 16+ common lab chemicals
 - **Version tracking** with 7-dimension SDS diff for regulatory updates
@@ -266,7 +302,7 @@ Industry-sourced, AI-verified, and cryptographically signed.
 ```
 Your AI Agent                  MSDS Chain MCP Server
 ┌──────────────────┐           ┌─────────────────────────┐
-│ Claude Code      │           │ 20 Safety Tools         │
+│ Claude Code      │           │ 21 Safety Tools         │
 │ Cursor           │──MCP────▶│   ↓                     │
 │ Any MCP client   │           │ ChainSDS Platform       │
 └──────────────────┘           └─────────────────────────┘
