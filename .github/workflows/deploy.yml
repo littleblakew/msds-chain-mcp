@@ -27,6 +27,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: pip install --no-cache-dir -r requirements-dev.txt
+
+      - name: Run tests
+        run: python -m pytest tests/ -v
+
       - name: Azure Login (OIDC)
         uses: azure/login@v3
         with:

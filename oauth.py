@@ -23,7 +23,7 @@ import os
 import secrets
 import time
 from dataclasses import dataclass, field
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -85,6 +85,26 @@ def _verify_pkce(code_verifier: str, code_challenge: str, method: str) -> bool:
     return False
 
 
+def _is_valid_redirect_uri(uri: str) -> bool:
+    """Allow only https, or http on loopback (native/CLI clients).
+
+    Rejects malformed URIs and dangerous schemes (javascript:, data:, etc.)
+    and non-loopback plaintext http. This is the allowlist that prevents
+    authorization codes from being redirected to an attacker-controlled URL.
+    """
+    try:
+        parsed = urlparse(uri)
+    except ValueError:
+        return False
+    if not parsed.scheme or not parsed.netloc:
+        return False
+    if parsed.scheme == "https":
+        return True
+    if parsed.scheme == "http":
+        return (parsed.hostname or "") in ("localhost", "127.0.0.1", "::1")
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -113,6 +133,10 @@ async def register(request: Request) -> JSONResponse:
     if not redirect_uris:
         return JSONResponse({"error": "invalid_client_metadata",
                              "error_description": "redirect_uris required"}, status_code=400)
+    if not all(_is_valid_redirect_uri(uri) for uri in redirect_uris):
+        return JSONResponse({"error": "invalid_redirect_uri",
+                             "error_description": "redirect_uris must be https or http on loopback"},
+                            status_code=400)
 
     client_id = f"mcp_{secrets.token_hex(16)}"
     client = RegisteredClient(
@@ -149,8 +173,15 @@ async def authorize(request: Request) -> HTMLResponse:
     # OAuth working for already-connected clients across deploys.
     if not client_id or not redirect_uri:
         return HTMLResponse("<h1>Error: Missing client_id or redirect_uri</h1>", status_code=400)
+    if not _is_valid_redirect_uri(redirect_uri):
+        return HTMLResponse("<h1>Error: invalid redirect_uri</h1>", status_code=400)
     client = _clients.get(client_id)
     if client is None:
+        # In-memory DCR registrations are wiped on restart/redeploy, so a
+        # previously registered client_id may be unknown here. Register it on
+        # the fly — but only with a redirect_uri that passed validation above.
+        # Keeps OAuth working for connected clients across deploys; the real
+        # authentication is the MSDS Chain API key the user enters below.
         client = RegisteredClient(
             client_id=client_id,
             client_name="MCP Client",
@@ -158,7 +189,10 @@ async def authorize(request: Request) -> HTMLResponse:
         )
         _clients[client_id] = client
     elif redirect_uri not in client.redirect_uris:
-        client.redirect_uris.append(redirect_uri)
+        # A registered client must use a pre-registered redirect_uri. Never
+        # widen the allowlist from an inbound parameter, and never redirect to
+        # an unregistered URI — that would be an open redirect / code leak.
+        return HTMLResponse("<h1>Error: redirect_uri not registered for this client</h1>", status_code=400)
 
     # If this is a form submission (POST), process it
     if request.method == "POST":
