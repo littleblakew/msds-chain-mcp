@@ -169,7 +169,8 @@ def test_authorize_get_renders_form_and_auto_registers_unknown_client(client):
 
     response = client.get(
         "/oauth/authorize",
-        params={"client_id": client_id, "redirect_uri": redirect_uri},
+        params={"client_id": client_id, "redirect_uri": redirect_uri,
+                "code_challenge": "abc123"},
     )
 
     assert response.status_code == 200
@@ -178,7 +179,8 @@ def test_authorize_get_renders_form_and_auto_registers_unknown_client(client):
     assert client_id in _clients
     assert _clients[client_id].client_name == "MCP Client"
     assert _clients[client_id].redirect_uris == [redirect_uri]
-    # ADVERSARIAL NOTE: GET /oauth/authorize auto-registers any unknown client_id and trusts the supplied redirect_uri.
+    # Unknown client_id is auto-registered (DCR store is wiped on redeploy), but
+    # only with a redirect_uri that passed validation. See hardening tests below.
 
 
 @pytest.mark.parametrize(
@@ -205,7 +207,8 @@ def test_authorize_get_rejects_unregistered_redirect_uri_for_existing_client(cli
 
     response = client.get(
         "/oauth/authorize",
-        params={"client_id": client_id, "redirect_uri": new_redirect},
+        params={"client_id": client_id, "redirect_uri": new_redirect,
+                "code_challenge": "abc123"},
     )
 
     assert response.status_code == 400
@@ -240,11 +243,28 @@ def test_authorize_allows_http_loopback_redirect_uri(client):
     loopback = "http://127.0.0.1:8976/callback"
     response = client.get(
         "/oauth/authorize",
-        params={"client_id": "mcp_cli", "redirect_uri": loopback},
+        params={"client_id": "mcp_cli", "redirect_uri": loopback,
+                "code_challenge": "abc123"},
     )
 
     assert response.status_code == 200
     assert _clients["mcp_cli"].redirect_uris == [loopback]
+
+
+def test_authorize_requires_pkce_code_challenge(client):
+    # Hardened: PKCE is mandatory (OAuth 2.1). An authorize request without a
+    # code_challenge is rejected up front (no dead-on-arrival code is issued).
+    registration = register_client(client)
+    response = client.get(
+        "/oauth/authorize",
+        params={
+            "client_id": registration["client_id"],
+            "redirect_uri": registration["redirect_uris"][0],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "code_challenge required" in response.text
 
 
 def test_register_rejects_dangerous_redirect_uri(client):
@@ -294,6 +314,7 @@ def test_authorize_post_requires_api_key(client):
         params={
             "client_id": registration["client_id"],
             "redirect_uri": registration["redirect_uris"][0],
+            "code_challenge": "abc123",
         },
         data={"api_key": ""},
     )
@@ -367,9 +388,19 @@ def test_token_exchange_rejects_wrong_pkce_verifier(client, pkce_pair, method, g
         "error": "invalid_grant",
         "error_description": "PKCE verification failed",
     }
-    assert code not in _auth_codes
+    # Hardened: a failed PKCE attempt no longer burns the code — the legitimate
+    # client can retry with the correct verifier and succeed.
+    assert code in _auth_codes
     assert not any(not key.startswith("refresh:") for key in _tokens)
-    # ADVERSARIAL NOTE: auth codes are popped before PKCE verification, so a single bad verifier attempt permanently burns the code.
+
+    retry = exchange_code(
+        client,
+        code=code,
+        client_id=registration["client_id"],
+        code_verifier=good,
+    )
+    assert retry.status_code == 200
+    assert code not in _auth_codes
 
 
 def test_plain_pkce_flow_succeeds_when_verifier_matches_challenge(client):
@@ -478,7 +509,9 @@ def test_token_exchange_rejects_client_id_mismatch(client, pkce_pair):
 
     assert response.status_code == 400
     assert response.json() == {"error": "invalid_grant"}
-    assert code not in _auth_codes
+    # Hardened: a client_id mismatch does not consume the code — the real
+    # client can still complete the exchange.
+    assert code in _auth_codes
     assert _tokens == {}
 
 
@@ -511,7 +544,10 @@ def test_refresh_token_grant_rotates_refresh_token_and_old_refresh_becomes_inval
 
     assert old_refresh_retry.status_code == 400
     assert old_refresh_retry.json() == {"error": "invalid_grant"}
-    # ADVERSARIAL NOTE: refresh rotation invalidates the old refresh token but leaves prior access tokens active until TTL expiry.
+    # Hardened: rotation also revokes the access token issued with the old
+    # refresh token, so it no longer validates.
+    assert validate_bearer_token(f"Bearer {original_access}") is None
+    assert original_access not in _tokens
 
 
 def test_expired_refresh_token_returns_invalid_grant_and_is_removed(client, pkce_pair):
@@ -592,27 +628,22 @@ def test_verify_pkce_direct_unit_cases(pkce_pair):
     assert _verify_pkce(verifier, challenge, "unknown-method") is False
 
 
-def test_authorization_code_without_pkce_parameters_cannot_be_exchanged(client):
+def test_authorize_post_without_pkce_challenge_issues_no_code(client):
+    # Hardened: empty code_challenge is rejected at authorize time, so no
+    # auth code is ever issued (no dead-on-arrival code reaches the store).
     registration = register_client(client)
-    code, _, _, _ = authorize_code(
-        client,
-        client_id=registration["client_id"],
-        redirect_uri=registration["redirect_uris"][0],
-        api_key="sk-msds-no-pkce",
-        code_challenge="",
-        code_challenge_method="S256",
-    )
-
-    response = exchange_code(
-        client,
-        code=code,
-        client_id=registration["client_id"],
-        code_verifier="some-verifier",
+    response = client.post(
+        "/oauth/authorize",
+        params={
+            "client_id": registration["client_id"],
+            "redirect_uri": registration["redirect_uris"][0],
+            "code_challenge": "",
+            "code_challenge_method": "S256",
+        },
+        data={"api_key": "sk-msds-no-pkce"},
+        follow_redirects=False,
     )
 
     assert response.status_code == 400
-    assert response.json() == {
-        "error": "invalid_grant",
-        "error_description": "PKCE verification failed",
-    }
-    # ADVERSARIAL NOTE: authorize() allows creating auth codes with an empty code_challenge even though token exchange will always reject them.
+    assert "code_challenge required" in response.text
+    assert _auth_codes == {}

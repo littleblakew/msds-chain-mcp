@@ -166,15 +166,16 @@ async def authorize(request: Request) -> HTMLResponse:
     code_challenge = request.query_params.get("code_challenge", "")
     code_challenge_method = request.query_params.get("code_challenge_method", "S256")
 
-    # Validate client. In-memory DCR registrations are wiped on restart/redeploy,
-    # so a previously registered client_id may be unknown here. Auto-accept it
-    # (trusting the request's redirect_uri) rather than failing — the real
-    # authentication is the MSDS Chain API key the user enters below. This keeps
-    # OAuth working for already-connected clients across deploys.
     if not client_id or not redirect_uri:
         return HTMLResponse("<h1>Error: Missing client_id or redirect_uri</h1>", status_code=400)
     if not _is_valid_redirect_uri(redirect_uri):
         return HTMLResponse("<h1>Error: invalid redirect_uri</h1>", status_code=400)
+    # PKCE is mandatory (OAuth 2.1). Reject up front rather than issuing a code
+    # that the token endpoint would always refuse.
+    if not code_challenge:
+        return HTMLResponse("<h1>Error: code_challenge required (PKCE)</h1>", status_code=400)
+    if code_challenge_method not in ("S256", "plain"):
+        return HTMLResponse("<h1>Error: unsupported code_challenge_method</h1>", status_code=400)
     client = _clients.get(client_id)
     if client is None:
         # In-memory DCR registrations are wiped on restart/redeploy, so a
@@ -256,12 +257,15 @@ async def token(request: Request) -> JSONResponse:
         code_verifier = body.get("code_verifier", "")
         client_id = body.get("client_id", "")
 
-        if code not in _auth_codes:
+        auth = _auth_codes.get(code)
+        if auth is None:
             return JSONResponse({"error": "invalid_grant"}, status_code=400)
 
-        auth = _auth_codes.pop(code)
-
+        # Expiry is terminal — drop the code. The other checks (client_id, PKCE)
+        # leave the code intact so a legitimate client can retry; an attacker
+        # without the code_verifier still cannot succeed.
         if auth.expires_at < time.time():
+            _auth_codes.pop(code, None)
             return JSONResponse({"error": "invalid_grant",
                                  "error_description": "code expired"}, status_code=400)
         if auth.client_id != client_id:
@@ -270,7 +274,8 @@ async def token(request: Request) -> JSONResponse:
             return JSONResponse({"error": "invalid_grant",
                                  "error_description": "PKCE verification failed"}, status_code=400)
 
-        # Issue tokens
+        # All checks passed — consume the code (single use) and issue tokens.
+        _auth_codes.pop(code, None)
         access_token = _generate_token()
         refresh_token = _generate_token()
         expires_at = time.time() + TOKEN_TTL
@@ -285,6 +290,7 @@ async def token(request: Request) -> JSONResponse:
             "api_key": auth.api_key,
             "client_id": client_id,
             "expires_at": time.time() + REFRESH_TTL,
+            "access_token": access_token,
         }
 
         return JSONResponse({
@@ -304,6 +310,12 @@ async def token(request: Request) -> JSONResponse:
         if stored["expires_at"] < time.time():
             return JSONResponse({"error": "invalid_grant"}, status_code=400)
 
+        # Revoke the access token previously issued alongside this refresh token
+        # so rotation doesn't leave stale access tokens valid until TTL.
+        old_access = stored.get("access_token")
+        if old_access:
+            _tokens.pop(old_access, None)
+
         # Issue new tokens
         access_token = _generate_token()
         new_refresh = _generate_token()
@@ -319,6 +331,7 @@ async def token(request: Request) -> JSONResponse:
             "api_key": stored["api_key"],
             "client_id": stored["client_id"],
             "expires_at": time.time() + REFRESH_TTL,
+            "access_token": access_token,
         }
 
         return JSONResponse({
