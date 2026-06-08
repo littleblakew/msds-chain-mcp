@@ -1,9 +1,11 @@
 """Tests for direct-service MCP tools in server.py.
 
 Covers tools backed by _direct_* helpers (no LLM), monkeypatching the service
-layer so no real HTTP calls are made.
+layer so no real HTTP calls are made. Uses asyncio.run() (no pytest-asyncio
+dependency — this repo's CI has no async plugin configured).
 """
-import pytest
+import asyncio
+
 import server
 from mcp.types import CallToolResult
 
@@ -12,8 +14,7 @@ from mcp.types import CallToolResult
 # compare_sds_versions
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
-async def test_compare_sds_versions_has_newer(monkeypatch):
+def test_compare_sds_versions_has_newer(monkeypatch):
     """Tool returns structuredContent with has_newer=True and verdict_relevant."""
     async def fake_direct(chemical, supplier="", region=""):
         return {
@@ -28,22 +29,20 @@ async def test_compare_sds_versions_has_newer(monkeypatch):
         }
 
     monkeypatch.setattr(server, "_direct_compare_sds", fake_direct)
-    res = await server.compare_sds_versions("hydrogen peroxide")
+    res = asyncio.run(server.compare_sds_versions("hydrogen peroxide"))
 
     assert isinstance(res, CallToolResult)
     sc = res.structuredContent
     assert sc["has_newer"] is True
     assert sc["cas"] == "7722-84-1"
     assert sc["verdict_relevant"] is True
-    # Text content should mention version numbers and the re-review recommendation
     text = res.content[0].text
     assert "1" in text and "2" in text
     assert "H272" in text
     assert "re-review" in text.lower() or "YES" in text
 
 
-@pytest.mark.asyncio
-async def test_compare_sds_versions_no_newer(monkeypatch):
+def test_compare_sds_versions_no_newer(monkeypatch):
     """Tool handles has_newer=False with resolved CAS."""
     async def fake_direct(chemical, supplier="", region=""):
         return {
@@ -58,7 +57,7 @@ async def test_compare_sds_versions_no_newer(monkeypatch):
         }
 
     monkeypatch.setattr(server, "_direct_compare_sds", fake_direct)
-    res = await server.compare_sds_versions("hydrogen peroxide", supplier="Sigma")
+    res = asyncio.run(server.compare_sds_versions("hydrogen peroxide", supplier="Sigma"))
 
     assert isinstance(res, CallToolResult)
     sc = res.structuredContent
@@ -67,8 +66,7 @@ async def test_compare_sds_versions_no_newer(monkeypatch):
     assert "latest" in text.lower() or "no newer" in text.lower()
 
 
-@pytest.mark.asyncio
-async def test_compare_sds_versions_unresolved(monkeypatch):
+def test_compare_sds_versions_unresolved(monkeypatch):
     """Tool handles unresolved chemical (empty cas)."""
     async def fake_direct(chemical, supplier="", region=""):
         return {
@@ -78,7 +76,7 @@ async def test_compare_sds_versions_unresolved(monkeypatch):
         }
 
     monkeypatch.setattr(server, "_direct_compare_sds", fake_direct)
-    res = await server.compare_sds_versions("xyzchemical123")
+    res = asyncio.run(server.compare_sds_versions("xyzchemical123"))
 
     assert isinstance(res, CallToolResult)
     sc = res.structuredContent
@@ -87,8 +85,7 @@ async def test_compare_sds_versions_unresolved(monkeypatch):
     assert "xyzchemical123" in text or "resolve" in text.lower() or "not" in text.lower()
 
 
-@pytest.mark.asyncio
-async def test_compare_sds_versions_passes_optional_args(monkeypatch):
+def test_compare_sds_versions_passes_optional_args(monkeypatch):
     """supplier and region are forwarded to _direct_compare_sds."""
     captured = {}
 
@@ -108,7 +105,7 @@ async def test_compare_sds_versions_passes_optional_args(monkeypatch):
         }
 
     monkeypatch.setattr(server, "_direct_compare_sds", fake_direct)
-    await server.compare_sds_versions("acetone", supplier="Merck", region="EU")
+    asyncio.run(server.compare_sds_versions("acetone", supplier="Merck", region="EU"))
 
     assert captured["chemical"] == "acetone"
     assert captured["supplier"] == "Merck"
