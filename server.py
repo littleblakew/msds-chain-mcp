@@ -40,7 +40,8 @@ API_URL = os.environ.get(
     "https://msds-chain-backend-prod.wonderfulgrass-f1545190.southeastasia.azurecontainerapps.io",
 ).rstrip("/")
 LANG = os.environ.get("MSDS_LANG", "en")  # en | zh | ja | de | id
-TIMEOUT = 30.0
+TIMEOUT = 15.0       # v2 direct endpoints — fast, no LLM
+TIMEOUT_LLM = 45.0   # quick-chat endpoints — LLM reasoning, needs more time
 
 mcp = FastMCP(
     "MSDS Chain",
@@ -110,7 +111,7 @@ async def _quick_chat(message: str) -> dict:
     """POST /quick-chat and return the parsed response."""
     if err := _require_api_key():
         raise RuntimeError(err)
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_LLM) as client:
         res = await client.post(
             f"{API_URL}/quick-chat",
             json={"message": message, "lang": LANG},
@@ -189,6 +190,105 @@ async def _direct_batch(chemicals: list[str]) -> dict:
         res = await client.post(
             f"{API_URL}/api/v2/batch-safety",
             json={"chemicals": chemicals, "lang": LANG},
+            headers=_headers(),
+        )
+        res.raise_for_status()
+        return res.json()
+
+
+async def _direct_ppe(chemicals: list[str]) -> dict:
+    """POST /api/v2/ppe-recommendation — direct, no LLM."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.post(
+            f"{API_URL}/api/v2/ppe-recommendation",
+            json={"chemicals": chemicals, "lang": LANG},
+            headers=_headers(),
+        )
+        res.raise_for_status()
+        return res.json()
+
+
+async def _direct_storage(chemicals: list[str]) -> dict:
+    """POST /api/v2/storage-guidance — direct, no LLM."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.post(
+            f"{API_URL}/api/v2/storage-guidance",
+            json={"chemicals": chemicals, "lang": LANG},
+            headers=_headers(),
+        )
+        res.raise_for_status()
+        return res.json()
+
+
+async def _direct_emergency(chemical: str, scenario: str) -> dict:
+    """POST /api/v2/emergency-response — direct, no LLM."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.post(
+            f"{API_URL}/api/v2/emergency-response",
+            json={"chemical": chemical, "scenario": scenario, "lang": LANG},
+            headers=_headers(),
+        )
+        res.raise_for_status()
+        return res.json()
+
+
+async def _direct_compliance(chemical: str, regions: list[str]) -> dict:
+    """POST /api/v2/compliance — direct rule engine, no LLM."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.post(
+            f"{API_URL}/api/v2/compliance",
+            json={"chemical": chemical, "regions": regions, "lang": LANG},
+            headers=_headers(),
+        )
+        res.raise_for_status()
+        return res.json()
+
+
+async def _direct_exposure(chemicals: list[str], region: str | None = None) -> dict:
+    """POST /api/v2/exposure-limits — direct, no LLM."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        payload: dict = {"chemicals": chemicals, "lang": LANG}
+        if region:
+            payload["region"] = region
+        res = await client.post(
+            f"{API_URL}/api/v2/exposure-limits",
+            json=payload,
+            headers=_headers(),
+        )
+        res.raise_for_status()
+        return res.json()
+
+
+async def _direct_transport(chemicals: list[str]) -> dict:
+    """POST /api/v2/transport-classification — direct, no LLM."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.post(
+            f"{API_URL}/api/v2/transport-classification",
+            json={"chemicals": chemicals, "lang": LANG},
+            headers=_headers(),
+        )
+        res.raise_for_status()
+        return res.json()
+
+
+async def _direct_waste(chemicals: list[str]) -> dict:
+    """POST /api/v2/waste-disposal — direct, no LLM."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.post(
+            f"{API_URL}/api/v2/waste-disposal",
+            json={"chemicals": chemicals, "lang": LANG},
+            headers=_headers(),
+        )
+        res.raise_for_status()
+        return res.json()
+
+
+async def _direct_sds_section(chemical: str, section: int) -> dict:
+    """POST /api/v2/sds-section — direct, no LLM."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.post(
+            f"{API_URL}/api/v2/sds-section",
+            json={"chemical": chemical, "section": section, "lang": LANG},
             headers=_headers(),
         )
         res.raise_for_status()
@@ -365,14 +465,30 @@ async def check_regulatory_compliance(
     error_msg = None
     success = True
     try:
-        chem_list = ", ".join(chemicals)
-        region_str = ", ".join(regions) if regions else "EU, US"
-        message = (
-            f"Check regulatory compliance for these chemicals: {chem_list}. "
-            f"Regions: {region_str}"
+        effective_regions = regions or ["EU", "US"]
+        lines = ["**Regulatory Compliance**\n"]
+        results = []
+        for chemical in chemicals:
+            data = await _direct_compliance(chemical, effective_regions)
+            results.append(data)
+            if data.get("unresolved"):
+                lines.append(f"### {chemical}\n- **Status:** Not found in database\n")
+                continue
+            lines.append(f"### {data.get('chemical', chemical)} (CAS: {data.get('cas', 'N/A')})")
+            lines.append(f"- **Overall compliance level:** {data.get('summary_level', 'unknown')}")
+            for rr in data.get("region_results", []):
+                lines.append(f"- **{rr.get('region', '?')}:** {rr.get('status', 'unknown')}")
+                for flag in rr.get("flags", []):
+                    lines.append(f"  - {flag}")
+            lines.append("")
+        return CallToolResult(
+            content=[TextContent(type="text", text="\n".join(lines))],
+            structuredContent={
+                "chemicals": chemicals,
+                "regions": effective_regions,
+                "results": results,
+            },
         )
-        data = await _quick_chat(message)
-        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -433,14 +549,27 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
     error_msg = None
     success = True
     try:
-        chem_list = ", ".join(chemicals)
-        message = (
-            f"What PPE (personal protective equipment) is required when handling: {chem_list}? "
-            "Include specific glove material, eye protection type, respiratory protection, "
-            "and body/skin protection requirements."
+        data = await _direct_ppe(chemicals)
+        lines = ["**PPE Recommendations**\n"]
+        for item in data.get("results", []):
+            lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
+            lines.append(f"- Signal word: **{item.get('signal_word', 'N/A')}**")
+            lines.append(f"- Minimum PPE level: **{item.get('minimum_ppe_level', 'N/A')}**")
+            ppe = item.get("ppe", {})
+            for category, recs in ppe.items():
+                if isinstance(recs, list):
+                    lines.append(f"- **{category.title()}:** {', '.join(str(r) for r in recs)}")
+                else:
+                    lines.append(f"- **{category.title()}:** {recs}")
+            lines.append("")
+        if data.get("unresolved"):
+            lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}")
+        if not data.get("results"):
+            lines.append("No PPE data found for the given chemicals.")
+        return CallToolResult(
+            content=[TextContent(type="text", text="\n".join(lines))],
+            structuredContent=data,
         )
-        data = await _quick_chat(message)
-        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -469,14 +598,32 @@ async def get_storage_guidance(chemicals: list[str]) -> str:
     error_msg = None
     success = True
     try:
-        chem_list = ", ".join(chemicals)
-        message = (
-            f"How should I store these chemicals: {chem_list}? "
-            "Include storage class, cabinet type, temperature requirements, "
-            "and what materials they must be separated from."
+        data = await _direct_storage(chemicals)
+        lines = ["**Storage Guidance**\n"]
+        for item in data.get("results", []):
+            lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
+            lines.append(f"- **Storage class:** {item.get('storage_class_label', 'N/A')}")
+            lines.append(f"- **Cabinet color:** {item.get('cabinet_color', 'N/A')}")
+            lines.append(f"- **Recommended cabinet:** {item.get('recommended_cabinet', 'N/A')}")
+            lines.append(f"- **Temperature:** {item.get('temperature_requirement', 'N/A')}")
+            reqs = item.get("storage_requirements", [])
+            if reqs:
+                lines.append("- **Storage requirements:** " + "; ".join(str(r) for r in reqs))
+            incompatible = item.get("incompatible_materials", [])
+            if incompatible:
+                lines.append("- **Incompatible materials:** " + ", ".join(str(m) for m in incompatible))
+            nfpa = item.get("nfpa_ratings", {})
+            if nfpa:
+                lines.append("- **NFPA ratings:** " + ", ".join(f"{k.title()} {v}" for k, v in nfpa.items()))
+            lines.append("")
+        if data.get("unresolved"):
+            lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}")
+        if not data.get("results"):
+            lines.append("No storage data found for the given chemicals.")
+        return CallToolResult(
+            content=[TextContent(type="text", text="\n".join(lines))],
+            structuredContent=data,
         )
-        data = await _quick_chat(message)
-        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -504,13 +651,36 @@ async def get_emergency_response(chemical: str, scenario: str = "spill") -> str:
     error_msg = None
     success = True
     try:
-        message = (
-            f"What should I do if there is a {scenario} involving {chemical}? "
-            "Include immediate actions, specific cleanup/response procedures, "
-            "and any special precautions."
+        data = await _direct_emergency(chemical, scenario)
+        if data.get("error"):
+            return _text_result(f"Emergency response error: {data['error']}")
+        chem_display = data.get("chemical", chemical)
+        cas = data.get("cas", "N/A")
+        lines = [f"**Emergency Response: {scenario.title()} — {chem_display} ({cas})**\n"]
+        if data.get("signal_word"):
+            lines.append(f"Signal word: **{data['signal_word']}**\n")
+        immediate = data.get("immediate_actions", [])
+        if immediate:
+            lines.append("**Immediate Actions:**")
+            lines.extend(f"  - {a}" for a in immediate)
+            lines.append("")
+        sds = data.get("sds_instructions", [])
+        if sds:
+            lines.append("**SDS-Specific Instructions:**")
+            lines.extend(f"  - {i}" for i in sds)
+            lines.append("")
+        hcode = data.get("hcode_actions", [])
+        if hcode:
+            lines.append("**Hazard Code Guidance:**")
+            lines.extend(f"  - {a}" for a in hcode)
+            lines.append("")
+        lines.append(f"*Data source: {data.get('data_source', 'unknown')}*")
+        if data.get("unresolved"):
+            lines.append("\n**Note:** Chemical not found in database — showing general guidance only.")
+        return CallToolResult(
+            content=[TextContent(type="text", text="\n".join(lines))],
+            structuredContent=data,
         )
-        data = await _quick_chat(message)
-        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -540,12 +710,31 @@ async def get_exposure_limits(chemicals: list[str], region: str | None = None) -
     error_msg = None
     success = True
     try:
-        parts = [f"exposure limits for {', '.join(chemicals)}"]
-        if region:
-            parts.append(f"in region {region}")
-        message = "What are the occupational " + " ".join(parts) + "?"
-        data = await _quick_chat(message)
-        return _quick_result(data)
+        data = await _direct_exposure(chemicals, region)
+        lines = ["**Occupational Exposure Limits**\n"]
+        for item in data.get("results", []):
+            lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
+            if item.get("region_filter"):
+                lines.append(f"Region filter: **{item['region_filter']}**")
+            limits = item.get("limits", [])
+            if limits:
+                for lim in limits:
+                    lines.append(
+                        f"- **{lim.get('authority', '?')}:** "
+                        f"TWA={lim.get('twa', '—')}  STEL={lim.get('stel', '—')}  "
+                        f"Ceiling={lim.get('ceiling', '—')}"
+                    )
+            else:
+                lines.append("- No OEL data found for this chemical.")
+            lines.append(f"*Data source: {item.get('data_source', 'unknown')}*\n")
+        if data.get("unresolved"):
+            lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}")
+        if not data.get("results"):
+            lines.append("No exposure-limit data found for the given chemicals.")
+        return CallToolResult(
+            content=[TextContent(type="text", text="\n".join(lines))],
+            structuredContent=data,
+        )
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -568,9 +757,27 @@ async def get_transport_classification(chemicals: list[str]) -> str:
     error_msg = None
     success = True
     try:
-        message = f"What is the UN transport classification for {', '.join(chemicals)}?"
-        data = await _quick_chat(message)
-        return _quick_result(data)
+        data = await _direct_transport(chemicals)
+        lines = ["**UN Transport Classification**\n"]
+        for item in data.get("results", []):
+            lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
+            lines.append(f"- **UN Number:** {item.get('un_number', 'N/A')}")
+            lines.append(f"- **Proper Shipping Name:** {item.get('proper_shipping_name', 'N/A')}")
+            lines.append(f"- **Hazard Class:** {item.get('hazard_class', 'N/A')}")
+            lines.append(f"- **Packing Group:** {item.get('packing_group', 'N/A')}")
+            modes = item.get("transport_modes", {})
+            if modes:
+                lines.append("- **Transport Modes:**")
+                lines.extend(f"  - {mode.upper()}: {details}" for mode, details in modes.items())
+            lines.append(f"*Data source: {item.get('data_source', 'unknown')}*\n")
+        if data.get("unresolved"):
+            lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}")
+        if not data.get("results"):
+            lines.append("No transport-classification data found for the given chemicals.")
+        return CallToolResult(
+            content=[TextContent(type="text", text="\n".join(lines))],
+            structuredContent=data,
+        )
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -905,13 +1112,27 @@ async def get_sds_section(chemical: str, section: int) -> str:
             15: "Regulatory information", 16: "Other information",
         }
         sec_name = section_names[section]
-        message = (
-            f"Provide the full SDS Section {section} ({sec_name}) data for {chemical}. "
-            "Include all sub-fields typically found in this section according to "
-            "GHS/REACH format. Present the data in a structured format."
+        data = await _direct_sds_section(chemical, section)
+        if data.get("error"):
+            return _text_result(f"SDS section error: {data['error']}")
+        chem_display = data.get("chemical", chemical)
+        cas = data.get("cas", "N/A")
+        content = data.get("content")
+        lines = [
+            f"**SDS Section {section}: {sec_name}**",
+            f"Chemical: {chem_display} (CAS: {cas})\n",
+        ]
+        if data.get("unresolved"):
+            lines.append("**Note:** Chemical not found in database.")
+        elif content:
+            lines.append(content)
+        else:
+            lines.append("No data available for this section in the canonical SDS.")
+        lines.append(f"\n*Data source: {data.get('data_source', 'unknown')}*")
+        return CallToolResult(
+            content=[TextContent(type="text", text="\n".join(lines))],
+            structuredContent=data,
         )
-        data = await _quick_chat(message)
-        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -1082,18 +1303,23 @@ async def get_waste_disposal(chemicals: list[str]) -> str:
     error_msg = None
     success = True
     try:
-        chem_list = ", ".join(chemicals)
-        message = (
-            f"What is the proper waste disposal procedure for: {chem_list}? "
-            "For each chemical, specify: waste classification category "
-            "(halogenated organic / non-halogenated organic / acidic / alkaline / "
-            "heavy metal / oxidizing / reactive / biological), "
-            "container type, labeling requirements, and which waste streams "
-            "they must NOT be combined with. Also note any special disposal "
-            "requirements from SDS Section 13."
+        data = await _direct_waste(chemicals)
+        lines = ["**Waste Disposal Guidance**\n"]
+        for item in data.get("results", []):
+            lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
+            lines.append(f"- **Waste classification:** {item.get('waste_classification', 'N/A')}")
+            sds_13 = item.get("sds_section_13")
+            if sds_13:
+                lines.append(f"- **SDS Section 13 (Disposal Considerations):** {sds_13[:600]}")
+            lines.append(f"*Data source: {item.get('data_source', 'unknown')}*\n")
+        if data.get("unresolved"):
+            lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}")
+        if not data.get("results"):
+            lines.append("No waste-disposal data found for the given chemicals.")
+        return CallToolResult(
+            content=[TextContent(type="text", text="\n".join(lines))],
+            structuredContent=data,
         )
-        data = await _quick_chat(message)
-        return _quick_result(data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
