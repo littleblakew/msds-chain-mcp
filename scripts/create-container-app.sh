@@ -47,7 +47,7 @@ az containerapp create \
     MSDS_API_KEY=secretref:msds-api-key \
     MSDS_MCP_HOST=0.0.0.0 \
     MSDS_MCP_PORT=8080 \
-    MSDS_MCP_TRANSPORT=streamable-http \
+    MSDS_MCP_TRANSPORT=sse \
     MSDS_OAUTH_ENABLED=1 \
     MSDS_OAUTH_ISSUER=https://mcp.lagentbot.com \
     MSDS_OAUTH_SECRET=secretref:oauth-secret \
