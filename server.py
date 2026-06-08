@@ -295,6 +295,18 @@ async def _direct_sds_section(chemical: str, section: int) -> dict:
         return res.json()
 
 
+async def _direct_compare_sds(chemical: str, supplier: str = "", region: str = "") -> dict:
+    """POST /api/v2/compare-sds-versions — direct service layer, no LLM."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.post(
+            f"{API_URL}/api/v2/compare-sds-versions",
+            json={"chemical": chemical, "supplier": supplier, "region": region},
+            headers=_headers(),
+        )
+        res.raise_for_status()
+        return res.json()
+
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
@@ -1334,57 +1346,65 @@ async def get_waste_disposal(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Compare SDS Versions", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@mcp.tool(
+    annotations=ToolAnnotations(title="Compare SDS Versions", readOnlyHint=True, destructiveHint=False, openWorldHint=False),
+    structured_output=False,
+)
 async def compare_sds_versions(
     chemical: str,
-    version_old: str,
-    version_new: str,
-) -> str:
+    supplier: str = "",
+    region: str = "",
+) -> CallToolResult:
     """
-    Compare two versions of a Safety Data Sheet (SDS) for the same chemical.
+    Compare a chemical's two most recent SDS versions and report whether its
+    hazard data changed (and whether the change is relevant to safety verdicts).
 
-    Identifies what changed between revisions: new hazard classifications,
-    updated exposure limits, revised PPE requirements, changed storage
-    conditions, regulatory status updates, or H-code additions/removals.
+    Identifies H-code additions/removals between the latest two on-record SDS
+    revisions, and flags whether the change could affect a prior compatibility
+    or risk conclusion.
 
-    Useful for tracking regulatory compliance when a supplier issues a new SDS,
-    or for auditing whether a chemical's risk profile has changed over time.
+    Use when a user asks if a chemical's safety data has been updated, or to
+    check whether a past safety conclusion might be affected by an SDS revision.
 
     Args:
-        chemical:    Chemical name or CAS number, e.g. "acetone" or "67-64-1"
-        version_old: Description of the older SDS version — can be a version
-                     number ("v7.2"), a date ("January 2022"), or a brief
-                     summary of key fields ("NFPA H1/F3/R0, no CMR listing").
-        version_new: Description of the newer SDS version — same format as
-                     version_old, e.g. "v8.1" or "March 2024".
-
-    Returns:
-        A structured diff report covering: GHS classification changes,
-        H-code additions/removals, PPE updates, exposure limit changes,
-        storage condition changes, regulatory listing changes, and an
-        overall risk-trend assessment (increased / decreased / unchanged).
+        chemical: Chemical name or CAS number, e.g. "hydrogen peroxide" or "7722-84-1".
+        supplier: Optional SDS supplier/manufacturer to disambiguate (e.g. "Sigma-Aldrich").
+        region:   Optional region code to narrow the lookup (e.g. "US", "EU", "JP", "CN").
     """
     t0 = time.monotonic()
     error_msg = None
     success = True
     try:
-        message = (
-            f"Compare two versions of the SDS for {chemical}.\n\n"
-            f"OLD version ({version_old}):\n{version_old}\n\n"
-            f"NEW version ({version_new}):\n{version_new}\n\n"
-            "Provide a structured comparison covering:\n"
-            "1. GHS hazard classification changes (signal word, pictograms)\n"
-            "2. H-code additions or removals\n"
-            "3. PPE requirement changes (gloves, respiratory, eye protection)\n"
-            "4. Exposure limit updates (TWA/STEL/Ceiling)\n"
-            "5. Storage condition changes\n"
-            "6. Regulatory listing changes (SVHC, TSCA, CMR, etc.)\n"
-            "7. Overall risk trend: increased / decreased / unchanged\n\n"
-            "If a field is unchanged, note it briefly. "
-            "Highlight any changes that require immediate action."
+        data = await _direct_compare_sds(chemical, supplier, region)
+        if not data.get("has_newer"):
+            if data.get("cas"):
+                text = (
+                    f"**{chemical}** (CAS {data['cas']}): no newer SDS version found"
+                    " — current version is the latest on record."
+                )
+            else:
+                text = f"Could not resolve **{chemical}** to a known chemical."
+            return CallToolResult(
+                content=[TextContent(type="text", text=text)],
+                structuredContent=data,
+            )
+        lines = [
+            f"**SDS Version Comparison — {chemical}** (CAS {data.get('cas', '?')})",
+            f"Version {data.get('from_version')} → {data.get('to_version')}",
+        ]
+        for ch in data.get("hazard_changes", []):
+            if ch.get("added"):
+                lines.append(f"- Added hazard codes: {', '.join(ch['added'])}")
+            if ch.get("removed"):
+                lines.append(f"- Removed hazard codes: {', '.join(ch['removed'])}")
+        lines.append(
+            f"\n**Verdict-relevant change:** "
+            f"{'YES — re-review recommended' if data.get('verdict_relevant') else 'no'}"
         )
-        data = await _quick_chat(message)
-        return _quick_result(data)
+        return CallToolResult(
+            content=[TextContent(type="text", text="\n".join(lines))],
+            structuredContent=data,
+        )
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -1392,7 +1412,7 @@ async def compare_sds_versions(
     finally:
         dur = int((time.monotonic() - t0) * 1000)
         await _log_call("compare_sds_versions", [chemical], dur, success, error_msg,
-                        _json.dumps({"chemical": chemical, "version_old": version_old, "version_new": version_new}))
+                        _json.dumps({"chemical": chemical, "supplier": supplier, "region": region}))
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Upload & Parse MSDS PDF", readOnlyHint=False, destructiveHint=False, openWorldHint=False), structured_output=False)
