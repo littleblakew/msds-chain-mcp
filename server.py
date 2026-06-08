@@ -719,10 +719,14 @@ async def get_exposure_limits(chemicals: list[str], region: str | None = None) -
             limits = item.get("limits", [])
             if limits:
                 for lim in limits:
+                    source = lim.get("source") or lim.get("authority") or "?"
+                    ltype = lim.get("type", "?")
+                    value = lim.get("value", "—")
+                    unit = lim.get("unit", "")
+                    region = lim.get("region", "")
+                    region_suffix = f" ({region})" if region else ""
                     lines.append(
-                        f"- **{lim.get('authority', '?')}:** "
-                        f"TWA={lim.get('twa', '—')}  STEL={lim.get('stel', '—')}  "
-                        f"Ceiling={lim.get('ceiling', '—')}"
+                        f"- **{source}**{region_suffix}: {ltype} = {value} {unit}".rstrip()
                     )
             else:
                 lines.append("- No OEL data found for this chemical.")
