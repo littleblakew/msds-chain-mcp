@@ -4,9 +4,24 @@ MSDS Chain MCP Server — Remote (HTTP SSE / Streamable HTTP)
 Runs as a web server (uvicorn) instead of stdio, so external clients can
 connect over HTTPS without running the server locally.
 
+Transport strategy (PATH A — single-process dual-mount):
+    Both transports are served concurrently from one process:
+      - /mcp          → Streamable HTTP (primary; Copilot Studio, new clients)
+      - /sse          → SSE (compatibility; legacy clients, Hermes MCP bridge)
+      - /messages     → SSE message posting endpoint
+
+    MSDS_MCP_TRANSPORT is kept for backward compatibility but is ignored at
+    runtime — both transports are always active.
+
+    Implementation note: routes from both FastMCP transport sub-apps are
+    merged into a single outer Starlette app so that the streamable-http
+    lifespan (task-group init) propagates correctly to all routes without
+    the sub-app lifespan-propagation gap that appears when using Mount().
+
 Usage:
     MSDS_API_KEY=sk-msds-xxx python server_remote.py
     MSDS_OAUTH_ENABLED=1 python server_remote.py
+    uvicorn server_remote:app --host 0.0.0.0 --port 8080
 
 Environment Variables:
     MSDS_API_KEY       - API key for authenticating to MSDS Chain backend
@@ -14,7 +29,7 @@ Environment Variables:
     MSDS_LANG          - Response language (en/zh/ja/de/id)
     MSDS_MCP_HOST      - Host to bind (default: 0.0.0.0)
     MSDS_MCP_PORT      - Port to listen on (default: 8080)
-    MSDS_MCP_TRANSPORT - "sse" or "streamable-http" (default: streamable-http)
+    MSDS_MCP_TRANSPORT - Kept for backward compat; ignored (both transports active)
     MSDS_OAUTH_ENABLED - Set to "1" to enable OAuth 2.1 endpoints
     MSDS_OAUTH_ISSUER  - OAuth issuer URL (default: https://mcp.lagentbot.com)
     MSDS_OAUTH_SECRET  - Secret for signing tokens (auto-generated if not set)
@@ -24,6 +39,8 @@ from __future__ import annotations
 import os
 import sys
 
+from starlette.applications import Starlette
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
@@ -32,9 +49,11 @@ from starlette.routing import Route
 import server as _srv  # noqa: F401 — registers tools on `mcp`
 from server import mcp
 
+from identity_middleware import IdentityMiddleware
+
 HOST = os.environ.get("MSDS_MCP_HOST", "0.0.0.0")
 PORT = int(os.environ.get("MSDS_MCP_PORT", "8080"))
-TRANSPORT = os.environ.get("MSDS_MCP_TRANSPORT", "streamable-http")
+TRANSPORT = os.environ.get("MSDS_MCP_TRANSPORT", "streamable-http")  # kept for compat
 OAUTH_ENABLED = os.environ.get("MSDS_OAUTH_ENABLED", "0") == "1"
 
 
@@ -56,25 +75,61 @@ async def openai_apps_challenge(request: Request) -> PlainTextResponse:
     return PlainTextResponse(OPENAI_APPS_CHALLENGE_TOKEN)
 
 
-# Inject custom routes into FastMCP's Starlette app via _custom_starlette_routes.
-# This avoids the sub-app mount issue where lifespan (task group init) doesn't propagate.
-mcp._custom_starlette_routes.append(Route("/health", health, methods=["GET"]))
-mcp._custom_starlette_routes.append(
-    Route("/.well-known/openai-apps-challenge", openai_apps_challenge, methods=["GET"])
-)
+# ---------------------------------------------------------------------------
+# Build both transport sub-apps from the same FastMCP instance, then merge
+# their routes into a single outer Starlette app.
+#
+# We do NOT use mcp._custom_starlette_routes (which bakes routes into one
+# transport app) because we need the custom routes on the outer app, and we
+# do NOT use Mount() because Starlette's Mount strips path prefixes before
+# dispatching, which breaks the transport apps' internally-registered paths
+# (/mcp, /sse, /messages).
+#
+# Instead we extract the Route/Mount objects from each transport app and
+# combine them with our custom routes into one top-level router. The
+# streamable-http lifespan drives startup so the task-group initialises
+# before any requests arrive on either transport.
+# ---------------------------------------------------------------------------
+_streamable_app = mcp.streamable_http_app()   # registers /mcp
+_sse_app = mcp.sse_app()                       # registers /sse + /messages
+
+_routes: list = [
+    Route("/health", health, methods=["GET"]),
+    Route("/.well-known/openai-apps-challenge", openai_apps_challenge, methods=["GET"]),
+]
 
 if OAUTH_ENABLED:
     from oauth import oauth_routes
-    mcp._custom_starlette_routes.extend(oauth_routes)
+    _routes.extend(oauth_routes)
+
+# Merge transport routes (preserves the handler references built by FastMCP).
+_routes.extend(_streamable_app.router.routes)   # /mcp
+_routes.extend(_sse_app.router.routes)           # /sse, /messages
+
+# Build the combined application.
+app = Starlette(
+    routes=_routes,
+    lifespan=_streamable_app.router.lifespan_context,
+)
+
+# IdentityMiddleware: extracts caller credentials (Bearer token / X-Api-Key)
+# from inbound request headers and stores them in a request-scoped contextvar
+# so all tool handlers can read the caller identity without threading state.
+app.add_middleware(IdentityMiddleware)
+
+# CORS: wildcard origin is safe because auth is via Authorization header
+# (not cookies), so allow_credentials stays False.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["Mcp-Session-Id"],
+)
 
 
 if __name__ == "__main__":
-    if TRANSPORT not in ("sse", "streamable-http"):
-        print(f"Error: MSDS_MCP_TRANSPORT must be 'sse' or 'streamable-http', got '{TRANSPORT}'",
-              file=sys.stderr)
-        sys.exit(1)
-
-    features = [TRANSPORT]
+    features = ["streamable-http /mcp (primary)", "sse /sse (compat)"]
     if OAUTH_ENABLED:
         features.append("OAuth 2.1")
 
@@ -83,22 +138,6 @@ if __name__ == "__main__":
 
     mcp.settings.host = HOST
     mcp.settings.port = PORT
-
-    # Build the transport app, then wrap with CORS so browser-based clients
-    # (e.g. Claude.ai web connectors) can complete the OAuth + handshake flow.
-    # Auth is via the Authorization header (not cookies), so a wildcard origin
-    # is safe and allow_credentials stays False.
-    app = mcp.sse_app() if TRANSPORT == "sse" else mcp.streamable_http_app()
-
-    from starlette.middleware.cors import CORSMiddleware
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["Mcp-Session-Id"],
-    )
 
     import uvicorn
 
