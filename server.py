@@ -30,6 +30,7 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from request_identity import caller_headers, get_caller_credential, set_caller_credential
 
 # ---------------------------------------------------------------------------
 # Config
@@ -73,9 +74,9 @@ _API_KEY_REQUIRED_MSG = (
 
 
 def _require_api_key() -> str | None:
-    """Return error message if API key is missing, None if OK."""
-    if not API_KEY:
-        return _API_KEY_REQUIRED_MSG
+    """Return error message if no caller credential on request, None if OK."""
+    if not get_caller_credential():
+        return "No caller credential on request (gateway must inject identity)."
     return None
 
 
@@ -101,10 +102,7 @@ def _quick_result(data: dict) -> CallToolResult:
 
 
 def _headers() -> dict[str, str]:
-    h = {"Content-Type": "application/json"}
-    if API_KEY:
-        h["X-API-Key"] = API_KEY
-    return h
+    return caller_headers()
 
 
 async def _quick_chat(message: str) -> dict:
@@ -148,7 +146,7 @@ async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: in
                     "success": success,
                     "error_message": error_message,
                     "input_params": input_params,
-                    "api_key": API_KEY or None,
+                    "api_key": get_caller_credential(),
                 },
                 headers=_headers(),
             )
@@ -1752,4 +1750,8 @@ if __name__ == "__main__":
             "Set it via environment variable: export MSDS_API_KEY=sk-msds-...",
             file=sys.stderr,
         )
+    else:
+        # Local / stdio mode: seed the contextvar from the env key so that
+        # caller_headers() returns the correct credential without a gateway.
+        set_caller_credential(API_KEY)
     mcp.run()
