@@ -98,10 +98,13 @@ jobs:
               --resource-group ${{ env.RESOURCE_GROUP }} \
               --query "sort_by(@, &properties.createdTime)[-1].properties.runningState" -o tsv 2>/dev/null)
             echo "latest core revision runningState=$STATE"
-            if [ "$STATE" = "Running" ]; then
-              echo "✅ Core revision running"
-              break
-            fi
+            # ACA reports "Running" or "RunningAtMaxScale" once healthy.
+            case "$STATE" in
+              Running*)
+                echo "✅ Core revision running"
+                break
+                ;;
+            esac
             if [ "$i" = "18" ]; then
               echo "::error::Core revision did not reach Running state"
               exit 1
