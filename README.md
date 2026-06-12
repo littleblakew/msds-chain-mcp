@@ -62,8 +62,13 @@ pip install -r requirements.txt
 
 **Claude Code (Remote — recommended):**
 ```bash
-claude mcp add msds-chain --transport sse --url https://mcp.lagentbot.com/sse
+claude mcp add msds-chain --transport http https://mcp.lagentbot.com/mcp
 ```
+Then run `/mcp` in Claude Code and authenticate — a browser opens to sign in (email
+code); your account is provisioned automatically and calls are metered to you (free
+plan includes a monthly free quota). The legacy SSE endpoint
+(`--transport sse --url https://mcp.lagentbot.com/sse`) still works but streamable
+HTTP is preferred.
 
 **Claude Code (Plugin — includes skill + MCP):**
 ```bash
@@ -84,17 +89,16 @@ Search "msds-chain" in Settings > Plugins (already published).
 {
   "mcpServers": {
     "msds-chain": {
-      "type": "sse",
-      "url": "https://mcp.lagentbot.com/sse",
-      "env": {
-        "MSDS_API_KEY": "sk-msds-your-key-here"
-      }
+      "type": "http",
+      "url": "https://mcp.lagentbot.com/mcp"
     }
   }
 }
 ```
 
-Restart Claude Code. You should see `msds-chain` in the MCP tools list.
+Restart Claude Code, run `/mcp`, and authenticate (OAuth). You should then see
+`msds-chain` in the MCP tools list. (Prefer a static key instead of OAuth? Pass it as
+a header — `--header "Authorization: Bearer sk-msds-your-key"` — for headless clients.)
 
 ## Claude Code Skill
 
@@ -207,16 +211,16 @@ Each prompt reliably triggers the named tool. Use them to evaluate the connector
 
 Connect to the hosted MSDS Chain MCP server from any AI platform that supports MCP.
 
-**Server URL:** `https://mcp.lagentbot.com/sse`
+**Server URL (preferred):** `https://mcp.lagentbot.com/mcp` (streamable HTTP)
 
-The hosted server uses the **SSE** transport for broad client compatibility (Claude.ai, Claude Code, pi, 悟空, Dify, Coze, etc.). Streamable HTTP is supported by the code for self-hosting (see [Remote Mode](#remote-mode-http)) but is not enabled on the hosted endpoint.
+The hosted endpoint serves **both** transports — streamable HTTP (`/mcp`, preferred) and SSE (`/sse`, for clients that only speak SSE: Claude.ai, 悟空, Dify, Coze, etc.). Calls are metered per authenticated user.
 
 | Transport | Endpoint | Notes |
 |-----------|----------|-------|
-| SSE | `https://mcp.lagentbot.com/sse` | Hosted endpoint — use this |
-| Streamable HTTP | self-hosted only | Run your own server with `MSDS_MCP_TRANSPORT=streamable-http` |
+| Streamable HTTP | `https://mcp.lagentbot.com/mcp` | Preferred — broadest, most robust |
+| SSE | `https://mcp.lagentbot.com/sse` | For SSE-only clients |
 
-**Authentication:** Add an HTTP header — `Authorization: Bearer sk-msds-your-key`
+**Authentication:** either OAuth (the client opens a browser sign-in on first connect) or a static header — `Authorization: Bearer sk-msds-your-key` — for headless clients.
 
 ### 悟空 (Wukong)
 

@@ -8,8 +8,10 @@ This is a remote MCP (Model Context Protocol) server providing **21 tools** for 
 
 **Claude Code:**
 ```bash
-claude mcp add msds-chain --transport sse --url https://mcp.lagentbot.com/sse
+claude mcp add msds-chain --transport http https://mcp.lagentbot.com/mcp
 ```
+Then run `/mcp` and authenticate (browser sign-in). The legacy SSE endpoint
+(`--transport sse --url https://mcp.lagentbot.com/sse`) still works for SSE-only clients.
 
 **claude.ai (Web):** Search "msds-chain" in Settings > Plugins.
 
@@ -18,8 +20,8 @@ claude mcp add msds-chain --transport sse --url https://mcp.lagentbot.com/sse
 {
   "mcpServers": {
     "msds-chain": {
-      "type": "sse",
-      "url": "https://mcp.lagentbot.com/sse"
+      "type": "http",
+      "url": "https://mcp.lagentbot.com/mcp"
     }
   }
 }
