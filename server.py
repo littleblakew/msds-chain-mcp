@@ -835,11 +835,12 @@ async def create_audit_session(
     try:
         if not chemicals:
             return "Please provide at least one chemical to audit."
-        if not API_KEY:
+        if not get_caller_credential():
             return (
-                "create_audit_session requires MSDS_API_KEY to be set so the session "
+                "create_audit_session requires an authenticated API key so the session "
                 "is tied to your account. Get one at https://msdschain.lagentbot.com "
-                "(API Keys tab) and add it to the MCP server env."
+                "(API Keys tab); self-hosted stdio sets it via MSDS_API_KEY, remote "
+                "callers authenticate through the gateway."
             )
 
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -969,8 +970,8 @@ async def get_audit_report(session_id: str) -> str:
     error_msg = None
     success = True
     try:
-        if not API_KEY:
-            return "get_audit_report requires MSDS_API_KEY to be set."
+        if not get_caller_credential():
+            return "get_audit_report requires an authenticated API key (MSDS_API_KEY for stdio, or gateway auth for remote)."
 
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             res = await client.get(
@@ -1448,11 +1449,12 @@ async def upload_msds_pdf(
     error_msg = None
     success = True
     try:
-        if not API_KEY:
+        if not get_caller_credential():
             return (
-                "upload_msds_pdf requires MSDS_API_KEY to be set so the record "
+                "upload_msds_pdf requires an authenticated API key so the record "
                 "is stored under your account. Get one at https://msdschain.lagentbot.com "
-                "(API Keys tab) and add it to the MCP server env."
+                "(API Keys tab); self-hosted stdio sets it via MSDS_API_KEY, remote "
+                "callers authenticate through the gateway."
             )
 
         # 1. Resolve PDF bytes

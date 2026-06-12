@@ -33,3 +33,59 @@ def test_server_headers_use_caller_credential():
         h = server._headers()
         assert h["X-API-Key"] == "sk-msds-caller"
     asyncio.run(run())
+
+
+# --- Stateful tools must gate on the per-request caller credential, not the ---
+# --- global MSDS_API_KEY env (which is empty under the remote gateway model). --
+
+class _FakeResp:
+    def __init__(self, data):
+        self._data = data
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._data
+
+
+class _FakeClient:
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, url, **k):
+        if url.endswith("/chemicals"):
+            return _FakeResp({"added": [{"name": "acetone", "status": "added"}], "not_found": []})
+        if url.endswith("/compatibility"):
+            return _FakeResp({"matrix": [], "warnings": []})
+        if url.endswith("/sessions"):
+            return _FakeResp({"session_id": "sess-test"})
+        return _FakeResp({})
+
+
+def test_create_audit_session_gates_on_caller_credential(monkeypatch):
+    """Empty MSDS_API_KEY env but a present per-request credential must NOT be
+    refused (the old `if not API_KEY` guard wrongly blocked remote callers)."""
+    monkeypatch.setattr(server, "API_KEY", "")          # remote model: no global env key
+    monkeypatch.setattr(server.httpx, "AsyncClient", _FakeClient)
+
+    def as_text(r):
+        return r if isinstance(r, str) else r.content[0].text
+
+    async def run():
+        set_caller_credential(None)
+        msg = as_text(await server.create_audit_session("exp", ["acetone"]))
+        assert "requires an authenticated api key" in msg.lower()
+
+        set_caller_credential("sk-msds-caller")
+        out = as_text(await server.create_audit_session("exp", ["acetone"]))
+        assert "requires an authenticated" not in out.lower()
+        assert "sess-test" in out
+
+    asyncio.run(run())
