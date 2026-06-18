@@ -64,7 +64,7 @@ mcp = FastMCP(
 
 _API_KEY_REQUIRED_MSG = (
     "⚠️ MSDS_API_KEY is required for all tools.\n\n"
-    "Get a free API key (100 calls/day) at https://msdschain.lagentbot.com:\n"
+    "Get a free API key (100 calls/month) at https://msdschain.lagentbot.com:\n"
     "1. Sign up / log in\n"
     "2. Go to API Keys tab\n"
     "3. Create a key\n"

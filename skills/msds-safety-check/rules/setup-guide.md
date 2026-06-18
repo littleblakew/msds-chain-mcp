@@ -19,7 +19,7 @@ Prompt the user:
 > claude mcp add msds-chain --transport sse --url https://mcp.lagentbot.com/sse
 > ```
 >
-> Then restart Claude Code. This connects to MSDS Chain's cloud API (free tier: 100 calls/day, no API key needed for basic queries).
+> Then restart Claude Code. This connects to MSDS Chain's cloud API (free tier: 100 calls/month, no API key needed for basic queries).
 >
 > For local/offline use:
 > ```bash
