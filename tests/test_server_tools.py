@@ -110,3 +110,73 @@ def test_compare_sds_versions_passes_optional_args(monkeypatch):
     assert captured["chemical"] == "acetone"
     assert captured["supplier"] == "Merck"
     assert captured["region"] == "EU"
+
+
+# ---------------------------------------------------------------------------
+# Credit usage visibility (CI-39): cost + balance surfaced to the MCP caller
+# ---------------------------------------------------------------------------
+class _FakeResp:
+    def __init__(self, status=200, headers=None, body=None):
+        self.status_code = status
+        self.headers = headers or {}
+        self._body = body or {}
+
+    def json(self):
+        return self._body
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+def test_parse_usage_reads_headers():
+    r = _FakeResp(headers={"X-Msds-Credits-Cost": "3", "X-Msds-Credits-Balance": "197",
+                           "X-Msds-Credits-Reason": "charged"})
+    assert server._parse_usage(r) == {"cost": 3.0, "balance": 197.0, "reason": "charged"}
+
+
+def test_parse_usage_none_without_header():
+    assert server._parse_usage(_FakeResp()) is None
+
+
+def test_billed_json_attaches_usage():
+    r = _FakeResp(headers={"X-Msds-Credits-Cost": "3", "X-Msds-Credits-Balance": "197",
+                           "X-Msds-Credits-Reason": "charged"}, body={"pairs": []})
+    data = server._billed_json(r)
+    assert data["pairs"] == []
+    assert data["_usage"]["balance"] == 197.0
+
+
+def test_billed_json_402_is_caller_friendly():
+    r = _FakeResp(status=402, body={"detail": {"error": "credit_floor", "balance": 0.5}})
+    try:
+        server._billed_json(r)
+        assert False, "expected RuntimeError"
+    except RuntimeError as e:
+        msg = str(e)
+        assert "exhausted" in msg.lower()
+        assert "0.5" in msg
+        assert "msdschain.lagentbot.com" in msg
+
+
+def test_usage_line_subscription_included():
+    assert "plan" in server._usage_line({"cost": 0, "balance": -1, "reason": "subscription"}).lower()
+
+
+def test_usage_line_charged_shows_cost_and_balance():
+    line = server._usage_line({"cost": 3, "balance": 197, "reason": "charged"})
+    assert "3" in line and "197" in line and "credit" in line.lower()
+
+
+def test_compat_surfaces_usage_in_result(monkeypatch):
+    async def fake(chemicals):
+        return {
+            "pairs": [{"chem1": "a", "chem2": "b", "level": "compatible",
+                       "reason": "x", "source": "y"}],
+            "unresolved": [],
+            "_usage": {"cost": 3, "balance": 197, "reason": "charged"},
+        }
+    monkeypatch.setattr(server, "_direct_compat", fake)
+    res = asyncio.run(server.check_chemical_compatibility(["a", "b"]))
+    assert res.structuredContent["usage"]["balance"] == 197
+    assert "197" in res.content[0].text and "Balance" in res.content[0].text

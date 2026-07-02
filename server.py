@@ -115,8 +115,7 @@ async def _quick_chat(message: str) -> dict:
             json={"message": message, "lang": LANG},
             headers=_headers(),
         )
-        res.raise_for_status()
-        return res.json()
+        return _billed_json(res)
 
 
 def _format_tool_results(tool_results: list[dict]) -> str:
@@ -158,6 +157,74 @@ async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: in
 # Direct service layer helpers (bypass LLM)
 # ---------------------------------------------------------------------------
 
+def _parse_usage(res: "httpx.Response") -> dict | None:
+    """Read per-call credit usage the backend echoes via X-Msds-Credits-* headers.
+    Returns {cost, balance, reason} or None when the call wasn't metered."""
+    cost = res.headers.get("X-Msds-Credits-Cost")
+    if cost is None:
+        return None
+    try:
+        return {
+            "cost": float(cost),
+            "balance": float(res.headers.get("X-Msds-Credits-Balance", "-1")),
+            "reason": res.headers.get("X-Msds-Credits-Reason", ""),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
+def _billed_json(res: "httpx.Response") -> dict:
+    """raise_for_status with a caller-friendly 402 (balance exhausted) message, then
+    return the JSON body with any credit usage attached under `_usage`."""
+    if res.status_code == 402:
+        bal = None
+        try:
+            bal = (res.json().get("detail") or {}).get("balance")
+        except Exception:
+            pass
+        msg = "Credit balance exhausted."
+        if bal is not None:
+            try:
+                msg += f" Remaining: {float(bal):g} credits."
+            except (TypeError, ValueError):
+                pass
+        raise RuntimeError(msg + " Top up at msdschain.lagentbot.com to continue.")
+    res.raise_for_status()
+    data = res.json()
+    usage = _parse_usage(res)
+    if usage and isinstance(data, dict):
+        data["_usage"] = usage
+    return data
+
+
+def _usage_line(usage: dict) -> str:
+    """Human-readable one-liner appended to a metered tool's text output."""
+    bal = usage.get("balance", -1)
+    reason = usage.get("reason", "")
+    cost = usage.get("cost", 0) or 0
+    if reason == "subscription" or bal < 0:
+        return "\n\n---\n💳 Included in your plan (no credits deducted)."
+    head = (f"This call used {cost:g} credits" if cost > 0
+            else "Free lookup (0 credits)")
+    return f"\n\n---\n💳 {head} · Balance: {bal:g} credits remaining."
+
+
+def _with_usage(result: "CallToolResult", data: dict) -> "CallToolResult":
+    """Append the credit usage line to a value tool's result (text + structuredContent).
+    No-op when the backend didn't meter the call (`_usage` absent)."""
+    usage = (data or {}).get("_usage")
+    if not usage:
+        return result
+    content = list(result.content or [])
+    line = _usage_line(usage)
+    if content and isinstance(content[0], TextContent):
+        content = [TextContent(type="text", text=content[0].text + line)] + content[1:]
+    sc = result.structuredContent
+    if sc is not None:
+        sc = {**sc, "usage": usage}
+    return CallToolResult(content=content, structuredContent=sc)
+
+
 async def _direct_compat(chemicals: list[str]) -> dict:
     """POST /api/v2/compatibility/check — direct service layer, no LLM."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -166,8 +233,7 @@ async def _direct_compat(chemicals: list[str]) -> dict:
             json={"chemicals": chemicals, "lang": LANG},
             headers=_headers(),
         )
-        res.raise_for_status()
-        return res.json()
+        return _billed_json(res)
 
 
 async def _direct_risk(chemicals: list[str]) -> dict:
@@ -178,8 +244,7 @@ async def _direct_risk(chemicals: list[str]) -> dict:
             json={"chemicals": chemicals, "lang": LANG},
             headers=_headers(),
         )
-        res.raise_for_status()
-        return res.json()
+        return _billed_json(res)
 
 
 async def _direct_batch(chemicals: list[str]) -> dict:
@@ -190,8 +255,7 @@ async def _direct_batch(chemicals: list[str]) -> dict:
             json={"chemicals": chemicals, "lang": LANG},
             headers=_headers(),
         )
-        res.raise_for_status()
-        return res.json()
+        return _billed_json(res)
 
 
 async def _direct_ppe(chemicals: list[str]) -> dict:
@@ -202,8 +266,7 @@ async def _direct_ppe(chemicals: list[str]) -> dict:
             json={"chemicals": chemicals, "lang": LANG},
             headers=_headers(),
         )
-        res.raise_for_status()
-        return res.json()
+        return _billed_json(res)
 
 
 async def _direct_storage(chemicals: list[str]) -> dict:
@@ -214,8 +277,7 @@ async def _direct_storage(chemicals: list[str]) -> dict:
             json={"chemicals": chemicals, "lang": LANG},
             headers=_headers(),
         )
-        res.raise_for_status()
-        return res.json()
+        return _billed_json(res)
 
 
 async def _direct_emergency(chemical: str, scenario: str) -> dict:
@@ -226,8 +288,7 @@ async def _direct_emergency(chemical: str, scenario: str) -> dict:
             json={"chemical": chemical, "scenario": scenario, "lang": LANG},
             headers=_headers(),
         )
-        res.raise_for_status()
-        return res.json()
+        return _billed_json(res)
 
 
 async def _direct_compliance(chemical: str, regions: list[str]) -> dict:
@@ -238,8 +299,7 @@ async def _direct_compliance(chemical: str, regions: list[str]) -> dict:
             json={"chemical": chemical, "regions": regions, "lang": LANG},
             headers=_headers(),
         )
-        res.raise_for_status()
-        return res.json()
+        return _billed_json(res)
 
 
 async def _direct_exposure(chemicals: list[str], region: str | None = None) -> dict:
@@ -253,8 +313,7 @@ async def _direct_exposure(chemicals: list[str], region: str | None = None) -> d
             json=payload,
             headers=_headers(),
         )
-        res.raise_for_status()
-        return res.json()
+        return _billed_json(res)
 
 
 async def _direct_transport(chemicals: list[str]) -> dict:
@@ -265,8 +324,7 @@ async def _direct_transport(chemicals: list[str]) -> dict:
             json={"chemicals": chemicals, "lang": LANG},
             headers=_headers(),
         )
-        res.raise_for_status()
-        return res.json()
+        return _billed_json(res)
 
 
 async def _direct_waste(chemicals: list[str]) -> dict:
@@ -277,8 +335,7 @@ async def _direct_waste(chemicals: list[str]) -> dict:
             json={"chemicals": chemicals, "lang": LANG},
             headers=_headers(),
         )
-        res.raise_for_status()
-        return res.json()
+        return _billed_json(res)
 
 
 async def _direct_sds_section(chemical: str, section: int) -> dict:
@@ -289,8 +346,7 @@ async def _direct_sds_section(chemical: str, section: int) -> dict:
             json={"chemical": chemical, "section": section, "lang": LANG},
             headers=_headers(),
         )
-        res.raise_for_status()
-        return res.json()
+        return _billed_json(res)
 
 
 async def _direct_compare_sds(chemical: str, supplier: str = "", region: str = "") -> dict:
@@ -301,8 +357,7 @@ async def _direct_compare_sds(chemical: str, supplier: str = "", region: str = "
             json={"chemical": chemical, "supplier": supplier, "region": region},
             headers=_headers(),
         )
-        res.raise_for_status()
-        return res.json()
+        return _billed_json(res)
 
 
 # ---------------------------------------------------------------------------
@@ -371,10 +426,10 @@ async def check_chemical_compatibility(chemicals: list[str]) -> CallToolResult:
             "pairs": struct_pairs,
             "summary": {"total_pairs": len(struct_pairs), **counts},
         }
-        return CallToolResult(
+        return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structuredContent=structured,
-        )
+        ), data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -437,10 +492,10 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
                 for w in data.get("warnings", [])
             ],
         }
-        return CallToolResult(
+        return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structuredContent=structured,
-        )
+        ), data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -478,8 +533,16 @@ async def check_regulatory_compliance(
         effective_regions = regions or ["EU", "US"]
         lines = ["**Regulatory Compliance**\n"]
         results = []
+        _usage_cost = 0.0
+        _usage_bal = None
+        _usage_reason = ""
         for chemical in chemicals:
             data = await _direct_compliance(chemical, effective_regions)
+            _u = data.pop("_usage", None)  # strip internal key from stored per-chemical result
+            if _u:
+                _usage_cost += _u.get("cost", 0) or 0
+                _usage_bal = _u.get("balance")
+                _usage_reason = _u.get("reason", "")
             results.append(data)
             if data.get("unresolved"):
                 lines.append(f"### {chemical}\n- **Status:** Not found in database\n")
@@ -491,14 +554,16 @@ async def check_regulatory_compliance(
                 for flag in rr.get("flags", []):
                     lines.append(f"  - {flag}")
             lines.append("")
-        return CallToolResult(
+        _usage = ({"cost": _usage_cost, "balance": _usage_bal, "reason": _usage_reason}
+                  if _usage_bal is not None else None)
+        return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structuredContent={
                 "chemicals": chemicals,
                 "regions": effective_regions,
                 "results": results,
             },
-        )
+        ), {"_usage": _usage})
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
@@ -1690,10 +1755,10 @@ async def batch_safety_check(chemicals: list[str]) -> str:
                 for w in data.get("risk_warnings", [])
             ],
         }
-        return CallToolResult(
+        return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(sections))],
             structuredContent=structured,
-        )
+        ), data)
     except Exception as e:
         success = False
         error_msg = str(e)[:500]
