@@ -180,3 +180,20 @@ def test_compat_surfaces_usage_in_result(monkeypatch):
     res = asyncio.run(server.check_chemical_compatibility(["a", "b"]))
     assert res.structuredContent["usage"]["balance"] == 197
     assert "197" in res.content[0].text and "Balance" in res.content[0].text
+
+
+def test_lookup_tool_does_not_leak_usage_key(monkeypatch):
+    """Lookup tools expose structuredContent=data directly; the internal _usage key
+    that _billed_json attaches must be stripped (CI-39 leak fix)."""
+    async def fake_ppe(chemicals):
+        return {"results": [{"chemical_name": "acetone", "ppe": {}}], "unresolved": [],
+                "_usage": {"cost": 0, "balance": 100, "reason": "free"}}
+    monkeypatch.setattr(server, "_direct_ppe", fake_ppe)
+    res = asyncio.run(server.get_ppe_recommendation(["acetone"]))
+    assert "_usage" not in res.structuredContent
+    assert "results" in res.structuredContent  # real data still there
+
+
+def test_strip_usage_helper():
+    assert server._strip_usage({"a": 1, "_usage": {"x": 1}}) == {"a": 1}
+    assert server._strip_usage({"a": 1}) == {"a": 1}  # no-op when absent

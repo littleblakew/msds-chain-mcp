@@ -225,6 +225,15 @@ def _with_usage(result: "CallToolResult", data: dict) -> "CallToolResult":
     return CallToolResult(content=content, structuredContent=sc)
 
 
+def _strip_usage(data: dict) -> dict:
+    """Drop the internal `_usage` key that _billed_json attaches, so lookup tools
+    that expose `structuredContent=data` don't leak it into the client output.
+    (Value tools build their own structuredContent + surface a clean `usage` block.)"""
+    if not isinstance(data, dict) or "_usage" not in data:
+        return data
+    return {k: v for k, v in data.items() if k != "_usage"}
+
+
 async def _direct_compat(chemicals: list[str]) -> dict:
     """POST /api/v2/compatibility/check — direct service layer, no LLM."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -643,7 +652,7 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
             lines.append("No PPE data found for the given chemicals.")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=data,
+            structuredContent=_strip_usage(data),
         )
     except Exception as e:
         success = False
@@ -697,7 +706,7 @@ async def get_storage_guidance(chemicals: list[str]) -> str:
             lines.append("No storage data found for the given chemicals.")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=data,
+            structuredContent=_strip_usage(data),
         )
     except Exception as e:
         success = False
@@ -754,7 +763,7 @@ async def get_emergency_response(chemical: str, scenario: str = "spill") -> str:
             lines.append("\n**Note:** Chemical not found in database — showing general guidance only.")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=data,
+            structuredContent=_strip_usage(data),
         )
     except Exception as e:
         success = False
@@ -812,7 +821,7 @@ async def get_exposure_limits(chemicals: list[str], region: str | None = None) -
             lines.append("No exposure-limit data found for the given chemicals.")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=data,
+            structuredContent=_strip_usage(data),
         )
     except Exception as e:
         success = False
@@ -855,7 +864,7 @@ async def get_transport_classification(chemicals: list[str]) -> str:
             lines.append("No transport-classification data found for the given chemicals.")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=data,
+            structuredContent=_strip_usage(data),
         )
     except Exception as e:
         success = False
@@ -1211,7 +1220,7 @@ async def get_sds_section(chemical: str, section: int) -> str:
         lines.append(f"\n*Data source: {data.get('data_source', 'unknown')}*")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=data,
+            structuredContent=_strip_usage(data),
         )
     except Exception as e:
         success = False
@@ -1398,7 +1407,7 @@ async def get_waste_disposal(chemicals: list[str]) -> str:
             lines.append("No waste-disposal data found for the given chemicals.")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=data,
+            structuredContent=_strip_usage(data),
         )
     except Exception as e:
         success = False
@@ -1450,7 +1459,7 @@ async def compare_sds_versions(
                 text = f"Could not resolve **{chemical}** to a known chemical."
             return CallToolResult(
                 content=[TextContent(type="text", text=text)],
-                structuredContent=data,
+                structuredContent=_strip_usage(data),
             )
         lines = [
             f"**SDS Version Comparison — {chemical}** (CAS {data.get('cas', '?')})",
@@ -1467,7 +1476,7 @@ async def compare_sds_versions(
         )
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=data,
+            structuredContent=_strip_usage(data),
         )
     except Exception as e:
         success = False
