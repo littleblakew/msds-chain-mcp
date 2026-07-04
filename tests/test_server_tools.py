@@ -279,3 +279,33 @@ def test_regulatory_explicit_regions_no_disclosure(monkeypatch):
     assert "no regions specified" not in res.content[0].text.lower()
     assert res.structuredContent["regions_defaulted"] is False
     assert res.structuredContent["regions"] == ["EU"]
+
+
+# ---------------------------------------------------------------------------
+# CI-55: a direct/v2 tool (batch_safety_check et al.) that hits a client read-timeout
+# (backend tail-latency / cold start just after a deploy) must degrade to an
+# actionable retry message, never the opaque `Error executing tool …:` (empty str).
+# ---------------------------------------------------------------------------
+
+def _timeout_direct():
+    async def fake(*a, **k):
+        raise server.httpx.ReadTimeout("")
+    return fake
+
+
+def test_batch_safety_check_timeout_is_graceful(monkeypatch):
+    monkeypatch.setattr(server, "_direct_batch", _timeout_direct())
+    res = asyncio.run(server.batch_safety_check(["acetone", "bleach"]))
+    text = res if isinstance(res, str) else res.content[0].text
+    assert text.strip(), "timeout answer must not be empty"
+    low = text.lower()
+    assert "retry" in low or "try again" in low or "重试" in text or "timed out" in low
+
+
+def test_direct_tools_still_registered(monkeypatch):
+    """The graceful-timeout wrapper must not break FastMCP tool registration."""
+    import asyncio as _a
+    tools = _a.run(server.mcp.list_tools())
+    names = {t.name for t in tools}
+    assert "batch_safety_check" in names
+    assert len(names) >= 15  # full public tool surface still present
