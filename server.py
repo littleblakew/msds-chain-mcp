@@ -20,6 +20,7 @@ Claude Code integration (~/.claude/settings.json):
 """
 from __future__ import annotations
 
+import functools
 import json
 import json as _json
 import os
@@ -109,6 +110,37 @@ def _quick_result(data: dict) -> CallToolResult:
 
 def _headers() -> dict[str, str]:
     return caller_headers()
+
+
+# CI-55: the direct/v2 tools call fast no-LLM endpoints on a 15s client timeout.
+# Backend tail-latency (cold start right after a deploy, load spikes) can still
+# overrun it → httpx.ReadTimeout, which stringifies to "" → the opaque
+# `Error executing tool <name>: ` dead end. Unlike the quick-chat path (missing
+# data → upload the MSDS), a direct-tool timeout is transient service slowness, so
+# the graceful answer is retry-oriented. Applied as a wrapper so all direct tools
+# share one behavior. NEVER assert safety here.
+_DIRECT_TIMEOUT_MSG = {
+    "en": "This safety check timed out — the service was briefly slow (often just after a deploy). "
+          "Please try again in a moment.",
+    "zh": "本次安全检查超时——服务短暂变慢（常见于刚部署后）。请稍候重试。",
+    "ja": "この安全チェックはタイムアウトしました。サービスが一時的に遅くなっています（デプロイ直後によく発生）。少し待ってから再度お試しください。",
+    "de": "Diese Sicherheitsprüfung hat das Zeitlimit überschritten — der Dienst war kurz langsam "
+          "(oft direkt nach einem Deployment). Bitte versuchen Sie es gleich erneut.",
+    "id": "Pemeriksaan keselamatan ini melebihi batas waktu — layanan sempat lambat (sering terjadi "
+          "tepat setelah deploy). Silakan coba lagi sebentar.",
+}
+
+
+def _graceful_timeout(fn):
+    """Wrap a direct-tool coroutine so a client read-timeout returns an actionable
+    retry message instead of raising an opaque empty error (CI-55)."""
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await fn(*args, **kwargs)
+        except httpx.TimeoutException:
+            return _DIRECT_TIMEOUT_MSG.get(LANG, _DIRECT_TIMEOUT_MSG["en"])
+    return wrapper
 
 
 # Actionable fallback when quick-chat exceeds TIMEOUT_LLM. httpx.ReadTimeout
@@ -412,6 +444,7 @@ async def _direct_compare_sds(chemical: str, supplier: str = "", region: str = "
     annotations=ToolAnnotations(title="Check Chemical Compatibility", readOnlyHint=True, destructiveHint=False, openWorldHint=False),
     structured_output=False,
 )
+@_graceful_timeout
 async def check_chemical_compatibility(chemicals: list[str]) -> CallToolResult:
     """
     Check pairwise compatibility between a list of chemicals.
@@ -485,6 +518,7 @@ async def check_chemical_compatibility(chemicals: list[str]) -> CallToolResult:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Chemical Risk Warnings", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@_graceful_timeout
 async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
     """
     Get hazard and risk warnings for one or more chemicals.
@@ -551,6 +585,7 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Compliance", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@_graceful_timeout
 async def check_regulatory_compliance(
     chemicals: list[str],
     regions: list[str] | None = None,
@@ -662,6 +697,7 @@ async def ask_chemical_safety(question: str) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get PPE Recommendation", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@_graceful_timeout
 async def get_ppe_recommendation(chemicals: list[str]) -> str:
     """
     Get PPE (Personal Protective Equipment) recommendations for chemicals.
@@ -709,6 +745,7 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Storage Guidance", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@_graceful_timeout
 async def get_storage_guidance(chemicals: list[str]) -> str:
     """
     Get storage and isolation guidance for chemicals.
@@ -763,6 +800,7 @@ async def get_storage_guidance(chemicals: list[str]) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Emergency Response", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@_graceful_timeout
 async def get_emergency_response(chemical: str, scenario: str = "spill") -> str:
     """
     Get emergency response guidance for a chemical incident.
@@ -820,6 +858,7 @@ async def get_emergency_response(chemical: str, scenario: str = "spill") -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Exposure Limits", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@_graceful_timeout
 async def get_exposure_limits(chemicals: list[str], region: str | None = None) -> str:
     """Get occupational exposure limits (OEL/TLV/PEL/MAC) for chemicals.
 
@@ -878,6 +917,7 @@ async def get_exposure_limits(chemicals: list[str], region: str | None = None) -
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Transport Classification", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@_graceful_timeout
 async def get_transport_classification(chemicals: list[str]) -> str:
     """Get UN transport classification for chemicals (dangerous goods shipping).
     Returns UN number, proper shipping name, hazard class, packing group,
@@ -1198,6 +1238,7 @@ async def search_chemical_database(query: str) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get SDS Section", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@_graceful_timeout
 async def get_sds_section(chemical: str, section: int) -> str:
     """
     Retrieve a specific SDS (Safety Data Sheet) section for a chemical.
@@ -1415,6 +1456,7 @@ async def check_mixing_order(chemical_a: str, chemical_b: str, context: str = ""
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Waste Disposal Guidance", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@_graceful_timeout
 async def get_waste_disposal(chemicals: list[str]) -> str:
     """
     Get waste classification and disposal guidance for chemicals.
@@ -1467,6 +1509,7 @@ async def get_waste_disposal(chemicals: list[str]) -> str:
     annotations=ToolAnnotations(title="Compare SDS Versions", readOnlyHint=True, destructiveHint=False, openWorldHint=False),
     structured_output=False,
 )
+@_graceful_timeout
 async def compare_sds_versions(
     chemical: str,
     supplier: str = "",
@@ -1712,6 +1755,7 @@ async def upload_msds_pdf(
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Batch Safety Check", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@_graceful_timeout
 async def batch_safety_check(chemicals: list[str]) -> str:
     """
     Run a comprehensive safety check on a list of chemicals in one call.
