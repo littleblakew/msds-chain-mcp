@@ -576,6 +576,14 @@ async def check_regulatory_compliance(
     try:
         effective_regions = regions or ["EU", "US"]
         lines = ["**Regulatory Compliance**\n"]
+        # CI-61: a stateless tool can't ask which jurisdiction, so when the caller
+        # names none we default to EU+US but DISCLOSE it — never let a silent default
+        # read as "checked everywhere". (The conversational agent path asks instead.)
+        if not regions:
+            lines.append(
+                "> ℹ️ No regions specified — checked **EU, US** by default. "
+                "Pass `regions` to check others (available: EU, US, CN, JP, KR, CA, AU, TW).\n"
+            )
         results = []
         _usage_cost = 0.0
         _usage_bal = None
@@ -605,6 +613,7 @@ async def check_regulatory_compliance(
             structuredContent={
                 "chemicals": chemicals,
                 "regions": effective_regions,
+                "regions_defaulted": not regions,
                 "results": results,
             },
         ), {"_usage": _usage})

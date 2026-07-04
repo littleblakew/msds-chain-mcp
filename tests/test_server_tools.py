@@ -247,3 +247,35 @@ def test_timeout_llm_budget_exceeds_slow_reasoning_turn():
     chemical was measured at ~55.7s. The client read-timeout must clear that with
     headroom, otherwise valid slow responses are discarded as empty errors."""
     assert server.TIMEOUT_LLM >= 90.0
+
+
+# ---------------------------------------------------------------------------
+# CI-61: check_regulatory_compliance defaults to EU+US when no region is given —
+# a stateless tool can't ask, so it must DISCLOSE the default, never let it read
+# as "checked everywhere".
+# ---------------------------------------------------------------------------
+
+def _fake_compliance():
+    async def fake(chemical, regions):
+        return {"chemical": chemical, "cas": "50-00-0", "summary_level": "high",
+                "region_results": [{"region": r, "status": "restricted", "flags": []} for r in regions],
+                "unresolved": []}
+    return fake
+
+
+def test_regulatory_default_regions_are_disclosed(monkeypatch):
+    monkeypatch.setattr(server, "_direct_compliance", _fake_compliance())
+    res = asyncio.run(server.check_regulatory_compliance(["formaldehyde"]))  # no regions
+    text = res.content[0].text.lower()
+    assert "no regions specified" in text and "default" in text
+    assert "cn" in text and "jp" in text  # tells the user others are available
+    assert res.structuredContent["regions_defaulted"] is True
+    assert res.structuredContent["regions"] == ["EU", "US"]
+
+
+def test_regulatory_explicit_regions_no_disclosure(monkeypatch):
+    monkeypatch.setattr(server, "_direct_compliance", _fake_compliance())
+    res = asyncio.run(server.check_regulatory_compliance(["formaldehyde"], regions=["EU"]))
+    assert "no regions specified" not in res.content[0].text.lower()
+    assert res.structuredContent["regions_defaulted"] is False
+    assert res.structuredContent["regions"] == ["EU"]
