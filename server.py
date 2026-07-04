@@ -41,8 +41,14 @@ API_URL = os.environ.get(
     "https://msds-chain-backend-prod.wonderfulgrass-f1545190.southeastasia.azurecontainerapps.io",
 ).rstrip("/")
 LANG = os.environ.get("MSDS_LANG", "en")  # en | zh | ja | de | id
-TIMEOUT = 15.0       # v2 direct endpoints — fast, no LLM
-TIMEOUT_LLM = 45.0   # quick-chat endpoints — LLM reasoning, needs more time
+TIMEOUT = 15.0        # v2 direct endpoints — fast, no LLM
+# quick-chat runs up to 3 sequential gpt-5-mini turns (RAI → intent → summary); a
+# single reasoning summary legitimately takes 30-60s and an unlisted chemical was
+# measured end-to-end at ~55.7s on Prod. 45s cut those off mid-flight → httpx
+# ReadTimeout (empty str) → opaque tool error that discarded a valid answer. 120s
+# clears the realistic slow case with headroom while staying under the backend's own
+# per-turn budget cap and the Container App ingress ~256s request timeout.
+TIMEOUT_LLM = 120.0   # quick-chat endpoints — multi-turn LLM reasoning
 
 mcp = FastMCP(
     "MSDS Chain",
@@ -105,17 +111,46 @@ def _headers() -> dict[str, str]:
     return caller_headers()
 
 
+# Actionable fallback when quick-chat exceeds TIMEOUT_LLM. httpx.ReadTimeout
+# stringifies to "", so re-raising surfaced `Error executing tool …: ` — an opaque
+# dead end. On timeout, guide the user to the grounded path (retry / upload the SDS /
+# give a CAS) instead of raising an empty error. NEVER assert safety here.
+_TIMEOUT_ANSWER = {
+    "zh": "安全助手响应超时，未能在限定时间内完成分析。请稍后重试。若这是未收录或专有产品，"
+          "请上传其 MSDS/SDS PDF 或提供 CAS 号，以便直接查询其危害信息。",
+    "en": "The safety assistant timed out before completing its analysis. Please try again. "
+          "If this is an unlisted or proprietary product, upload its MSDS/SDS PDF or provide a "
+          "CAS number so its hazards can be looked up directly.",
+    "ja": "安全アシスタントの応答がタイムアウトし、分析を完了できませんでした。もう一度お試しください。"
+          "未登録または独自製品の場合は、MSDS/SDS PDF をアップロードするか CAS 番号をご提供ください。",
+    "de": "Der Sicherheitsassistent hat vor Abschluss der Analyse das Zeitlimit überschritten. Bitte "
+          "erneut versuchen. Bei einem nicht gelisteten oder proprietären Produkt laden Sie dessen "
+          "MSDS/SDS-PDF hoch oder geben Sie eine CAS-Nummer an, um die Gefahren direkt nachzuschlagen.",
+    "id": "Asisten keselamatan melebihi batas waktu sebelum menyelesaikan analisis. Silakan coba lagi. "
+          "Jika ini produk tak terdaftar atau proprietary, unggah PDF MSDS/SDS-nya atau berikan nomor "
+          "CAS agar bahayanya dapat dicari langsung.",
+}
+
+
 async def _quick_chat(message: str) -> dict:
-    """POST /quick-chat and return the parsed response."""
+    """POST /quick-chat and return the parsed response.
+
+    On client read-timeout (a slow-but-valid backend turn that overran TIMEOUT_LLM)
+    degrade to an actionable message rather than raising an opaque empty error.
+    """
     if err := _require_api_key():
         raise RuntimeError(err)
-    async with httpx.AsyncClient(timeout=TIMEOUT_LLM) as client:
-        res = await client.post(
-            f"{API_URL}/quick-chat",
-            json={"message": message, "lang": LANG},
-            headers=_headers(),
-        )
-        return _billed_json(res)
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT_LLM) as client:
+            res = await client.post(
+                f"{API_URL}/quick-chat",
+                json={"message": message, "lang": LANG},
+                headers=_headers(),
+            )
+            return _billed_json(res)
+    except httpx.TimeoutException:
+        return {"answer": _TIMEOUT_ANSWER.get(LANG, _TIMEOUT_ANSWER["en"]),
+                "tool_results": []}
 
 
 def _format_tool_results(tool_results: list[dict]) -> str:

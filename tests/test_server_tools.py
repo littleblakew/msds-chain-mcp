@@ -197,3 +197,53 @@ def test_lookup_tool_does_not_leak_usage_key(monkeypatch):
 def test_strip_usage_helper():
     assert server._strip_usage({"a": 1, "_usage": {"x": 1}}) == {"a": 1}
     assert server._strip_usage({"a": 1}) == {"a": 1}  # no-op when absent
+
+
+# ---------------------------------------------------------------------------
+# quick-chat read-timeout degrades gracefully (no opaque empty error)
+#
+# Root cause: a slow-but-valid backend /quick-chat turn (a gpt-5-mini reasoning
+# summary legitimately takes 30-60s; an unlisted chemical was observed at ~55.7s)
+# overruns the MCP client read-timeout. httpx.ReadTimeout stringifies to "", so the
+# tool surfaced `Error executing tool ask_chemical_safety: ` — an opaque dead end that
+# violates the "no data → tell the user, ask for the MSDS" contract. On timeout the
+# tool must return an actionable message, never raise an empty error.
+# ---------------------------------------------------------------------------
+
+class _TimeoutClient:
+    """Fake httpx.AsyncClient whose POST always raises a read-timeout (empty str,
+    exactly as httpx.ReadTimeout stringifies in production)."""
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, url, **k):
+        raise server.httpx.ReadTimeout("")
+
+
+def test_ask_chemical_safety_read_timeout_is_graceful(monkeypatch):
+    from request_identity import set_caller_credential
+    monkeypatch.setattr(server.httpx, "AsyncClient", _TimeoutClient)
+    set_caller_credential("sk-msds-caller")  # pass _require_api_key → reach the POST
+    res = asyncio.run(server.ask_chemical_safety("处理一种叫 NovaClean ZX-7 的专有清洁剂，有哪些危害？"))
+
+    # Must NOT raise; must return a usable result the caller can act on.
+    assert isinstance(res, CallToolResult)
+    text = res.content[0].text
+    assert text.strip(), "timeout answer must not be empty"
+    # Actionable: guides the user to the MSDS/CAS path (C1/C2), not a dead end.
+    lowered = text.lower()
+    assert ("msds" in lowered or "sds" in lowered or "cas" in lowered
+            or "上传" in text or "重试" in text or "retry" in lowered)
+
+
+def test_timeout_llm_budget_exceeds_slow_reasoning_turn():
+    """A single gpt-5-mini reasoning summary is documented at 30-60s and an unlisted
+    chemical was measured at ~55.7s. The client read-timeout must clear that with
+    headroom, otherwise valid slow responses are discarded as empty errors."""
+    assert server.TIMEOUT_LLM >= 90.0
