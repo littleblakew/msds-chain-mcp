@@ -437,6 +437,17 @@ async def _direct_compare_sds(chemical: str, supplier: str = "", region: str = "
         return _billed_json(res)
 
 
+async def _direct_sds_document(chemical: str) -> dict:
+    """GET /api/v2/sds-document-url — return signed PDF URL or availability status."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.get(
+            f"{API_URL}/api/v2/sds-document-url",
+            params={"chemical": chemical},
+            headers=_headers(),
+        )
+        return _billed_json(res)
+
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
@@ -1916,6 +1927,110 @@ async def check_regulatory_lists(chemical: str) -> str:
     finally:
         dur = int((time.monotonic() - t0) * 1000)
         await _log_call("check_regulatory_lists", [chemical], dur, success, error_msg,
+                        _json.dumps({"chemical": chemical}))
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Get SDS Document", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@_graceful_timeout
+async def get_sds_document(chemical: str) -> CallToolResult:
+    """
+    Return a signed download URL for the original SDS/MSDS PDF of a chemical.
+
+    The URL is valid for approximately 5 minutes and can be opened in a browser
+    or downloaded with `curl -O`. The response also includes the document's
+    source (supplier, region, revision date) so the provenance is clear.
+
+    If only parsed text is available (no original PDF on file), the tool says
+    so and suggests using `get_sds_section` to query specific sections instead.
+
+    If the chemical is not in the database at all, the tool suggests uploading
+    an SDS PDF via `upload_msds_pdf`.
+
+    Args:
+        chemical: Chemical name or CAS number, e.g. "acetone" or "67-64-1"
+    """
+    t0 = time.monotonic()
+    error_msg = None
+    success = True
+    try:
+        if err := _require_api_key():
+            return _text_result(
+                f"Authentication required: {err}\n\n"
+                "Get a free API key at https://msdschain.lagentbot.com (API Keys tab) "
+                "and set it via MSDS_API_KEY or gateway authentication."
+            )
+
+        data = await _direct_sds_document(chemical)
+        available = data.get("available", False)
+
+        if available:
+            relative = data.get("pdf_url", "")
+            full_url = f"{API_URL}{relative}" if relative.startswith("/") else relative
+            supplier = data.get("supplier", "unknown supplier")
+            region = data.get("region", "")
+            revision_date = data.get("revision_date") or "unknown"
+            cas = data.get("cas", "N/A")
+            chem_name = data.get("chemical_name", chemical)
+
+            region_suffix = f" · {region}" if region else ""
+            lines = [
+                f"**SDS Document: {chem_name}** (CAS: {cas})",
+                f"- **Source:** {supplier}{region_suffix}",
+                f"- **Revision date:** {revision_date}",
+                f"- **Signed URL** (valid ~5 min):",
+                f"  {full_url}",
+                "",
+                "Open in a browser or `curl -O` to download the PDF.",
+            ]
+            return CallToolResult(
+                content=[TextContent(type="text", text="\n".join(lines))],
+                structuredContent={
+                    "available": True,
+                    "chemical_name": chem_name,
+                    "cas": cas,
+                    "supplier": supplier,
+                    "revision_date": revision_date,
+                    "region": region,
+                    "record_id": data.get("record_id"),
+                    "pdf_url": full_url,
+                    "expires_in_seconds": 300,
+                },
+            )
+        else:
+            message = data.get("message", "No SDS document available for this chemical.")
+            chem_name = data.get("chemical_name", chemical)
+            cas = data.get("cas", "")
+
+            # Decide which follow-up to suggest based on the backend message.
+            if "parsed" in message.lower() or "get_sds_section" in message.lower():
+                hint = (
+                    "\n\nThe database holds parsed text for this chemical — "
+                    "use `get_sds_section(chemical, section_number)` to query a "
+                    "specific SDS section (1-16)."
+                )
+            else:
+                hint = (
+                    "\n\nIf you have the SDS PDF, upload it with "
+                    "`upload_msds_pdf(pdf_source)` to add it to the database."
+                )
+
+            display = f"{chem_name} (CAS: {cas})" if cas else chem_name
+            return CallToolResult(
+                content=[TextContent(type="text", text=f"**{display}**: {message}{hint}")],
+                structuredContent={
+                    "available": False,
+                    "chemical_name": chem_name,
+                    "cas": cas,
+                    "message": message,
+                },
+            )
+    except Exception as e:
+        success = False
+        error_msg = str(e)[:500]
+        raise
+    finally:
+        dur = int((time.monotonic() - t0) * 1000)
+        await _log_call("get_sds_document", [chemical], dur, success, error_msg,
                         _json.dumps({"chemical": chemical}))
 
 

@@ -57,7 +57,7 @@ TRANSPORT = os.environ.get("MSDS_MCP_TRANSPORT", "streamable-http")  # kept for 
 
 async def health(request: Request) -> JSONResponse:
     """Health check endpoint for container orchestration."""
-    return JSONResponse({"status": "ok", "tools": 21})
+    return JSONResponse({"status": "ok", "tools": 22})
 
 
 # ---------------------------------------------------------------------------
