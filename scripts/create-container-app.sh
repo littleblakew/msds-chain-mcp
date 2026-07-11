@@ -3,8 +3,8 @@
 #
 # Prerequisites:
 #   - az CLI logged in
-#   - ACR 'acrmsdschain' exists
-#   - Container Apps Environment exists in rg-msds-chain-dev
+#   - ACR 'acrmsdschainwc' exists
+#   - Container Apps Environment exists in rg-msds-chain-prod
 #
 # Usage:
 #   ./scripts/create-container-app.sh
@@ -17,11 +17,11 @@
 set -euo pipefail
 
 # --- Config ---
-RESOURCE_GROUP="rg-msds-chain-dev"
+RESOURCE_GROUP="rg-msds-chain-prod"
 APP_NAME="msds-chain-mcp"
-ACR_SERVER="acrmsdschain.azurecr.io"
+ACR_SERVER="acrmsdschainwc.azurecr.io"
 IMAGE="${ACR_SERVER}/msds-chain-mcp:latest"
-ENVIRONMENT="cae-msds-chain-dev"  # reuse existing env
+ENVIRONMENT="cae-msds-chain-prod"  # reuse existing env
 LOCATION="southeastasia"
 
 echo "=== Step 1: Build & push Docker image ==="
