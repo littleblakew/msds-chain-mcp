@@ -39,7 +39,7 @@ from request_identity import caller_headers, get_caller_credential, set_caller_c
 API_KEY = os.environ.get("MSDS_API_KEY", "")
 API_URL = os.environ.get(
     "MSDS_API_URL",
-    "https://msds-chain-backend-prod.wonderfulgrass-f1545190.southeastasia.azurecontainerapps.io",
+    "https://msds-chain-backend-prod.orangepond-4b408d49.southeastasia.azurecontainerapps.io",
 ).rstrip("/")
 LANG = os.environ.get("MSDS_LANG", "en")  # en | zh | ja | de | id
 TIMEOUT = 15.0        # v2 direct endpoints — fast, no LLM
