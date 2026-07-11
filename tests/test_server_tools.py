@@ -309,3 +309,134 @@ def test_direct_tools_still_registered(monkeypatch):
     names = {t.name for t in tools}
     assert "batch_safety_check" in names
     assert len(names) >= 15  # full public tool surface still present
+
+
+# ---------------------------------------------------------------------------
+# CI-83: quick-chat timeouts must log success=False, not inflate the metric
+#
+# _quick_chat catches httpx.TimeoutException and returns a DEGRADED dict with
+# "_timed_out": True rather than raising. Without this sentinel the tools'
+# finally-block logs success=True — inflating mcp_call_logs success rate and
+# the growth-skill [G]/[H] aha metrics. The fix: each tool detects the
+# sentinel before returning and sets success=False / error_msg="timeout".
+# The user-facing graceful answer is unchanged.
+# ---------------------------------------------------------------------------
+
+def _timed_out_quick_chat(message):
+    """Fake _quick_chat that returns the degraded sentinel dict (CI-83)."""
+    return {
+        "answer": server._TIMEOUT_ANSWER.get(server.LANG, server._TIMEOUT_ANSWER["en"]),
+        "tool_results": [],
+        "_timed_out": True,
+    }
+
+
+def _make_fake_quick_chat():
+    """Async wrapper so it can be monkeypatched onto server._quick_chat."""
+    async def _fake(message):
+        return _timed_out_quick_chat(message)
+    return _fake
+
+
+def _capture_log_call():
+    """Return (patched coroutine, captured-args list)."""
+    captured = []
+
+    async def _fake_log(tool_name, chemicals, duration_ms, success, error_message=None, input_params=None):
+        captured.append({
+            "tool_name": tool_name,
+            "success": success,
+            "error_message": error_message,
+        })
+    return _fake_log, captured
+
+
+def test_ask_chemical_safety_timeout_logs_failure(monkeypatch):
+    """ask_chemical_safety: timed-out _quick_chat → _log_call(success=False)."""
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+
+    monkeypatch.setattr(server, "_quick_chat", _make_fake_quick_chat())
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    res = asyncio.run(server.ask_chemical_safety("Is bleach safe?"))
+
+    # User still gets the graceful degraded answer (not an error raise)
+    assert isinstance(res, CallToolResult)
+    assert res.content[0].text.strip()
+
+    # Logged as failure
+    assert len(captured) == 1
+    assert captured[0]["tool_name"] == "ask_chemical_safety"
+    assert captured[0]["success"] is False
+    assert captured[0]["error_message"] == "timeout"
+
+
+def test_get_chemical_alternatives_timeout_logs_failure(monkeypatch):
+    """get_chemical_alternatives: timed-out _quick_chat → _log_call(success=False)."""
+    monkeypatch.setattr(server, "_quick_chat", _make_fake_quick_chat())
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    res = asyncio.run(server.get_chemical_alternatives("benzene", use_case="solvent"))
+
+    assert isinstance(res, CallToolResult)
+    assert captured[0]["success"] is False
+    assert captured[0]["error_message"] == "timeout"
+
+
+def test_validate_protocol_chemicals_timeout_logs_failure(monkeypatch):
+    """validate_protocol_chemicals: timed-out _quick_chat → _log_call(success=False)."""
+    monkeypatch.setattr(server, "_quick_chat", _make_fake_quick_chat())
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    res = asyncio.run(server.validate_protocol_chemicals("Mix 10 mL acetone with ethanol."))
+
+    assert isinstance(res, CallToolResult)
+    assert captured[0]["success"] is False
+    assert captured[0]["error_message"] == "timeout"
+
+
+def test_check_mixing_order_timeout_logs_failure(monkeypatch):
+    """check_mixing_order: timed-out _quick_chat → _log_call(success=False)."""
+    monkeypatch.setattr(server, "_quick_chat", _make_fake_quick_chat())
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    res = asyncio.run(server.check_mixing_order("sulfuric acid", "water"))
+
+    assert isinstance(res, CallToolResult)
+    assert captured[0]["success"] is False
+    assert captured[0]["error_message"] == "timeout"
+
+
+def test_check_regulatory_lists_timeout_logs_failure(monkeypatch):
+    """check_regulatory_lists: timed-out _quick_chat → _log_call(success=False)."""
+    monkeypatch.setattr(server, "_quick_chat", _make_fake_quick_chat())
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    res = asyncio.run(server.check_regulatory_lists("formaldehyde"))
+
+    assert isinstance(res, CallToolResult)
+    assert captured[0]["success"] is False
+    assert captured[0]["error_message"] == "timeout"
+
+
+def test_quick_chat_timeout_user_answer_unchanged(monkeypatch):
+    """The user-facing degraded answer is not affected by the sentinel fix —
+    _quick_result still renders the graceful message from _TIMEOUT_ANSWER."""
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+
+    monkeypatch.setattr(server, "_quick_chat", _make_fake_quick_chat())
+    monkeypatch.setattr(server, "_log_call", _capture_log_call()[0])
+
+    res = asyncio.run(server.ask_chemical_safety("test"))
+    text = res.content[0].text
+    # The graceful degraded answer (not an empty/opaque error)
+    lowered = text.lower()
+    assert ("timed out" in lowered or "retry" in lowered or "try again" in lowered
+            or "重试" in text or "超时" in text)
