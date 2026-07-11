@@ -182,7 +182,8 @@ async def _quick_chat(message: str) -> dict:
             return _billed_json(res)
     except httpx.TimeoutException:
         return {"answer": _TIMEOUT_ANSWER.get(LANG, _TIMEOUT_ANSWER["en"]),
-                "tool_results": []}
+                "tool_results": [],
+                "_timed_out": True}
 
 
 def _format_tool_results(tool_results: list[dict]) -> str:
@@ -685,6 +686,9 @@ async def ask_chemical_safety(question: str) -> str:
     success = True
     try:
         data = await _quick_chat(question)
+        if data.get("_timed_out"):
+            success = False
+            error_msg = "timeout"
         return _quick_result(data)
     except Exception as e:
         success = False
@@ -1350,6 +1354,9 @@ async def get_chemical_alternatives(chemical: str, use_case: str = "") -> str:
             "Focus on drop-in replacements that serve the same function."
         )
         data = await _quick_chat(message)
+        if data.get("_timed_out"):
+            success = False
+            error_msg = "timeout"
         return _quick_result(data)
     except Exception as e:
         success = False
@@ -1399,6 +1406,9 @@ async def validate_protocol_chemicals(protocol_text: str) -> str:
             f"Text to analyze:\n```\n{protocol_text}\n```"
         )
         data = await _quick_chat(message)
+        if data.get("_timed_out"):
+            success = False
+            error_msg = "timeout"
         return _quick_result(data)
     except Exception as e:
         success = False
@@ -1444,6 +1454,9 @@ async def check_mixing_order(chemical_a: str, chemical_b: str, context: str = ""
             "If order doesn't matter for this pair, say so explicitly."
         )
         data = await _quick_chat(message)
+        if data.get("_timed_out"):
+            success = False
+            error_msg = "timeout"
         return _quick_result(data)
     except Exception as e:
         success = False
@@ -1892,6 +1905,9 @@ async def check_regulatory_lists(chemical: str) -> str:
             "Use the check_regulatory_lists tool and report all matching lists."
         )
         data = await _quick_chat(message)
+        if data.get("_timed_out"):
+            success = False
+            error_msg = "timeout"
         return _quick_result(data)
     except Exception as e:
         success = False
