@@ -26,7 +26,7 @@ LOCATION="southeastasia"
 
 echo "=== Step 1: Build & push Docker image ==="
 az acr build \
-  --registry acrmsdschain \
+  --registry acrmsdschainwc \
   --image msds-chain-mcp:latest \
   --file Dockerfile \
   .
