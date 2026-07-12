@@ -122,14 +122,46 @@ def _quick_result(data: dict) -> CallToolResult:
     Preserves the human-readable answer as text content (for Claude and other
     clients) and exposes structuredContent (answer + raw tool_results) for
     clients that consume structured output (e.g. ChatGPT Apps SDK).
+
+    CI-89: if the backend returns a top-level `documents` list (blob-backed SDS
+    descriptors), append an "📄 Original SDS" section to the text and include
+    the list in structuredContent.
     """
     answer = data.get("answer", "")
     tool_results = data.get("tool_results", [])
-    text = answer + _format_tool_results(tool_results)
+    documents = data.get("documents", [])
+    text = answer + _format_tool_results(tool_results) + _format_sds_documents(documents)
     return CallToolResult(
         content=[TextContent(type="text", text=text)],
-        structuredContent={"answer": answer, "tool_results": tool_results},
+        structuredContent={"answer": answer, "tool_results": tool_results,
+                           "documents": documents},
     )
+
+
+def _format_sds_documents(documents: list[dict]) -> str:
+    """Render a `documents` list as an '📄 Original SDS' section.
+
+    Each document: {chemical, chemical_name, cas, supplier, revision_date, region,
+    record_id, sds_document_url}.  URL is output verbatim (no domain rewriting).
+    Returns "" when documents is empty so callers can safely concatenate.
+    """
+    if not documents:
+        return ""
+    lines = ["\n\n---\n**📄 Original SDS (click to verify):**"]
+    for doc in documents:
+        chemical = doc.get("chemical_name") or doc.get("chemical") or "?"
+        supplier = doc.get("supplier", "")
+        revision = doc.get("revision_date", "")
+        url = doc.get("sds_document_url", "")
+        meta_parts = [p for p in [supplier, revision] if p]
+        meta = " · ".join(meta_parts)
+        entry = f"- {chemical}"
+        if meta:
+            entry += f" ({meta})"
+        if url:
+            entry += f": {url}"
+        lines.append(entry)
+    return "\n".join(lines)
 
 
 def _headers() -> dict[str, str]:
@@ -513,11 +545,14 @@ async def check_chemical_compatibility(chemicals: list[str]) -> CallToolResult:
         for pair in data.get("pairs", []):
             level = pair.get("level", "unknown").upper()
             emoji = {"COMPATIBLE": "OK", "CAUTION": "CAUTION", "INCOMPATIBLE": "DANGER"}.get(level, level)
+            # CI-89: compat verdicts come from a rule engine — label as Basis(rule)
+            traceability = pair.get("traceability", "rule_based")
+            basis_label = "Basis (rule)" if traceability == "rule_based" else "Source (SDS)"
             lines.append(
                 f"- **{pair.get('chem1', '?')}** + **{pair.get('chem2', '?')}**: "
                 f"[{emoji}] {pair.get('level', 'unknown')}\n"
                 f"  Reason: {pair.get('reason', 'N/A')}\n"
-                f"  Source: {pair.get('source', 'unknown')}"
+                f"  {basis_label}: {pair.get('source', 'unknown')}"
             )
             lvl = (pair.get("level") or "unknown").lower()
             if lvl in counts:
@@ -528,16 +563,23 @@ async def check_chemical_compatibility(chemicals: list[str]) -> CallToolResult:
                 "level": pair.get("level"),
                 "reason": pair.get("reason"),
                 "source": pair.get("source"),
+                "traceability": traceability,
             })
 
         if not data.get("pairs"):
             lines.append("No compatibility pairs to check (need at least 2 resolved chemicals).")
+
+        # CI-89: append SDS document links when backend provides them
+        documents = data.get("documents", [])
+        if documents:
+            lines.append(_format_sds_documents(documents))
 
         structured = {
             "chemicals": chemicals,
             "unresolved": data.get("unresolved", []),
             "pairs": struct_pairs,
             "summary": {"total_pairs": len(struct_pairs), **counts},
+            "documents": documents,
         }
         return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
@@ -581,10 +623,30 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
         if data.get("unresolved"):
             lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}\n")
 
+        # CI-89: build a set of chemicals that have SDS-backed documents
+        documents = data.get("documents", [])
+        sds_backed_chemicals = {
+            (doc.get("chemical_name") or doc.get("chemical") or "").lower()
+            for doc in documents
+        }
+
         for w in data.get("warnings", []):
             level = w.get("level", "unknown").upper()
+            # CI-89: label each warning by its traceability
+            traceability = w.get("traceability")
+            if traceability == "sds_backed":
+                trace_label = "[Source: SDS document]"
+            elif traceability == "rule_based":
+                trace_label = "[Basis: rule/standard]"
+            else:
+                # Backend didn't provide field — infer from documents list
+                chem_key = (w.get("chemical") or "").lower()
+                if chem_key and chem_key in sds_backed_chemicals:
+                    trace_label = "[Source: SDS document]"
+                else:
+                    trace_label = ""
             lines.append(
-                f"### {w.get('chemical', 'Unknown')} — {level} RISK\n"
+                f"### {w.get('chemical', 'Unknown')} — {level} RISK {trace_label}\n"
                 f"- **Description:** {w.get('description', 'N/A')}\n"
                 f"- **Mitigation:** {w.get('mitigation', 'N/A')}"
             )
@@ -593,6 +655,10 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
 
         if not data.get("warnings"):
             lines.append("No risk warnings found for the given chemicals.")
+
+        # CI-89: append SDS document links
+        if documents:
+            lines.append(_format_sds_documents(documents))
 
         structured = {
             "chemicals": chemicals,
@@ -604,9 +670,11 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
                     "description": w.get("description"),
                     "mitigation": w.get("mitigation"),
                     "reference": w.get("reference"),
+                    "traceability": w.get("traceability"),
                 }
                 for w in data.get("warnings", [])
             ],
+            "documents": documents,
         }
         return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
@@ -767,8 +835,31 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
     try:
         data = await _direct_ppe(chemicals)
         lines = ["**PPE Recommendations**\n"]
+
+        # CI-89: build set of SDS-backed chemicals from documents list
+        documents = data.get("documents", [])
+        sds_backed_chemicals = {
+            (doc.get("chemical_name") or doc.get("chemical") or "").lower()
+            for doc in documents
+        }
+
         for item in data.get("results", []):
-            lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
+            # CI-89: label each result by its traceability
+            traceability = item.get("traceability")
+            if traceability == "sds_backed":
+                trace_label = "[Source: SDS document]"
+            elif traceability == "rule_based":
+                trace_label = "[Basis: rule/standard]"
+            else:
+                chem_key = (item.get("chemical_name") or "").lower()
+                if chem_key and chem_key in sds_backed_chemicals:
+                    trace_label = "[Source: SDS document]"
+                else:
+                    trace_label = ""
+            header = f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})"
+            if trace_label:
+                header += f"  {trace_label}"
+            lines.append(header)
             lines.append(f"- Signal word: **{item.get('signal_word', 'N/A')}**")
             lines.append(f"- Minimum PPE level: **{item.get('minimum_ppe_level', 'N/A')}**")
             ppe = item.get("ppe", {})
@@ -782,9 +873,19 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
             lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}")
         if not data.get("results"):
             lines.append("No PPE data found for the given chemicals.")
+
+        # CI-89: append SDS document links
+        if documents:
+            lines.append(_format_sds_documents(documents))
+
+        # Build structuredContent: strip internal _usage key but include documents
+        sc = _strip_usage(data)
+        if not isinstance(sc, dict):
+            sc = {}
+        sc["documents"] = documents
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=_strip_usage(data),
+            structuredContent=sc,
         )
     except Exception as e:
         success = False
@@ -1854,6 +1955,13 @@ async def batch_safety_check(chemicals: list[str]) -> str:
         if data.get("unresolved"):
             sections.append(f"**Unresolved:** {', '.join(data['unresolved'])}\n")
 
+        # CI-89: extract documents and build SDS-backed chemical set
+        documents = data.get("documents", [])
+        sds_backed_chemicals = {
+            (doc.get("chemical_name") or doc.get("chemical") or "").lower()
+            for doc in documents
+        }
+
         # Compatibility
         sections.append("## 1. Compatibility Matrix")
         compat = data.get("compatibility", {})
@@ -1867,22 +1975,42 @@ async def batch_safety_check(chemicals: list[str]) -> str:
             )
         for pair in compat.get("pairs", []):
             level = pair.get("level", "unknown").upper()
+            # CI-89: compat verdicts are rule-based
+            traceability = pair.get("traceability", "rule_based")
+            basis_label = "Basis (rule)" if traceability == "rule_based" else "Source (SDS)"
             sections.append(
                 f"- **{pair.get('chem1', '?')}** + **{pair.get('chem2', '?')}**: "
-                f"{level} — {pair.get('reason', 'N/A')}"
+                f"{level} — {pair.get('reason', 'N/A')}  [{basis_label}]"
             )
 
         # Risk warnings
         sections.append("\n## 2. Risk Warnings")
         for w in data.get("risk_warnings", []):
+            # CI-89: label each warning by traceability
+            traceability = w.get("traceability")
+            if traceability == "sds_backed":
+                trace_label = "[Source: SDS document]"
+            elif traceability == "rule_based":
+                trace_label = "[Basis: rule/standard]"
+            else:
+                chem_key = (w.get("chemical") or "").lower()
+                if chem_key and chem_key in sds_backed_chemicals:
+                    trace_label = "[Source: SDS document]"
+                else:
+                    trace_label = ""
             sections.append(
-                f"### {w.get('chemical', 'Unknown')} — {w.get('level', 'unknown').upper()} RISK\n"
+                f"### {w.get('chemical', 'Unknown')} — {w.get('level', 'unknown').upper()} RISK "
+                f"{trace_label}\n"
                 f"- {w.get('description', 'N/A')}\n"
                 f"- Mitigation: {w.get('mitigation', 'N/A')}"
             )
 
         if not data.get("risk_warnings"):
             sections.append("No risk data available.")
+
+        # CI-89: append SDS document links
+        if documents:
+            sections.append(_format_sds_documents(documents))
 
         sections.append(
             "\n---\n*Use `create_audit_session` if you need a signed PDF report for compliance records.*"
@@ -1899,6 +2027,7 @@ async def batch_safety_check(chemicals: list[str]) -> str:
                         "chemical_b": p.get("chem2"),
                         "level": p.get("level"),
                         "reason": p.get("reason"),
+                        "traceability": p.get("traceability", "rule_based"),
                     }
                     for p in compat.get("pairs", [])
                 ],
@@ -1909,9 +2038,11 @@ async def batch_safety_check(chemicals: list[str]) -> str:
                     "level": w.get("level"),
                     "description": w.get("description"),
                     "mitigation": w.get("mitigation"),
+                    "traceability": w.get("traceability"),
                 }
                 for w in data.get("risk_warnings", [])
             ],
+            "documents": documents,
         }
         return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(sections))],

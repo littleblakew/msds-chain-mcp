@@ -586,3 +586,396 @@ def test_get_sds_document_no_credential_returns_auth_message(monkeypatch):
     assert isinstance(res, CallToolResult)
     text = res.content[0].text.lower()
     assert "api key" in text or "authenticat" in text or "msds_api_key" in text
+
+
+# ---------------------------------------------------------------------------
+# CI-89: traceability surface — documents links + traceability labels
+#
+# Backend adds a top-level `documents` list (blob-backed SDS descriptors) and
+# per-conclusion `traceability` field ("sds_backed" | "rule_based") to the
+# responses of: /compatibility/check, /risk-warnings, /ppe-recommendation,
+# /batch-safety, and /quick-chat.
+#
+# Core (server.py) presents these:
+# - check_chemical_compatibility: pair lines say "Basis (rule):" instead of
+#   plain "Source:"; documents section appended; structuredContent carries `documents`.
+# - get_chemical_risk_warnings: each warning heading appended with
+#   "[Source: SDS document]" or "[Basis: rule/standard]"; documents section;
+#   structuredContent carries `documents` and per-warning `traceability`.
+# - get_ppe_recommendation: same labelling per result item; documents; structuredContent.
+# - ask_chemical_safety (_quick_result): documents appended to text and
+#   structuredContent["documents"].
+# - batch_safety_check: pair labels carry "[Basis (rule)]"; risk warnings labelled;
+#   documents appended; structuredContent["documents"].
+#
+# Red lines tested here:
+# - When backend omits `documents` → section not rendered, structuredContent documents=[].
+# - When backend omits `traceability` per item → fall back to documents inference.
+# - URLs in documents are passed through verbatim (no domain rewrite).
+# - Tool count does NOT change (still 22 tools).
+# ---------------------------------------------------------------------------
+
+_SAMPLE_DOCUMENTS = [
+    {
+        "chemical": "acetone",
+        "chemical_name": "Acetone",
+        "cas": "67-64-1",
+        "supplier": "Sigma-Aldrich",
+        "revision_date": "2023-05-01",
+        "region": "US",
+        "record_id": 1,
+        "sds_document_url": "https://mcp.lagentbot.com/msds/token/tok123",
+    }
+]
+
+
+# --- _format_sds_documents helper ---
+
+def test_format_sds_documents_empty():
+    assert server._format_sds_documents([]) == ""
+
+
+def test_format_sds_documents_renders_link():
+    docs = [_SAMPLE_DOCUMENTS[0]]
+    out = server._format_sds_documents(docs)
+    assert "📄" in out
+    assert "Acetone" in out
+    assert "Sigma-Aldrich" in out
+    assert "2023-05-01" in out
+    assert "https://mcp.lagentbot.com/msds/token/tok123" in out
+
+
+def test_format_sds_documents_url_verbatim():
+    """URL must be output as-is — no domain rewriting."""
+    docs = [{"chemical": "x", "chemical_name": "X", "cas": "", "supplier": "",
+             "revision_date": "", "region": "", "record_id": 0,
+             "sds_document_url": "https://example-custom-domain.com/token/abc"}]
+    out = server._format_sds_documents(docs)
+    assert "https://example-custom-domain.com/token/abc" in out
+
+
+# --- check_chemical_compatibility + CI-89 ---
+
+def test_compat_ci89_basis_rule_label(monkeypatch):
+    """Pair lines now say 'Basis (rule)' for rule_based traceability."""
+    async def fake_compat(chemicals):
+        return {
+            "pairs": [{
+                "chem1": "acetone", "chem2": "water",
+                "level": "compatible", "reason": "no reaction",
+                "source": "GHS rule engine", "traceability": "rule_based",
+            }],
+            "unresolved": [],
+            "documents": _SAMPLE_DOCUMENTS,
+        }
+    monkeypatch.setattr(server, "_direct_compat", fake_compat)
+    res = asyncio.run(server.check_chemical_compatibility(["acetone", "water"]))
+    assert isinstance(res, CallToolResult)
+    text = res.content[0].text
+    # Must label the basis as rule-based
+    assert "Basis (rule)" in text
+    # Must include SDS documents section
+    assert "📄" in text
+    assert "https://mcp.lagentbot.com/msds/token/tok123" in text
+    # structuredContent carries documents
+    sc = res.structuredContent
+    assert sc["documents"] == _SAMPLE_DOCUMENTS
+    # pairs carry traceability
+    assert sc["pairs"][0]["traceability"] == "rule_based"
+
+
+def test_compat_ci89_no_documents(monkeypatch):
+    """When backend omits 'documents', section not rendered, structuredContent documents=[]."""
+    async def fake_compat(chemicals):
+        return {
+            "pairs": [{"chem1": "a", "chem2": "b", "level": "compatible",
+                       "reason": "ok", "source": "rule"}],
+            "unresolved": [],
+            # no 'documents' key
+        }
+    monkeypatch.setattr(server, "_direct_compat", fake_compat)
+    res = asyncio.run(server.check_chemical_compatibility(["a", "b"]))
+    assert "📄" not in res.content[0].text
+    assert res.structuredContent["documents"] == []
+
+
+def test_compat_ci89_sds_source_label_when_sds_backed(monkeypatch):
+    """When a pair has traceability='sds_backed', label shows 'Source (SDS)'."""
+    async def fake_compat(chemicals):
+        return {
+            "pairs": [{
+                "chem1": "a", "chem2": "b",
+                "level": "caution", "reason": "check",
+                "source": "SDS Section 7", "traceability": "sds_backed",
+            }],
+            "unresolved": [], "documents": [],
+        }
+    monkeypatch.setattr(server, "_direct_compat", fake_compat)
+    res = asyncio.run(server.check_chemical_compatibility(["a", "b"]))
+    text = res.content[0].text
+    assert "Source (SDS)" in text
+
+
+# --- get_chemical_risk_warnings + CI-89 ---
+
+def test_risk_ci89_sds_backed_label(monkeypatch):
+    """Warning with traceability='sds_backed' gets [Source: SDS document] label."""
+    async def fake_risk(chemicals):
+        return {
+            "warnings": [{
+                "chemical": "Acetone", "level": "low",
+                "description": "Flammable", "mitigation": "Avoid flame",
+                "reference": "SDS Sec 2", "traceability": "sds_backed",
+            }],
+            "unresolved": [],
+            "documents": _SAMPLE_DOCUMENTS,
+        }
+    monkeypatch.setattr(server, "_direct_risk", fake_risk)
+    res = asyncio.run(server.get_chemical_risk_warnings(["acetone"]))
+    assert isinstance(res, CallToolResult)
+    text = res.content[0].text
+    assert "[Source: SDS document]" in text
+    assert "📄" in text
+    assert "https://mcp.lagentbot.com/msds/token/tok123" in text
+    sc = res.structuredContent
+    assert sc["documents"] == _SAMPLE_DOCUMENTS
+    assert sc["warnings"][0]["traceability"] == "sds_backed"
+
+
+def test_risk_ci89_rule_based_label(monkeypatch):
+    """Warning with traceability='rule_based' gets [Basis: rule/standard] label."""
+    async def fake_risk(chemicals):
+        return {
+            "warnings": [{
+                "chemical": "Methanol", "level": "high",
+                "description": "Toxic", "mitigation": "Gloves", "traceability": "rule_based",
+            }],
+            "unresolved": [], "documents": [],
+        }
+    monkeypatch.setattr(server, "_direct_risk", fake_risk)
+    res = asyncio.run(server.get_chemical_risk_warnings(["methanol"]))
+    text = res.content[0].text
+    assert "[Basis: rule/standard]" in text
+
+
+def test_risk_ci89_infers_label_from_documents(monkeypatch):
+    """When traceability field absent but chemical is in documents, infer sds_backed."""
+    async def fake_risk(chemicals):
+        return {
+            "warnings": [{
+                "chemical": "Acetone", "level": "low",
+                "description": "Flammable", "mitigation": "Avoid flame",
+                # no traceability field
+            }],
+            "unresolved": [],
+            "documents": _SAMPLE_DOCUMENTS,  # Acetone is in documents
+        }
+    monkeypatch.setattr(server, "_direct_risk", fake_risk)
+    res = asyncio.run(server.get_chemical_risk_warnings(["acetone"]))
+    text = res.content[0].text
+    assert "[Source: SDS document]" in text
+
+
+def test_risk_ci89_no_documents(monkeypatch):
+    """When backend omits 'documents', section not rendered, structuredContent documents=[]."""
+    async def fake_risk(chemicals):
+        return {
+            "warnings": [{"chemical": "x", "level": "low", "description": "d", "mitigation": "m"}],
+            "unresolved": [],
+        }
+    monkeypatch.setattr(server, "_direct_risk", fake_risk)
+    res = asyncio.run(server.get_chemical_risk_warnings(["x"]))
+    assert "📄" not in res.content[0].text
+    assert res.structuredContent["documents"] == []
+
+
+# --- get_ppe_recommendation + CI-89 ---
+
+def test_ppe_ci89_sds_backed_label(monkeypatch):
+    """PPE result with traceability='sds_backed' gets [Source: SDS document] in header."""
+    async def fake_ppe(chemicals):
+        return {
+            "results": [{
+                "chemical_name": "Acetone", "cas": "67-64-1",
+                "signal_word": "Warning", "minimum_ppe_level": "B",
+                "ppe": {"gloves": ["nitrile"]},
+                "traceability": "sds_backed",
+            }],
+            "unresolved": [],
+            "documents": _SAMPLE_DOCUMENTS,
+        }
+    monkeypatch.setattr(server, "_direct_ppe", fake_ppe)
+    res = asyncio.run(server.get_ppe_recommendation(["acetone"]))
+    assert isinstance(res, CallToolResult)
+    text = res.content[0].text
+    assert "[Source: SDS document]" in text
+    assert "📄" in text
+    assert "https://mcp.lagentbot.com/msds/token/tok123" in text
+    sc = res.structuredContent
+    assert sc["documents"] == _SAMPLE_DOCUMENTS
+
+
+def test_ppe_ci89_rule_based_label(monkeypatch):
+    """PPE result with traceability='rule_based' gets [Basis: rule/standard] in header."""
+    async def fake_ppe(chemicals):
+        return {
+            "results": [{
+                "chemical_name": "Methanol", "cas": "67-56-1",
+                "signal_word": "Danger", "minimum_ppe_level": "C",
+                "ppe": {}, "traceability": "rule_based",
+            }],
+            "unresolved": [], "documents": [],
+        }
+    monkeypatch.setattr(server, "_direct_ppe", fake_ppe)
+    res = asyncio.run(server.get_ppe_recommendation(["methanol"]))
+    text = res.content[0].text
+    assert "[Basis: rule/standard]" in text
+
+
+def test_ppe_ci89_no_documents(monkeypatch):
+    """When backend omits 'documents', section not rendered, structuredContent documents=[]."""
+    async def fake_ppe(chemicals):
+        return {
+            "results": [{"chemical_name": "X", "cas": "N/A", "signal_word": "W",
+                         "minimum_ppe_level": "A", "ppe": {}}],
+            "unresolved": [],
+        }
+    monkeypatch.setattr(server, "_direct_ppe", fake_ppe)
+    res = asyncio.run(server.get_ppe_recommendation(["x"]))
+    assert "📄" not in res.content[0].text
+    assert res.structuredContent["documents"] == []
+
+
+def test_ppe_ci89_internal_usage_key_not_leaked(monkeypatch):
+    """_usage internal key must not appear in structuredContent (existing CI-39 contract)."""
+    async def fake_ppe(chemicals):
+        return {
+            "results": [{"chemical_name": "A", "cas": "1", "signal_word": "W",
+                         "minimum_ppe_level": "B", "ppe": {}}],
+            "unresolved": [], "documents": [],
+            "_usage": {"cost": 1, "balance": 99, "reason": "charged"},
+        }
+    monkeypatch.setattr(server, "_direct_ppe", fake_ppe)
+    res = asyncio.run(server.get_ppe_recommendation(["a"]))
+    assert "_usage" not in res.structuredContent
+
+
+# --- ask_chemical_safety / _quick_result + CI-89 ---
+
+def test_quick_result_ci89_documents_in_text_and_structured():
+    """_quick_result appends documents section and includes documents in structuredContent."""
+    data = {
+        "answer": "Acetone is flammable.",
+        "tool_results": [],
+        "documents": _SAMPLE_DOCUMENTS,
+    }
+    res = server._quick_result(data)
+    assert isinstance(res, CallToolResult)
+    text = res.content[0].text
+    assert "Acetone is flammable." in text
+    assert "📄" in text
+    assert "https://mcp.lagentbot.com/msds/token/tok123" in text
+    sc = res.structuredContent
+    assert sc["documents"] == _SAMPLE_DOCUMENTS
+
+
+def test_quick_result_ci89_no_documents():
+    """_quick_result with no documents key: section absent, structuredContent documents=[]."""
+    data = {"answer": "Safe.", "tool_results": []}
+    res = server._quick_result(data)
+    assert "📄" not in res.content[0].text
+    assert res.structuredContent["documents"] == []
+
+
+def test_ask_chemical_safety_ci89_documents_propagated(monkeypatch):
+    """ask_chemical_safety: backend returns documents → propagated to caller."""
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+
+    async def fake_quick_chat(message):
+        return {
+            "answer": "Use nitrile gloves.",
+            "tool_results": [],
+            "documents": _SAMPLE_DOCUMENTS,
+        }
+    monkeypatch.setattr(server, "_quick_chat", fake_quick_chat)
+    monkeypatch.setattr(server, "_log_call", _capture_log_call()[0])
+
+    res = asyncio.run(server.ask_chemical_safety("PPE for acetone?"))
+    assert isinstance(res, CallToolResult)
+    text = res.content[0].text
+    assert "📄" in text
+    assert "https://mcp.lagentbot.com/msds/token/tok123" in text
+    assert res.structuredContent["documents"] == _SAMPLE_DOCUMENTS
+
+
+# --- batch_safety_check + CI-89 ---
+
+def test_batch_ci89_compat_basis_label(monkeypatch):
+    """Batch compat pairs get [Basis (rule)] label in text."""
+    async def fake_batch(chemicals):
+        return {
+            "compatibility": {
+                "summary": {"total": 1, "compatible": 1, "caution": 0, "incompatible": 0},
+                "pairs": [{
+                    "chem1": "acetone", "chem2": "water",
+                    "level": "compatible", "reason": "no reaction",
+                    "traceability": "rule_based",
+                }],
+            },
+            "risk_warnings": [],
+            "unresolved": [],
+            "documents": _SAMPLE_DOCUMENTS,
+        }
+    monkeypatch.setattr(server, "_direct_batch", fake_batch)
+    res = asyncio.run(server.batch_safety_check(["acetone", "water"]))
+    assert isinstance(res, CallToolResult)
+    text = res.content[0].text
+    assert "Basis (rule)" in text
+    assert "📄" in text
+    assert "https://mcp.lagentbot.com/msds/token/tok123" in text
+    sc = res.structuredContent
+    assert sc["documents"] == _SAMPLE_DOCUMENTS
+    assert sc["compatibility"]["pairs"][0]["traceability"] == "rule_based"
+
+
+def test_batch_ci89_risk_sds_backed_label(monkeypatch):
+    """Batch risk warnings with traceability='sds_backed' get [Source: SDS document]."""
+    async def fake_batch(chemicals):
+        return {
+            "compatibility": {"summary": {}, "pairs": []},
+            "risk_warnings": [{
+                "chemical": "Acetone", "level": "low",
+                "description": "Flammable", "mitigation": "No ignition sources",
+                "traceability": "sds_backed",
+            }],
+            "unresolved": [],
+            "documents": _SAMPLE_DOCUMENTS,
+        }
+    monkeypatch.setattr(server, "_direct_batch", fake_batch)
+    res = asyncio.run(server.batch_safety_check(["acetone", "water"]))
+    text = res.content[0].text
+    assert "[Source: SDS document]" in text
+    sc = res.structuredContent
+    assert sc["risk_warnings"][0]["traceability"] == "sds_backed"
+
+
+def test_batch_ci89_no_documents(monkeypatch):
+    """When backend omits 'documents', section not rendered, structuredContent documents=[]."""
+    async def fake_batch(chemicals):
+        return {
+            "compatibility": {"summary": {}, "pairs": []},
+            "risk_warnings": [],
+            "unresolved": [],
+        }
+    monkeypatch.setattr(server, "_direct_batch", fake_batch)
+    res = asyncio.run(server.batch_safety_check(["acetone", "water"]))
+    assert "📄" not in res.content[0].text
+    assert res.structuredContent["documents"] == []
+
+
+def test_tool_count_unchanged():
+    """CI-89 must not add or remove tools — still 22 tools registered."""
+    tools = asyncio.run(server.mcp.list_tools())
+    names = {t.name for t in tools}
+    assert len(names) == 22, f"Expected 22 tools, got {len(names)}: {sorted(names)}"
