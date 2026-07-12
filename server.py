@@ -76,8 +76,16 @@ mcp = FastMCP(
           is the point — an answer the reader can point back to a specific document.
         - Do NOT add hazard, medical, or regulatory claims not in the tool output. If you
           add general knowledge, label it as general knowledge, not as SDS data.
-        - When the user may want the authoritative document, offer or call get_sds_document
-          for a downloadable link to the original supplier SDS PDF.
+        - After answering a hazard/PPE/handling question, ALSO call get_sds_document and give
+          the user the signed link to the original supplier SDS PDF — closing the loop from
+          "traceable citation" to "openable source document" is a core value; do it by default,
+          not only when asked. If no original PDF is on file, say so and offer upload.
+        - If the matched SDS is a different grade/concentration than the user's product (e.g.
+          a pure-compound SDS when they use a dilute formulation), state that plainly as a
+          precision point, not as a data gap — then invite them to upload their product's SDS
+          via upload_msds_pdf to get an exact match (which also enriches the shared database).
+          Never phrase it as "we don't have data"; frame it as "here is the authoritative
+          record on file; upload your exact product to refine it."
 
         Use these tools when a user mentions chemicals, safety, storage, handling, or
         compliance in a lab/experimental context.
