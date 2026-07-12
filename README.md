@@ -18,13 +18,14 @@ When you use Claude to plan a synthesis route or set up an Opentrons protocol, s
 - Verify compliance with EU REACH, US OSHA/TSCA, and 7 other jurisdictions
 - Generate signed audit reports for GLP/GMP compliance
 
-## Tools (21)
+## Tools (22)
 
 | Tool | Description |
 |------|-------------|
 | **`batch_safety_check`** | One-call comprehensive report: compatibility + PPE + storage grouping for a chemical list |
 | **`check_regulatory_lists`** | Cross-reference a chemical against 23 regulatory watch lists across 10 regions |
 | **`get_sds_section`** | Retrieve a specific SDS section (1-16) for a chemical |
+| **`get_sds_document`** | Signed download URL (~5 min) for the original SDS/MSDS PDF; includes source provenance |
 | **`get_chemical_alternatives`** | Safer substitutes for restricted or high-risk chemicals |
 | **`validate_protocol_chemicals`** | Extract & validate chemical names from protocol text or code |
 | **`check_mixing_order`** | Safe addition sequence for reagent pairs (e.g., acid into water) |
@@ -308,7 +309,7 @@ Industry-sourced, AI-verified, and cryptographically signed.
 ```
 Your AI Agent                  MSDS Chain MCP Server
 ┌──────────────────┐           ┌─────────────────────────┐
-│ Claude Code      │           │ 21 Safety Tools         │
+│ Claude Code      │           │ 22 Safety Tools         │
 │ Cursor / pi      │──MCP────▶│   ↓                     │
 │ Any MCP client   │           │ ChainSDS Platform       │
 └──────────────────┘           └─────────────────────────┘

@@ -440,3 +440,149 @@ def test_quick_chat_timeout_user_answer_unchanged(monkeypatch):
     lowered = text.lower()
     assert ("timed out" in lowered or "retry" in lowered or "try again" in lowered
             or "重试" in text or "超时" in text)
+
+
+# ---------------------------------------------------------------------------
+# CI-84: get_sds_document — returns signed SDS PDF URL or parsed-text fallback
+#
+# Backend: GET /api/v2/sds-document-url?chemical={chemical}
+# Header: X-API-Key: {per-user key}
+#
+# Three outcome paths:
+#   available=True  → pdf_url is a *relative* path that must be prefixed with
+#                     API_URL to produce a usable absolute URL.
+#   available=False, message has "parsed" → parsed-only, suggest get_sds_section.
+#   available=False, message has "not found" → unknown chemical, suggest upload.
+#   No credential → authentication required message.
+# ---------------------------------------------------------------------------
+
+class _FakeGetClient:
+    """Fake httpx.AsyncClient that stubs GET /api/v2/sds-document-url."""
+
+    def __init__(self, status: int, body: dict):
+        self._status = status
+        self._body = body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, url, **kw):
+        return _FakeResp(status=self._status, body=self._body)
+
+
+def _patch_sds_doc_client(monkeypatch, status: int, body: dict):
+    monkeypatch.setattr(
+        server.httpx, "AsyncClient",
+        lambda **kw: _FakeGetClient(status, body),
+    )
+
+
+def test_get_sds_document_available_returns_absolute_url(monkeypatch):
+    """available=True: pdf_url relative path is prefixed with API_URL."""
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+
+    body = {
+        "available": True,
+        "chemical_name": "Acetone",
+        "cas": "67-64-1",
+        "supplier": "Sigma-Aldrich",
+        "revision_date": "2023-05-01",
+        "region": "US",
+        "record_id": 42,
+        "pdf_url": "/msds/token/abc123",
+    }
+    _patch_sds_doc_client(monkeypatch, 200, body)
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    res = asyncio.run(server.get_sds_document("acetone"))
+
+    assert isinstance(res, CallToolResult)
+    sc = res.structuredContent
+    assert sc["available"] is True
+    assert sc["cas"] == "67-64-1"
+    assert sc["supplier"] == "Sigma-Aldrich"
+    # pdf_url in structuredContent must be absolute
+    assert sc["pdf_url"].startswith("http")
+    assert "/msds/token/abc123" in sc["pdf_url"]
+    # text must contain the absolute URL
+    text = res.content[0].text
+    assert "/msds/token/abc123" in text
+    # source attribution present
+    assert "Sigma-Aldrich" in text or "Sigma" in text
+    # usage hint present
+    assert "5 min" in text or "browser" in text or "curl" in text
+    # logged success
+    assert len(captured) == 1
+    assert captured[0]["success"] is True
+
+
+def test_get_sds_document_parsed_only_no_pdf(monkeypatch):
+    """available=False + parsed-only message → suggest get_sds_section."""
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+
+    body = {
+        "available": False,
+        "chemical_name": "Acetone",
+        "cas": "67-64-1",
+        "message": "No source PDF available for this record (parsed text only); use get_sds_section to query specific sections.",
+    }
+    _patch_sds_doc_client(monkeypatch, 200, body)
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    res = asyncio.run(server.get_sds_document("acetone"))
+
+    assert isinstance(res, CallToolResult)
+    sc = res.structuredContent
+    assert sc["available"] is False
+    text = res.content[0].text
+    assert "get_sds_section" in text
+    assert captured[0]["success"] is True
+
+
+def test_get_sds_document_unknown_chemical(monkeypatch):
+    """available=False + not-found message → suggest upload."""
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+
+    body = {
+        "available": False,
+        "message": "Chemical 'XYZ-99' not found in the database.",
+    }
+    _patch_sds_doc_client(monkeypatch, 200, body)
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    res = asyncio.run(server.get_sds_document("XYZ-99"))
+
+    assert isinstance(res, CallToolResult)
+    sc = res.structuredContent
+    assert sc["available"] is False
+    text = res.content[0].text
+    # Should mention upload path
+    assert "upload" in text.lower() or "not found" in text.lower()
+    assert captured[0]["success"] is True
+
+
+def test_get_sds_document_no_credential_returns_auth_message(monkeypatch):
+    """No credential → authentication required message without HTTP call."""
+    from request_identity import set_caller_credential
+    set_caller_credential("")  # clear credential
+
+    # The tool should bail before making any HTTP call when unauthenticated.
+    # We still patch the client to ensure no real request fires.
+    _patch_sds_doc_client(monkeypatch, 200, {})
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    res = asyncio.run(server.get_sds_document("acetone"))
+
+    assert isinstance(res, CallToolResult)
+    text = res.content[0].text.lower()
+    assert "api key" in text or "authenticat" in text or "msds_api_key" in text
