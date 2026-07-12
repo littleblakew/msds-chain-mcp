@@ -57,14 +57,30 @@ mcp = FastMCP(
     port=8080,
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     instructions=textwrap.dedent("""
-        MSDS Chain provides chemical safety intelligence:
-        - Compatibility checks between chemicals
-        - Risk / hazard warnings
-        - Multi-region regulatory compliance (EU REACH/CLP, US OSHA/TSCA, CN/JP/KR/CA/AU/TW)
-        - MSDS / SDS data lookup
+        MSDS Chain provides chemical safety intelligence backed by traceable, sourced SDS data.
 
-        Use these tools when a user mentions chemicals, asks about safety, storage,
-        handling, or compliance in an experimental or lab context.
+        WHICH TOOL:
+        - For any general safety question — hazards, PPE, first aid, storage, disposal,
+          "is X safe", "what do I need to handle Y" — call ask_chemical_safety FIRST.
+          It returns ONE answer grounded in a specific supplier SDS. Do NOT chain
+          search + risk-warnings + PPE for a broad question; that is slower, fragmented,
+          and loses the single sourced citation.
+        - Use the granular tools (get_chemical_risk_warnings, get_ppe_recommendation,
+          get_storage_guidance, search_chemical_database) only when the user explicitly
+          wants that one structured field, or to drill down.
+        - check_chemical_compatibility for mixing/storing pairs; check_regulatory_compliance
+          for multi-region legal status; get_sds_document for the original signed PDF link.
+
+        HOW TO PRESENT (grounding — do not violate):
+        - ALWAYS cite the source the tool returns (supplier + revision date). Traceability
+          is the point — an answer the reader can point back to a specific document.
+        - Do NOT add hazard, medical, or regulatory claims not in the tool output. If you
+          add general knowledge, label it as general knowledge, not as SDS data.
+        - When the user may want the authoritative document, offer or call get_sds_document
+          for a downloadable link to the original supplier SDS PDF.
+
+        Use these tools when a user mentions chemicals, safety, storage, handling, or
+        compliance in a lab/experimental context.
     """).strip(),
 )
 
@@ -538,8 +554,10 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
     Returns GHS hazard classification, signal words (Danger/Warning), H-codes,
     flash point, toxicity, and recommended PPE.
 
-    Use this to understand the specific dangers of each chemical before handling
-    or storing them.
+    DRILL-DOWN tool: use this only when the user explicitly wants the raw structured
+    hazard fields. For a broad "what are the hazards / is X dangerous / what PPE"
+    question, prefer `ask_chemical_safety` — it returns one sourced answer instead of
+    forcing you to chain several tools.
 
     Args:
         chemicals: List of chemical names or CAS numbers, e.g.
@@ -677,20 +695,27 @@ async def check_regulatory_compliance(
 @mcp.tool(annotations=ToolAnnotations(title="Ask Chemical Safety Question", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
 async def ask_chemical_safety(question: str) -> str:
     """
-    Ask any chemical safety question in natural language.
+    PREFERRED first tool for any general chemical-safety question — hazards, PPE,
+    first aid, spill/exposure response, storage, disposal, "is X safe", "what do I
+    need to handle Y", GHS interpretation, MSDS lookup.
 
-    Handles: storage conditions, spill/exposure emergency procedures,
-    first-aid measures, PPE requirements, disposal guidance, MSDS lookups,
-    GHS label interpretation, and general lab safety questions.
+    Returns ONE answer grounded in a specific supplier SDS, with the source
+    (supplier + revision date) cited and any general knowledge clearly separated
+    from what the SDS actually says.
 
-    Use this as the catch-all when the question doesn't fit neatly into
-    compatibility, risk warnings, or compliance checks.
+    Use this FIRST for broad questions instead of chaining search_chemical_database
+    + get_chemical_risk_warnings + get_ppe_recommendation — those are slower, produce
+    a fragmented answer, and lose the single sourced citation. Reach for the granular
+    tools only when the user explicitly wants just that one structured field.
+
+    When presenting the answer, cite the returned source and do not add hazard,
+    medical, or regulatory claims that are not in the tool output.
 
     Args:
         question: Any chemical safety question, e.g.
+                  "What are the main hazards and PPE for TMAH?"
                   "How should I store acetone and methanol in the same cabinet?"
-                  "What PPE is needed when handling concentrated HCl?"
-                  "Is it safe to dispose of acetone down the drain?"
+                  "A worker got hydrofluoric acid on their skin — first aid?"
     """
     t0 = time.monotonic()
     error_msg = None
@@ -719,6 +744,10 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
 
     Returns specific glove types, eye protection, respiratory protection, and
     body protection requirements based on MSDS Section 8 data and GHS hazard codes.
+
+    DRILL-DOWN tool: use this only when the user explicitly wants a standalone PPE
+    list. A broad "what are the hazards and what PPE" question is answered in one
+    sourced call by `ask_chemical_safety` — prefer that over chaining tools.
 
     Args:
         chemicals: List of chemical names or CAS numbers, e.g.
