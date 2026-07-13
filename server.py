@@ -130,7 +130,12 @@ def _quick_result(data: dict) -> CallToolResult:
     answer = data.get("answer", "")
     tool_results = data.get("tool_results", [])
     documents = data.get("documents", [])
-    text = answer + _format_tool_results(tool_results) + _format_sds_documents(documents)
+    # CI-89-followup: the SDS document links must come RIGHT AFTER the answer, before
+    # the raw tool-data appendix. Appended last (after _format_tool_results' JSON blob)
+    # the client model summarizes the answer and drops the trailing link — verified on
+    # prod: backend returns documents correctly, but claude.ai never surfaced the link
+    # for ask_chemical_safety while the (short, link-last) direct tools did.
+    text = answer + _format_sds_documents(documents) + _format_tool_results(tool_results)
     return CallToolResult(
         content=[TextContent(type="text", text=text)],
         structuredContent={"answer": answer, "tool_results": tool_results,
