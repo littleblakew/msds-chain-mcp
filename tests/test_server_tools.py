@@ -302,13 +302,51 @@ def test_batch_safety_check_timeout_is_graceful(monkeypatch):
     assert "retry" in low or "try again" in low or "重试" in text or "timed out" in low
 
 
+# Truth source for the public tool surface. This exact set is the single
+# authority for "how many tools does the MCP server expose" — every outward
+# description (plugin.json / .claude-plugin / .codex-plugin / npm README +
+# server.json / frontend DocsPage table / docs) must agree with it. Adding or
+# removing a tool MUST update this set in the same change, so drift breaks the
+# build instead of shipping an inconsistent count (SciTuu-review finding, 2026-07).
+EXPECTED_TOOLS = frozenset({
+    "check_chemical_compatibility",
+    "get_chemical_risk_warnings",
+    "check_regulatory_compliance",
+    "ask_chemical_safety",
+    "get_ppe_recommendation",
+    "get_storage_guidance",
+    "get_emergency_response",
+    "get_exposure_limits",
+    "get_transport_classification",
+    "create_audit_session",
+    "get_audit_report",
+    "search_chemical_database",
+    "get_sds_section",
+    "get_sds_document",
+    "get_chemical_alternatives",
+    "validate_protocol_chemicals",
+    "check_mixing_order",
+    "get_waste_disposal",
+    "compare_sds_versions",
+    "upload_msds_pdf",
+    "batch_safety_check",
+    "check_regulatory_lists",
+})
+
+
 def test_direct_tools_still_registered(monkeypatch):
     """The graceful-timeout wrapper must not break FastMCP tool registration."""
     import asyncio as _a
     tools = _a.run(server.mcp.list_tools())
     names = {t.name for t in tools}
     assert "batch_safety_check" in names
-    assert len(names) >= 15  # full public tool surface still present
+    # Exact match — no missing tools, no stray extras. Update EXPECTED_TOOLS
+    # (and every outward count/list) when the tool surface changes.
+    assert names == EXPECTED_TOOLS, (
+        f"tool surface drifted: missing={EXPECTED_TOOLS - names}, "
+        f"unexpected={names - EXPECTED_TOOLS}"
+    )
+    assert len(EXPECTED_TOOLS) == 22
 
 
 # ---------------------------------------------------------------------------
