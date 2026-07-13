@@ -974,6 +974,82 @@ def test_batch_ci89_no_documents(monkeypatch):
     assert res.structuredContent["documents"] == []
 
 
+# ---------------------------------------------------------------------------
+# get_audit_report — defensive URL construction
+#
+# Backend may return an absolute URL (when public_base_url is set on prod)
+# or a relative path (when unset / older deploy).  Core must:
+#   - pass absolute URLs through unchanged (no double-prefix)
+#   - prepend API_URL only when the backend returns a relative path
+# ---------------------------------------------------------------------------
+
+class _FakeGetReportClient:
+    """Minimal httpx.AsyncClient stub for get_audit_report."""
+
+    def __init__(self, url_value: str):
+        self._url_value = url_value
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, url, **kw):
+        return _FakeResp(status=200, body={"url": self._url_value})
+
+
+def _patch_report_client(monkeypatch, url_value: str):
+    monkeypatch.setattr(
+        server.httpx, "AsyncClient",
+        lambda **kw: _FakeGetReportClient(url_value),
+    )
+
+
+def test_get_audit_report_absolute_url_not_double_prefixed(monkeypatch):
+    """When backend returns an absolute URL, core must NOT prepend API_URL again."""
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+
+    absolute_url = (
+        "https://api.msdschain.lagentbot.com"
+        "/sessions/DEMO-ABC123/report/pdf?t=tok&lang=en"
+    )
+    _patch_report_client(monkeypatch, absolute_url)
+    log_fn, _ = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    res = asyncio.run(server.get_audit_report("DEMO-ABC123"))
+
+    assert isinstance(res, CallToolResult)
+    sc = res.structuredContent
+    assert sc["report_url"] == absolute_url, (
+        f"Absolute URL must be passed through unchanged, got: {sc['report_url']!r}"
+    )
+    assert sc["report_url"].count("https://") == 1, "URL must not be double-prefixed"
+    assert "DEMO-ABC123" in res.content[0].text
+
+
+def test_get_audit_report_relative_url_prefixed_with_api_url(monkeypatch):
+    """When backend returns a relative URL, core must prepend API_URL."""
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+
+    relative_url = "/sessions/DEMO-ABC456/report/pdf?t=tok"
+    _patch_report_client(monkeypatch, relative_url)
+    log_fn, _ = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    res = asyncio.run(server.get_audit_report("DEMO-ABC456"))
+
+    assert isinstance(res, CallToolResult)
+    sc = res.structuredContent
+    assert sc["report_url"].startswith("http"), (
+        f"Relative URL must be prefixed with API_URL, got: {sc['report_url']!r}"
+    )
+    assert "/sessions/DEMO-ABC456/report/pdf?t=tok" in sc["report_url"]
+
+
 def test_tool_count_unchanged():
     """CI-89 must not add or remove tools — still 22 tools registered."""
     tools = asyncio.run(server.mcp.list_tools())

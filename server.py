@@ -1346,7 +1346,7 @@ async def get_audit_report(session_id: str) -> str:
             res.raise_for_status()
             relative = res.json()["url"]
 
-        full_url = f"{API_URL}{relative}"
+        full_url = relative if str(relative).startswith("http") else f"{API_URL}{relative}"
         return CallToolResult(
             content=[TextContent(type="text", text=(
                 f"**Signed report URL** (valid ~5 min):\n{full_url}\n\n"
