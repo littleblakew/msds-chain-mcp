@@ -169,6 +169,33 @@ def _format_sds_documents(documents: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _doc_link_lookup(documents: list[dict]) -> dict[str, str]:
+    """Build {key -> sds_document_url} keyed by chemical, chemical_name and cas
+    (all casefolded) so a per-item render can find its chemical's SDS link inline.
+
+    CI-89-inline: a trailing '📄 Original SDS' block gets summarized away by the
+    client model on long answers; an inline link ON each verdict/warning line
+    survives because it is part of the structured row the model preserves.
+    """
+    lut: dict[str, str] = {}
+    for doc in documents:
+        url = doc.get("sds_document_url")
+        if not url:
+            continue
+        for k in (doc.get("chemical"), doc.get("chemical_name"), doc.get("cas")):
+            if k:
+                lut.setdefault(str(k).casefold(), url)
+    return lut
+
+
+def _inline_sds(lookup: dict[str, str], *keys: str) -> str:
+    """Return a compact inline SDS-link suffix for the first matching key, else ''."""
+    for k in keys:
+        if k and (url := lookup.get(str(k).casefold())):
+            return f" 📄 SDS: {url}"
+    return ""
+
+
 def _headers() -> dict[str, str]:
     return caller_headers()
 
@@ -545,6 +572,9 @@ async def check_chemical_compatibility(chemicals: list[str]) -> CallToolResult:
         if data.get("unresolved"):
             lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}\n")
 
+        # CI-89-inline: per-chemical link lookup so each pair row carries its own
+        # SDS links (survives client-model summarization better than a trailing block).
+        doc_lut = _doc_link_lookup(data.get("documents", []))
         struct_pairs = []
         counts = {"compatible": 0, "caution": 0, "incompatible": 0}
         for pair in data.get("pairs", []):
@@ -553,12 +583,19 @@ async def check_chemical_compatibility(chemicals: list[str]) -> CallToolResult:
             # CI-89: compat verdicts come from a rule engine — label as Basis(rule)
             traceability = pair.get("traceability", "rule_based")
             basis_label = "Basis (rule)" if traceability == "rule_based" else "Source (SDS)"
-            lines.append(
+            pair_line = (
                 f"- **{pair.get('chem1', '?')}** + **{pair.get('chem2', '?')}**: "
                 f"[{emoji}] {pair.get('level', 'unknown')}\n"
                 f"  Reason: {pair.get('reason', 'N/A')}\n"
                 f"  {basis_label}: {pair.get('source', 'unknown')}"
             )
+            l1 = _inline_sds(doc_lut, pair.get("chem1"))
+            l2 = _inline_sds(doc_lut, pair.get("chem2"))
+            if l1:
+                pair_line += f"\n  **{pair.get('chem1', '?')}**{l1}"
+            if l2:
+                pair_line += f"\n  **{pair.get('chem2', '?')}**{l2}"
+            lines.append(pair_line)
             lvl = (pair.get("level") or "unknown").lower()
             if lvl in counts:
                 counts[lvl] += 1
@@ -634,6 +671,7 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
             (doc.get("chemical_name") or doc.get("chemical") or "").lower()
             for doc in documents
         }
+        doc_lut = _doc_link_lookup(documents)  # CI-89-inline
 
         for w in data.get("warnings", []):
             level = w.get("level", "unknown").upper()
@@ -650,8 +688,10 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
                     trace_label = "[Source: SDS document]"
                 else:
                     trace_label = ""
+            # CI-89-inline: SDS link on the warning line itself
+            inline = _inline_sds(doc_lut, w.get("chemical"), w.get("cas"))
             lines.append(
-                f"### {w.get('chemical', 'Unknown')} — {level} RISK {trace_label}\n"
+                f"### {w.get('chemical', 'Unknown')} — {level} RISK {trace_label}{inline}\n"
                 f"- **Description:** {w.get('description', 'N/A')}\n"
                 f"- **Mitigation:** {w.get('mitigation', 'N/A')}"
             )
@@ -847,6 +887,7 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
             (doc.get("chemical_name") or doc.get("chemical") or "").lower()
             for doc in documents
         }
+        doc_lut = _doc_link_lookup(documents)  # CI-89-inline
 
         for item in data.get("results", []):
             # CI-89: label each result by its traceability
@@ -864,6 +905,7 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
             header = f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})"
             if trace_label:
                 header += f"  {trace_label}"
+            header += _inline_sds(doc_lut, item.get("chemical_name"), item.get("cas"))  # CI-89-inline
             lines.append(header)
             lines.append(f"- Signal word: **{item.get('signal_word', 'N/A')}**")
             lines.append(f"- Minimum PPE level: **{item.get('minimum_ppe_level', 'N/A')}**")
@@ -1966,6 +2008,7 @@ async def batch_safety_check(chemicals: list[str]) -> str:
             (doc.get("chemical_name") or doc.get("chemical") or "").lower()
             for doc in documents
         }
+        doc_lut = _doc_link_lookup(documents)  # CI-89-inline
 
         # Compatibility
         sections.append("## 1. Compatibility Matrix")
@@ -1983,10 +2026,17 @@ async def batch_safety_check(chemicals: list[str]) -> str:
             # CI-89: compat verdicts are rule-based
             traceability = pair.get("traceability", "rule_based")
             basis_label = "Basis (rule)" if traceability == "rule_based" else "Source (SDS)"
-            sections.append(
+            line = (
                 f"- **{pair.get('chem1', '?')}** + **{pair.get('chem2', '?')}**: "
                 f"{level} — {pair.get('reason', 'N/A')}  [{basis_label}]"
             )
+            l1 = _inline_sds(doc_lut, pair.get("chem1"))
+            l2 = _inline_sds(doc_lut, pair.get("chem2"))
+            if l1:
+                line += f"\n  **{pair.get('chem1', '?')}**{l1}"
+            if l2:
+                line += f"\n  **{pair.get('chem2', '?')}**{l2}"
+            sections.append(line)
 
         # Risk warnings
         sections.append("\n## 2. Risk Warnings")
@@ -2003,9 +2053,10 @@ async def batch_safety_check(chemicals: list[str]) -> str:
                     trace_label = "[Source: SDS document]"
                 else:
                     trace_label = ""
+            inline = _inline_sds(doc_lut, w.get("chemical"), w.get("cas"))  # CI-89-inline
             sections.append(
                 f"### {w.get('chemical', 'Unknown')} — {w.get('level', 'unknown').upper()} RISK "
-                f"{trace_label}\n"
+                f"{trace_label}{inline}\n"
                 f"- {w.get('description', 'N/A')}\n"
                 f"- Mitigation: {w.get('mitigation', 'N/A')}"
             )
