@@ -37,8 +37,11 @@ This data is associated with your API key and retained indefinitely (it's the po
 
 ### Remote mode (HTTP)
 - All communication over TLS (HTTPS)
-- API key transmitted via `X-API-Key` header
-- OAuth 2.1 support planned for Marketplace integration (PKCE + DCR)
+- API key transmitted via `X-API-Key` header, or as `Authorization: Bearer sk-msds-...` (both accepted)
+- OAuth 2.1 (PKCE + DCR) is supported for Marketplace integration at the distribution
+  gateway layer in front of `mcp.lagentbot.com`. The bare core server does not implement
+  OAuth itself — it only validates the `X-API-Key` / `Authorization: Bearer` headers
+  above.
 
 ## Rate Limiting
 

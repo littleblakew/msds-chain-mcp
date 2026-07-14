@@ -11,7 +11,7 @@
     {
       "registryType": "npm",
       "identifier": "msds-chain-mcp",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "transport": {
         "type": "sse",
         "url": "https://mcp.lagentbot.com/sse"
