@@ -2,7 +2,7 @@
 
 Chemical safety intelligence for AI-assisted experiment design. Powered by **ChainSDS** — verified, current, and growing.
 
-This is a remote MCP (Model Context Protocol) server providing **21 tools** for chemical safety reasoning — compatibility checks, hazard analysis, PPE recommendations, storage guidance, waste disposal, mixing order safety, exposure limits, transport classification, regulatory compliance (23 lists, 10 regions), SDS version diff, PDF upload, chemical substitution, first aid, GHS labels, and signed audit reports.
+This is a remote MCP (Model Context Protocol) server providing **22 tools** for chemical safety reasoning — compatibility checks, hazard analysis, PPE recommendations, storage guidance, waste disposal, mixing order safety, exposure limits, transport classification, regulatory compliance (23 lists, 10 regions), regulatory watch-list cross-reference, SDS version diff, PDF upload, signed SDS document download, chemical substitution, first aid, GHS labels, and signed audit reports.
 
 ## Quick Start
 
@@ -31,7 +31,7 @@ Then run `/mcp` and authenticate (browser sign-in). The legacy SSE endpoint
 
 Get a free API key (100 calls/month) at [msdschain.lagentbot.com](https://msdschain.lagentbot.com) to unlock all tools.
 
-## Tools (20)
+## Tools (22)
 
 | Tool | Description |
 |------|-------------|
@@ -47,8 +47,10 @@ Get a free API key (100 calls/month) at [msdschain.lagentbot.com](https://msdsch
 | `get_exposure_limits` | OEL/TLV/PEL across US, EU, JP, CN, INT |
 | `get_transport_classification` | UN number, hazard class, packing group |
 | `check_regulatory_compliance` | EU, US, CN, JP, KR, CA, AU, TW |
+| `check_regulatory_lists` | Cross-reference a chemical against 23 regulatory watch lists across 10 regions |
 | `get_chemical_alternatives` | Safer substitutes for restricted chemicals |
 | `get_sds_section` | Query specific SDS sections (1-16) |
+| `get_sds_document` | Signed download URL (~5 min) for the original SDS/MSDS PDF |
 | `search_chemical_database` | Look up by name, synonym, or CAS number |
 | `ask_chemical_safety` | Natural language catch-all |
 | `create_audit_session` | Full audit with signed PDF report |

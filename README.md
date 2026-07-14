@@ -61,6 +61,15 @@ pip install -r requirements.txt
 
 ### 3. Add to your AI coding agent
 
+> **Architecture note:** the hosted endpoint `https://mcp.lagentbot.com` sits behind a
+> distribution **gateway** that terminates OAuth 2.1 (PKCE + DCR) and serves
+> `/.well-known/oauth-authorization-server`. The **OAuth / browser sign-in flow described
+> below applies only to that hosted gateway.** This repo's bare core server
+> (`python server_remote.py`, or the Docker image) does *not* implement OAuth or serve any
+> `/.well-known` endpoint — it only accepts `Authorization: Bearer sk-msds-...` or
+> `X-Api-Key` passthrough. If you self-host the core directly, use a static API key; there
+> is no browser sign-in step.
+
 **Claude Code (Remote — recommended):**
 ```bash
 claude mcp add msds-chain --transport http https://mcp.lagentbot.com/mcp
@@ -76,7 +85,7 @@ HTTP is preferred.
 /plugin install https://github.com/littleblakew/msds-chain-mcp.git
 ```
 
-**Claude Code (npm — local):**
+**Claude Code (npm — remote, shim registers the hosted endpoint):**
 ```bash
 claude mcp add msds-chain -- npx -y msds-chain-mcp@latest
 ```
@@ -249,12 +258,13 @@ General steps:
 For cloud deployment or shared team access, run as an HTTP server:
 
 ```bash
-# Streamable HTTP (recommended for Claude Code 2026+)
 MSDS_API_KEY=sk-msds-xxx python server_remote.py
-
-# Or SSE mode
-MSDS_MCP_TRANSPORT=sse MSDS_API_KEY=sk-msds-xxx python server_remote.py
 ```
+
+A single `server_remote.py` process always serves **both** transports concurrently —
+Streamable HTTP at `/mcp` (recommended for Claude Code 2026+) and SSE at `/sse`
+(compatibility). The `MSDS_MCP_TRANSPORT` env var is kept for backward compatibility
+only; it is ignored at runtime.
 
 Connect from Claude Code:
 
@@ -332,10 +342,10 @@ npx @modelcontextprotocol/inspector python server.py
 |---------|--------------|-----|
 | `401 Unauthorized` on connect | Missing or invalid API key | Verify the `Authorization: Bearer sk-msds-...` header (or `MSDS_API_KEY` env var). Generate a fresh key at [msdschain.lagentbot.com](https://msdschain.lagentbot.com) → API Keys. |
 | Tools don't appear in the client | MCP server not loaded | Fully restart the client after adding the server. Confirm `msds-chain` shows in the MCP/tools list. |
-| Connection drops or times out | Wrong transport / endpoint | Use the SSE endpoint `https://mcp.lagentbot.com/sse`. Check `GET /health` returns `{"status":"ok"}`. |
+| Connection drops or times out | Wrong transport / endpoint | Use the SSE endpoint `https://mcp.lagentbot.com/sse`. Check `GET /health` returns `{"status":"ok","tools":22}`. |
 | `Quota exceeded` / 429 | Monthly call limit hit | Free keys are limited; upgrade your plan or wait for the monthly reset. |
 | Empty results for a known chemical | Name not matched | Retry with the CAS number or a common synonym; `search_chemical_database` accepts name, synonym, or CAS. |
-| OAuth login fails in a browser client | OAuth metadata unreachable | Confirm `GET /.well-known/oauth-authorization-server` returns 200; the client should auto-discover the authorize/token endpoints. |
+| OAuth login fails in a browser client | OAuth metadata unreachable (hosted gateway only — self-hosted core has no OAuth) | Confirm `GET https://mcp.lagentbot.com/.well-known/oauth-authorization-server` returns 200; the client should auto-discover the authorize/token endpoints. If self-hosting `server_remote.py` directly, skip OAuth and use a static `Authorization: Bearer` key instead. |
 
 Still stuck? Email **contact@lagentbot.com** or open an issue at [github.com/littleblakew/msds-chain-mcp/issues](https://github.com/littleblakew/msds-chain-mcp/issues).
 
@@ -345,7 +355,7 @@ Still stuck? Email **contact@lagentbot.com** or open an issue at [github.com/lit
 - [x] `check_mixing_order` — safe addition sequence for reagent pairs
 - [x] `get_chemical_alternatives` — safer substitutes for restricted chemicals
 - [x] Remote MCP (HTTP SSE / Streamable HTTP) for cloud-hosted access
-- [x] OAuth 2.1 for Claude Marketplace integration
+- [x] OAuth 2.1 for Claude Marketplace integration (served by the distribution gateway in front of `mcp.lagentbot.com`, not by this core server)
 
 ## License
 
