@@ -51,6 +51,15 @@ TIMEOUT = 15.0        # v2 direct endpoints — fast, no LLM
 # per-turn budget cap and the Container App ingress ~256s request timeout.
 TIMEOUT_LLM = 120.0   # quick-chat endpoints — multi-turn LLM reasoning
 
+# Single source of truth = the repo-root VERSION file. This literal is kept in
+# sync by scripts/release.sh (which stamps VERSION into every manifest), and
+# tests/test_version.py fails CI if the two ever drift. Do NOT hand-edit — bump
+# VERSION and run scripts/release.sh. FastMCP.__init__ takes no `version` arg, so
+# we assign it on the underlying low-level server after construction; this is what
+# surfaces as serverInfo.version in the MCP `initialize` handshake (what ChatGPT,
+# claude.ai and any raw MCP client display).
+__version__ = "1.4.0"
+
 mcp = FastMCP(
     "MSDS Chain",
     host="0.0.0.0",
@@ -91,6 +100,11 @@ mcp = FastMCP(
         compliance in a lab/experimental context.
     """).strip(),
 )
+
+# Surface our product version in the MCP `initialize` handshake. Without this,
+# the SDK falls back to reporting the `mcp` package version — a meaningless value
+# that clients (ChatGPT, claude.ai) display as our server version.
+mcp._mcp_server.version = __version__
 
 
 _API_KEY_REQUIRED_MSG = (

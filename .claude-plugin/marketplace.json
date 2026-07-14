@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "msds-chain-safety",
-  "version": "1.0.0",
+  "version": "1.4.0",
   "description": "MCP server providing chemical safety reasoning tools for AI-assisted experiment design.",
   "owner": {
     "name": "LAgentBot Pte. Ltd.",
@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "msds-chain",
-      "description": "21 chemical safety tools + Claude Code Skill for compatibility, hazard, PPE, storage, waste disposal, mixing order, exposure limits, transport classification, regulatory compliance (23 lists, 10 regions), and signed audit reports.",
+      "description": "22 chemical safety tools + Claude Code Skill for compatibility, hazard, PPE, storage, waste disposal, mixing order, exposure limits, transport classification, regulatory compliance (23 lists, 10 regions), and signed audit reports.",
       "source": "./"
     }
   ]
