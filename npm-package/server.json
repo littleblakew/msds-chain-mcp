@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.littleblakew/msds-chain",
-  "description": "Chemical safety intelligence — 22 tools: compatibility, hazards, PPE, compliance, audit reports, signed SDS PDF",
+  "description": "Chemical safety intelligence — 22 tools: compatibility, hazards, PPE, compliance, SDS lookup",
   "repository": {
     "url": "https://github.com/littleblakew/msds-chain-mcp",
     "source": "github"

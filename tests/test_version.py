@@ -61,6 +61,18 @@ def _collect_versions(obj):
             yield from _collect_versions(item)
 
 
+def test_registry_description_within_limit():
+    """The MCP registry (registry.modelcontextprotocol.io) rejects a server.json
+    whose description exceeds 100 chars with HTTP 422 — catch it here, not at
+    publish time (learned the hard way on the 1.4.0 release)."""
+    with open(os.path.join(ROOT, "npm-package/server.json")) as f:
+        desc = json.load(f)["description"]
+    assert len(desc) <= 100, (
+        f"npm-package/server.json description is {len(desc)} chars; the MCP "
+        f"registry hard-limits it to 100 (422 on publish otherwise)"
+    )
+
+
 def test_all_json_manifests_stamped():
     want = _version_file()
     for rel in JSON_MANIFESTS:
