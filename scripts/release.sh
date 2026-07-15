@@ -15,13 +15,19 @@
 #
 # USAGE:
 #   scripts/release.sh              # sync all files from VERSION + verify (safe, local)
-#   scripts/release.sh --publish    # ALSO: git tag + npm publish + mcp registry publish
+#   scripts/release.sh --publish    # local fallback: git tag + npm publish + mcp registry publish
 #
-# TYPICAL RELEASE:
+# TYPICAL RELEASE (CI-driven — preferred):
 #   1. edit VERSION            (e.g. 1.4.0 -> 1.5.0)
 #   2. scripts/release.sh      # stamps everything, runs the guard test
 #   3. review `git diff`, commit, push main   # push auto-deploys the core (serverInfo)
-#   4. scripts/release.sh --publish            # npm + MCP registry (what ChatGPT reads)
+#   4. git tag vX.Y.Z && git push origin vX.Y.Z
+#      -> .github/workflows/release.yml publishes npm + MCP registry automatically
+#         (npm via NPM_TOKEN secret; registry via GitHub OIDC — no manual login)
+#
+# The `--publish` path below is a LOCAL FALLBACK for when CI is unavailable. It
+# uses the committed macOS mcp-publisher binary and requires you to have run
+# `npm login` and `./mcp-publisher login github` first.
 #
 set -euo pipefail
 

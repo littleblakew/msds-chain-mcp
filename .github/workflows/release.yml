@@ -1,0 +1,100 @@
+name: Publish Release (npm + MCP registry)
+
+# Tag-triggered publish. Push a v<semver> tag whose commit bumped VERSION and
+# this fans out the two IRREVERSIBLE external releases automatically:
+#   • npm            registry.npmjs.org/msds-chain-mcp
+#   • MCP registry   registry.modelcontextprotocol.io  (what ChatGPT/claude.ai read)
+#
+# The core container (live serverInfo) is deployed separately by deploy.yml on
+# push to main. Typical release:
+#   1. edit VERSION; scripts/release.sh          # sync manifests + verify
+#   2. commit + push main                        # deploy.yml ships the core
+#   3. git tag vX.Y.Z && git push origin vX.Y.Z  # THIS workflow publishes
+#
+# scripts/release.sh --publish stays as a local fallback (uses the committed
+# macOS mcp-publisher binary); CI downloads the linux binary below.
+#
+# Auth: npm needs the NPM_TOKEN repo secret (automation/granular read+write).
+#       The MCP registry uses GitHub Actions OIDC (no secret) — the id-token
+#       permission proves ownership of the io.github.littleblakew/* namespace.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing v<semver> tag to (re)publish"
+        required: true
+
+permissions:
+  id-token: write   # MCP registry github-oidc login
+  contents: read
+
+env:
+  MCP_PUBLISHER_VERSION: v1.8.0   # modelcontextprotocol/registry release providing the linux binary
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Verify tag matches VERSION
+        run: |
+          REF="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${REF#v}"
+          FILE="$(tr -d '[:space:]' < VERSION)"
+          if [ "$TAG" != "$FILE" ]; then
+            echo "::error::tag v$TAG does not match VERSION file ($FILE) — tag the commit that bumped VERSION"
+            exit 1
+          fi
+          echo "VERSION=$FILE" >> "$GITHUB_ENV"
+          echo "Publishing v$FILE"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Version guard tests
+        run: |
+          pip install --no-cache-dir -r requirements-dev.txt
+          python -m pytest tests/test_version.py -q
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: npm publish (idempotent)
+        working-directory: npm-package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if npm view "msds-chain-mcp@${VERSION}" version >/dev/null 2>&1; then
+            echo "npm already has msds-chain-mcp@${VERSION} — skipping publish"
+          else
+            npm publish --access public
+            echo "✅ npm published ${VERSION}"
+          fi
+
+      - name: MCP registry publish (GitHub OIDC)
+        working-directory: npm-package
+        run: |
+          set -euo pipefail
+          URL="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "Fetching mcp-publisher ${MCP_PUBLISHER_VERSION} (linux/amd64)…"
+          curl -sSL "$URL" | tar -xz mcp-publisher
+          chmod +x mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
+          echo "✅ MCP registry published ${VERSION}"
+
+      - name: Summary
+        run: |
+          echo "### Published v${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- npm: https://www.npmjs.com/package/msds-chain-mcp/v/${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- MCP registry: io.github.littleblakew/msds-chain @ ${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ChatGPT apps directory re-ingests on OpenAI's own cadence (not instant)." >> "$GITHUB_STEP_SUMMARY"
