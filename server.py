@@ -305,6 +305,13 @@ async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: in
                     input_params: str | None = None):
     """Fire-and-forget: POST call record to backend. Never raises."""
     try:
+        cred = get_caller_credential()
+        # CI-113: strip "Bearer " prefix before logging so the backend's sk-msds-
+        # prefix check resolves correctly. The gateway always forwards the resolved
+        # sk-msds- key via X-API-Key (no Bearer), so this only fires for direct-to-
+        # core callers that set Authorization instead of X-API-Key.
+        if cred and cred.startswith("Bearer "):
+            cred = cred[len("Bearer "):].strip()
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(
                 f"{API_URL}/mcp/call-log",
@@ -315,7 +322,7 @@ async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: in
                     "success": success,
                     "error_message": error_message,
                     "input_params": input_params,
-                    "api_key": get_caller_credential(),
+                    "api_key": cred,
                 },
                 headers=_headers(),
             )
