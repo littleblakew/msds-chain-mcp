@@ -36,7 +36,12 @@ env:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    # self-hosted azure-sea (2026-07-16): was ubuntu-latest, but the account's
+    # GitHub-hosted minutes are exhausted → ubuntu-latest jobs no longer start. mcp
+    # core has runners on azure-sea (not xtest), and this job only needs node + the
+    # NPM_TOKEN secret + GitHub Actions OIDC (MCP registry github-oidc, NOT Azure) —
+    # all available on self-hosted. No AZURE_CONFIG_DIR needed (no az/azure-login here).
+    runs-on: [self-hosted, azure-sea]
     steps:
       - uses: actions/checkout@v5
         with:
