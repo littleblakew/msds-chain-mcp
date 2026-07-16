@@ -40,6 +40,11 @@ jobs:
       - name: Run tests
         run: python -m pytest tests/ -v
 
+      # Shared self-hosted runners share $HOME → a parallel job's az logout can wipe
+      # the default credential store mid-run. Give each run an isolated config dir.
+      - name: Isolate Azure CLI config
+        run: echo "AZURE_CONFIG_DIR=${RUNNER_TEMP}/.azure-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+
       - name: Azure Login (OIDC)
         uses: azure/login@v3
         with:
