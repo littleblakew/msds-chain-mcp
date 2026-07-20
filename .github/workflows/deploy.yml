@@ -126,3 +126,19 @@ jobs:
             exit 1
           fi
           echo "✅ Gateway health check passed"
+
+      - name: MCP tool-level smoke (through gateway)
+        # Beyond /health (liveness): connect as a real MCP client with a CI-scoped
+        # prod key and call a couple of fast, deterministic, NON-mutating tools,
+        # asserting non-empty output — so a deploy that leaves the tools broken
+        # (auth, resolver, canonical data) fails loudly instead of going green.
+        # Skips (does NOT fail) when the secret is unset, so deploys keep working
+        # until a CI key is provisioned; once set, it is a hard gate.
+        env:
+          MCP_SMOKE_KEY: ${{ secrets.MCP_SMOKE_KEY }}
+        run: |
+          if [ -z "$MCP_SMOKE_KEY" ]; then
+            echo "::warning::MCP_SMOKE_KEY not set — skipping tool-level smoke (only /health gated). Provision a CI-scoped prod key + add the secret to enable."
+            exit 0
+          fi
+          python scripts/smoke_mcp.py
