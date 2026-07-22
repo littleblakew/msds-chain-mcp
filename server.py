@@ -47,7 +47,7 @@ TIMEOUT = 15.0        # v2 direct endpoints — fast, no LLM
 # escalation call per uncategorized pair (asymmetric-trust gate in
 # check_compatibility_pair — the rule engine is non-committal AND at least one
 # CAS is uncategorized). The backend now caps that at MAX_LLM_FALLBACK_PAIRS
-# (=6) serial calls per request instead of one per pair, but each capped call
+# (=12) serial calls per request instead of one per pair, but each capped call
 # is still a real ~1-3s+ Azure OpenAI round-trip on top of DB work — large
 # formulations (large agrochemical/biopesticide batches with many novel
 # adjuvants) can still legitimately need more than 15s. Prod evidence:
