@@ -249,6 +249,20 @@ def test_timeout_llm_budget_exceeds_slow_reasoning_turn():
     assert server.TIMEOUT_LLM >= 90.0
 
 
+def test_timeout_compat_exceeds_default_fast_path_timeout():
+    """check_chemical_compatibility / batch_safety_check can each make up to
+    MAX_LLM_FALLBACK_PAIRS (backend, compatibility_engine.py) serial LLM-escalation
+    calls for uncategorized chemical pairs, on top of DB work — a real ~1-3s+
+    round-trip per call. Prod evidence: 9-21 chemical batch_safety_check calls all
+    failed at ~15024ms, pinned to the plain TIMEOUT=15.0 ceiling. TIMEOUT_COMPAT
+    must give these two pairwise-heavy tools more headroom than the rest of the
+    no-LLM v2 fast path, but must stay under TIMEOUT_LLM (it is NOT the
+    multi-turn quick-chat budget)."""
+    assert server.TIMEOUT_COMPAT > server.TIMEOUT
+    assert server.TIMEOUT_COMPAT < server.TIMEOUT_LLM
+    assert server.TIMEOUT_COMPAT >= 30.0
+
+
 # ---------------------------------------------------------------------------
 # CI-61: check_regulatory_compliance defaults to EU+US when no region is given —
 # a stateless tool can't ask, so it must DISCLOSE the default, never let it read

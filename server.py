@@ -43,6 +43,19 @@ API_URL = os.environ.get(
 ).rstrip("/")
 LANG = os.environ.get("MSDS_LANG", "en")  # en | zh | ja | de | id
 TIMEOUT = 15.0        # v2 direct endpoints — fast, no LLM
+# compatibility/batch-safety pairwise checks can fall back to a serial LLM
+# escalation call per uncategorized pair (asymmetric-trust gate in
+# check_compatibility_pair — the rule engine is non-committal AND at least one
+# CAS is uncategorized). The backend now caps that at MAX_LLM_FALLBACK_PAIRS
+# (=6) serial calls per request instead of one per pair, but each capped call
+# is still a real ~1-3s+ Azure OpenAI round-trip on top of DB work — large
+# formulations (large agrochemical/biopesticide batches with many novel
+# adjuvants) can still legitimately need more than 15s. Prod evidence:
+# 9-21 chemical batch_safety_check calls all failed at ~15024ms — pinned to
+# this 15s ceiling, not a backend 5xx. Give these two pairwise-heavy tools
+# more headroom than the rest of the no-LLM v2 fast path, while staying well
+# under the Container App ingress ~256s request timeout.
+TIMEOUT_COMPAT = 45.0  # compatibility/check + batch-safety — bounded LLM fallback
 # quick-chat runs up to 3 sequential gpt-5-mini turns (RAI → intent → summary); a
 # single reasoning summary legitimately takes 30-60s and an unlisted chemical was
 # measured end-to-end at ~55.7s on Prod. 45s cut those off mid-flight → httpx
@@ -412,8 +425,8 @@ def _strip_usage(data: dict) -> dict:
 
 
 async def _direct_compat(chemicals: list[str]) -> dict:
-    """POST /api/v2/compatibility/check — direct service layer, no LLM."""
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    """POST /api/v2/compatibility/check — direct service layer, bounded LLM fallback."""
+    async with httpx.AsyncClient(timeout=TIMEOUT_COMPAT) as client:
         res = await client.post(
             f"{API_URL}/api/v2/compatibility/check",
             json={"chemicals": chemicals, "lang": LANG},
@@ -434,8 +447,8 @@ async def _direct_risk(chemicals: list[str]) -> dict:
 
 
 async def _direct_batch(chemicals: list[str]) -> dict:
-    """POST /api/v2/batch-safety — combined compat + risk, no LLM."""
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    """POST /api/v2/batch-safety — combined compat + risk, bounded LLM fallback."""
+    async with httpx.AsyncClient(timeout=TIMEOUT_COMPAT) as client:
         res = await client.post(
             f"{API_URL}/api/v2/batch-safety",
             json={"chemicals": chemicals, "lang": LANG},
