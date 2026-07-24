@@ -501,6 +501,17 @@ async def _direct_compliance(chemical: str, regions: list[str]) -> dict:
         return _billed_json(res)
 
 
+async def _direct_online_search(chemical_name: str = "", cas_number: str = "") -> dict:
+    """POST /api/v2/online-search — stateless PubChem GHS fallback (SE-19), unmetered."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.post(
+            f"{API_URL}/api/v2/online-search",
+            json={"chemical_name": chemical_name, "cas_number": cas_number, "lang": LANG},
+            headers=_headers(),
+        )
+        return _billed_json(res)
+
+
 async def _direct_exposure(chemicals: list[str], region: str | None = None) -> dict:
     """POST /api/v2/exposure-limits — direct, no LLM."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -1469,6 +1480,65 @@ async def search_chemical_database(query: str) -> str:
         dur = int((time.monotonic() - t0) * 1000)
         await _log_call("search_chemical_database", [query], dur, success, error_msg,
                         _json.dumps({"query": query}))
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Search MSDS Online (PubChem)", readOnlyHint=True, destructiveHint=False, openWorldHint=True), structured_output=False)
+@_graceful_timeout
+async def search_msds_online(chemical_name: str = "", cas_number: str = "") -> "CallToolResult | str":
+    """
+    Look up GHS hazard data for a chemical NOT in the MSDS Chain database, via PubChem.
+
+    Use this ONLY as a fallback when search_chemical_database returns no result. The
+    data is PubChem's AGGREGATED GHS classification, clearly labelled source="pubchem"
+    — it is NOT a signed supplier SDS. Present it to the user as PubChem-sourced and
+    unverified; prefer uploading a real SDS (upload_msds_pdf) when accuracy matters.
+
+    Args:
+        chemical_name: Chemical name, e.g. "acetonitrile"
+        cas_number:    CAS number, e.g. "75-05-8" (used first if provided)
+    """
+    t0 = time.monotonic()
+    error_msg = None
+    success = True
+    try:
+        if err := _require_api_key():
+            return err
+        data = await _direct_online_search(chemical_name, cas_number)
+        status = data.get("status")
+        if status != "found":
+            return data.get("message") or (
+                f"'{chemical_name or cas_number}' not found on PubChem. Upload an SDS or skip."
+            )
+        ghs = data.get("ghs") or {}
+        cas = data.get("cas_number") or "—"
+        name = data.get("chemical_name") or chemical_name or cas
+        lines = [f"**{name}** (CAS: {cas}) — PubChem aggregated GHS (NOT a signed SDS):"]
+        if ghs.get("signal_word"):
+            lines.append(f"Signal word: {ghs['signal_word']}")
+        hcodes = ghs.get("h_codes") or []
+        if hcodes:
+            lines.append("Hazard codes: " + ", ".join(hcodes[:15]))
+        if ghs.get("pictograms"):
+            lines.append("Pictograms: " + ", ".join(ghs["pictograms"]))
+        lines.append("\n⚠ Source: PubChem aggregated GHS — not a verified supplier SDS. "
+                     "Upload the actual SDS for an authoritative safety check.")
+        return CallToolResult(
+            content=[TextContent(type="text", text="\n".join(lines))],
+            structuredContent={
+                "query": chemical_name or cas_number,
+                "cas_number": data.get("cas_number") or "",
+                "source": "pubchem",
+                "ghs": ghs,
+            },
+        )
+    except Exception as e:
+        success = False
+        error_msg = str(e)[:500]
+        raise
+    finally:
+        dur = int((time.monotonic() - t0) * 1000)
+        await _log_call("search_msds_online", [chemical_name or cas_number], dur, success,
+                        error_msg, _json.dumps({"chemical_name": chemical_name, "cas_number": cas_number}))
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get SDS Section", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)

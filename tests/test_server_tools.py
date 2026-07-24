@@ -345,6 +345,7 @@ EXPECTED_TOOLS = frozenset({
     "upload_msds_pdf",
     "batch_safety_check",
     "check_regulatory_lists",
+    "search_msds_online",
 })
 
 
@@ -360,7 +361,7 @@ def test_direct_tools_still_registered(monkeypatch):
         f"tool surface drifted: missing={EXPECTED_TOOLS - names}, "
         f"unexpected={names - EXPECTED_TOOLS}"
     )
-    assert len(EXPECTED_TOOLS) == 22
+    assert len(EXPECTED_TOOLS) == 23
 
 
 # ---------------------------------------------------------------------------
@@ -1106,4 +1107,42 @@ def test_tool_count_unchanged():
     """CI-89 must not add or remove tools — still 22 tools registered."""
     tools = asyncio.run(server.mcp.list_tools())
     names = {t.name for t in tools}
-    assert len(names) == 22, f"Expected 22 tools, got {len(names)}: {sorted(names)}"
+    assert len(names) == 23, f"Expected 23 tools, got {len(names)}: {sorted(names)}"
+
+
+def test_search_msds_online_found(monkeypatch):
+    """found → labelled PubChem result (source=pubchem, not-a-signed-SDS note)."""
+    async def fake_direct(chemical_name="", cas_number=""):
+        return {
+            "status": "found",
+            "chemical_name": "Acetonitrile",
+            "cas_number": "75-05-8",
+            "ghs": {"signal_word": "Danger", "h_codes": ["H225", "H302"],
+                    "hazard_statements": ["..."], "pictograms": ["GHS02"]},
+            "source": "pubchem",
+        }
+
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+    monkeypatch.setattr(server, "_direct_online_search", fake_direct)
+    res = asyncio.run(server.search_msds_online(chemical_name="acetonitrile"))
+
+    assert isinstance(res, CallToolResult)
+    assert res.structuredContent["source"] == "pubchem"
+    assert res.structuredContent["cas_number"] == "75-05-8"
+    text = res.content[0].text
+    assert "75-05-8" in text and "H225" in text
+    assert "not a" in text.lower() and "sds" in text.lower()  # labelled unverified
+
+
+def test_search_msds_online_not_found(monkeypatch):
+    """not_found → returns the message (no fabricated hazards)."""
+    async def fake_direct(chemical_name="", cas_number=""):
+        return {"status": "not_found", "message": "'zzz' not found on PubChem. Upload an SDS or skip."}
+
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+    monkeypatch.setattr(server, "_direct_online_search", fake_direct)
+    res = asyncio.run(server.search_msds_online(chemical_name="zzz"))
+    assert isinstance(res, str)
+    assert "not found on PubChem" in res
