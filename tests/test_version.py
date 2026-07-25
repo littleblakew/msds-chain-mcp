@@ -84,3 +84,38 @@ def test_all_json_manifests_stamped():
             assert got == want, (
                 f"{rel}: version '{got}' != VERSION '{want}' — run scripts/release.sh"
             )
+
+
+# Files whose user-facing copy states the tool count ("N tools"). These are what
+# ChatGPT / claude.ai / npm / the Claude Code + Codex plugin listings show.
+TOOL_COUNT_SURFACES = [
+    "npm-package/server.json",
+    "npm-package/README.md",
+    "plugin.json",
+    ".claude-plugin/plugin.json",
+    ".codex-plugin/plugin.json",
+]
+
+
+def test_advertised_tool_count_matches_registered():
+    """Every "N tools" claim must equal the number of tools actually registered.
+
+    scripts/release.sh stamps the VERSION but NOT the tool count, and nothing else
+    guarded it — so adding the 23rd tool (search_msds_online, SE-19) silently left
+    five user-facing surfaces advertising "22 tools", including the description
+    already published to the MCP registry. This test makes that drift fail CI.
+    """
+    import asyncio
+    import re
+
+    actual = len(asyncio.run(server.mcp.list_tools()))
+    for rel in TOOL_COUNT_SURFACES:
+        with open(os.path.join(ROOT, rel)) as f:
+            text = f.read()
+        claims = [int(n) for n in re.findall(r"\*{0,2}(\d+)\*{0,2}\s+tools\b", text)]
+        assert claims, f"{rel}: no 'N tools' claim found — update TOOL_COUNT_SURFACES"
+        for n in claims:
+            assert n == actual, (
+                f"{rel} advertises {n} tools but {actual} are registered — "
+                f"update the copy when adding/removing a tool"
+            )

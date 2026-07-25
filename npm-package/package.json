@@ -1,6 +1,6 @@
 {
   "name": "msds-chain-mcp",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "mcpName": "io.github.littleblakew/msds-chain",
   "description": "Chemical safety intelligence for AI-assisted experiment design. 22 MCP tools for compatibility, hazard, PPE, storage, waste disposal, mixing order, exposure limits, transport classification, regulatory compliance (23 lists, 10 regions), SDS version diff, PDF upload, chemical substitution, first aid, GHS labels, signed audit reports, and signed SDS PDF download URLs.",
   "keywords": [
