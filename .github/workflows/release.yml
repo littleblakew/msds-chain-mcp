@@ -14,9 +14,12 @@ name: Publish Release (npm + MCP registry)
 # scripts/release.sh --publish stays as a local fallback (uses the committed
 # macOS mcp-publisher binary); CI downloads the linux binary below.
 #
-# Auth: npm needs the NPM_TOKEN repo secret (automation/granular read+write).
-#       The MCP registry uses GitHub Actions OIDC (no secret) — the id-token
-#       permission proves ownership of the io.github.littleblakew/* namespace.
+# Auth: BOTH publishes are tokenless, via GitHub Actions OIDC (id-token: write).
+#       • npm — the package is an npm "Trusted Publisher" (npmjs.com → package →
+#         Settings, bound to littleblakew/msds-chain-mcp + this workflow filename).
+#         NPM_TOKEN is NO LONGER used: token publishing fails EOTP (2FA-on-writes)
+#         and npm is deprecating 2FA-bypassing tokens.
+#       • MCP registry — github-oidc login proves ownership of io.github.littleblakew/*.
 
 on:
   push:
@@ -28,7 +31,7 @@ on:
         required: true
 
 permissions:
-  id-token: write   # MCP registry github-oidc login
+  id-token: write   # npm trusted publishing + MCP registry github-oidc login
   contents: read
 
 env:
@@ -38,9 +41,9 @@ jobs:
   publish:
     # self-hosted azure-sea (2026-07-16): was ubuntu-latest, but the account's
     # GitHub-hosted minutes are exhausted → ubuntu-latest jobs no longer start. mcp
-    # core has runners on azure-sea (not xtest), and this job only needs node + the
-    # NPM_TOKEN secret + GitHub Actions OIDC (MCP registry github-oidc, NOT Azure) —
-    # all available on self-hosted. No AZURE_CONFIG_DIR needed (no az/azure-login here).
+    # core has runners on azure-sea (not xtest), and this job only needs node +
+    # GitHub Actions OIDC (npm trusted publishing + MCP registry github-oidc, NOT
+    # Azure) — all available on self-hosted. No AZURE_CONFIG_DIR needed (no az here).
     runs-on: [self-hosted, azure-sea]
     steps:
       - uses: actions/checkout@v5
@@ -70,13 +73,28 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      - name: npm publish (idempotent)
+      # npm's OIDC trusted publishing landed in npm 11.5.1; the bundled CLI is
+      # older, so upgrade explicitly — otherwise the publish silently falls back to
+      # token auth (which fails, see below).
+      - name: Upgrade npm (OIDC trusted publishing needs >= 11.5.1)
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      # NO NODE_AUTH_TOKEN on purpose: the package is registered as an npm "Trusted
+      # Publisher" (npmjs.com → package → Settings: littleblakew/msds-chain-mcp +
+      # release.yml), so this authenticates via the job's GitHub OIDC token
+      # (permissions.id-token: write, already set above for the MCP registry).
+      # If a token IS present npm prefers it over OIDC — and token publishing fails
+      # here with EOTP because the account requires 2FA on writes (hit on both 1.5.0
+      # and 1.5.1, each of which had to be published by hand from a browser-
+      # authenticated laptop). npm is also deprecating 2FA-bypassing tokens, so OIDC
+      # is the durable path; it adds provenance attestation for free.
+      - name: npm publish (idempotent, OIDC trusted publishing)
         working-directory: npm-package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           if npm view "msds-chain-mcp@${VERSION}" version >/dev/null 2>&1; then
             echo "npm already has msds-chain-mcp@${VERSION} — skipping publish"
