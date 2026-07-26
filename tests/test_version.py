@@ -89,6 +89,13 @@ def test_all_json_manifests_stamped():
 # Files whose user-facing copy states the tool count ("N tools"). These are what
 # ChatGPT / claude.ai / npm / the Claude Code + Codex plugin listings show.
 TOOL_COUNT_SURFACES = [
+    # The npm PAGE's description is read from this file — the most externally
+    # visible surface of them all, and the one this list originally missed.
+    # Consequence (2026-07-25): the 22→23 fix landed everywhere except here, so npm
+    # advertised "22 MCP tools" while CI stayed green; it took a manual four-way
+    # audit (CI-167) to catch. Listed first as a reminder that the guard is only
+    # worth as much as its surface list.
+    "npm-package/package.json",
     "npm-package/server.json",
     "npm-package/README.md",
     "plugin.json",
