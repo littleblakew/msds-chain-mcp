@@ -39,12 +39,24 @@ env:
 
 jobs:
   publish:
-    # self-hosted azure-sea (2026-07-16): was ubuntu-latest, but the account's
-    # GitHub-hosted minutes are exhausted → ubuntu-latest jobs no longer start. mcp
-    # core has runners on azure-sea (not xtest), and this job only needs node +
-    # GitHub Actions OIDC (npm trusted publishing + MCP registry github-oidc, NOT
-    # Azure) — all available on self-hosted. No AZURE_CONFIG_DIR needed (no az here).
-    runs-on: [self-hosted, azure-sea]
+    # MUST stay GitHub-hosted (2026-07-25): npm refuses a publish whose provenance
+    # was built on a self-hosted runner —
+    #   422 Unprocessable Entity — Error verifying sigstore provenance bundle:
+    #   Unsupported GitHub Actions runner environment: "self-hosted".
+    #   Only "github-hosted" runners are supported when publishing with provenance.
+    # and OIDC trusted publishing (adopted in d6a4702) always attaches provenance —
+    # there is no opt-out. So self-hosted + OIDC is a dead end; pick one.
+    #
+    # History: this was moved to [self-hosted, azure-sea] on 2026-07-16 because the
+    # account's GitHub-hosted minutes were exhausted. That is a real constraint, but
+    # it applied to the per-push CI jobs that actually burned the quota — those are
+    # still on self-hosted. THIS job runs a handful of times a month, so its minute
+    # cost is negligible and worth paying to keep supply-chain provenance.
+    #
+    # If GitHub-hosted minutes are exhausted again this job will not start (it will
+    # sit queued). That is a loud, obvious failure — preferable to silently shipping
+    # unattested packages. The fallback is scripts/release.sh --publish (local).
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
