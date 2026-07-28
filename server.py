@@ -71,10 +71,19 @@ TIMEOUT = 15.0        # single-chemical / pure-lookup v2 endpoints — fast, no 
 #
 # ∴ raise ONLY the multi-component tools. Deliberately NOT raised for
 # single-chemical/lookup tools (_direct_sds_section, _direct_sds_document,
-# _direct_compare_sds, _direct_online_search, _direct_emergency,
-# _direct_compliance): their p90 is <1.5s, so a longer budget cannot turn a
-# failure into a success — it can only make a genuinely broken call spin longer
-# before failing, which is a worse experience, not a better one.
+# _direct_compare_sds, _direct_online_search, _direct_emergency): their p90 is
+# <1.5s, so a longer budget cannot turn a failure into a success — it can only
+# make a genuinely broken call spin longer before failing, which is a worse
+# experience, not a better one.
+#
+# 🔴 `_direct_compliance` also stays at 15s but for the OPPOSITE reason — it is
+# NOT fast. check_regulatory_compliance's Prod p90 is 23.1s and 2 of 4 calls
+# exceeded 14.5s. It stays short because the TOOL invokes this helper in a
+# SEQUENTIAL LOOP, once per chemical, so the per-item budget MULTIPLIES:
+# 3 chemicals × 45s = 135s, far past any client ceiling. Raising it here makes
+# the tail worse, not better. The real fix is the loop itself (parallelise, or
+# cap the chemical count and say so in the response) and belongs in the tool —
+# same class as the batch_safety_check O(n²) tail.
 # 45s stays well under the Container App ingress ~256s request timeout and
 # under TIMEOUT_LLM (this is NOT the multi-turn quick-chat path).
 # ---------------------------------------------------------------------------
@@ -1937,9 +1946,9 @@ def _upload_local_path_message(pdf_source: str) -> str:
         "2. **Web upload** — go to https://msdschain.lagentbot.com, sign in with the "
         "same account, and upload the PDF there. This works for any local file.\n\n"
         "Either way the PDF is parsed into structured safety data (chemical name, CAS, "
-        "GHS classification, H-codes, PPE, storage, incompatibilities), stored under "
-        "your account so the other tools here can use it — and contributing an SDS "
-        "earns credits."
+        "GHS classification, H-codes, PPE, storage, incompatibilities) and stored under "
+        "your account, so the other tools here can use it. Contributing an SDS we do "
+        "not already hold also earns credits."
     )
 
 
