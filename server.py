@@ -42,20 +42,43 @@ API_URL = os.environ.get(
     "https://msds-chain-backend-prod.orangepond-4b408d49.southeastasia.azurecontainerapps.io",
 ).rstrip("/")
 LANG = os.environ.get("MSDS_LANG", "en")  # en | zh | ja | de | id
-TIMEOUT = 15.0        # v2 direct endpoints — fast, no LLM
-# compatibility/batch-safety pairwise checks can fall back to a serial LLM
-# escalation call per uncategorized pair (asymmetric-trust gate in
-# check_compatibility_pair — the rule engine is non-committal AND at least one
-# CAS is uncategorized). The backend now caps that at MAX_LLM_FALLBACK_PAIRS
-# (=12) serial calls per request instead of one per pair, but each capped call
-# is still a real ~1-3s+ Azure OpenAI round-trip on top of DB work — large
-# formulations (large agrochemical/biopesticide batches with many novel
-# adjuvants) can still legitimately need more than 15s. Prod evidence:
-# 9-21 chemical batch_safety_check calls all failed at ~15024ms — pinned to
-# this 15s ceiling, not a backend 5xx. Give these two pairwise-heavy tools
-# more headroom than the rest of the no-LLM v2 fast path, while staying well
-# under the Container App ingress ~256s request timeout.
-TIMEOUT_COMPAT = 45.0  # compatibility/check + batch-safety — bounded LLM fallback
+TIMEOUT = 15.0        # single-chemical / pure-lookup v2 endpoints — fast, no LLM
+# ---------------------------------------------------------------------------
+# TIMEOUT_MULTI — the budget for every v2 endpoint that takes `chemicals: list`.
+#
+# WHY these tools need more than 15s (and the single-chemical ones do not):
+# work on the backend scales with the number of components. Compatibility /
+# batch-safety additionally fall back to a serial LLM escalation call per
+# uncategorized pair (asymmetric-trust gate in check_compatibility_pair — the
+# rule engine is non-committal AND at least one CAS is uncategorized), capped at
+# MAX_LLM_FALLBACK_PAIRS (=12) serial ~1-3s Azure OpenAI round-trips. The other
+# multi-component endpoints do per-component SDS resolution (alias → CAS →
+# authoritative record), which is DB-bound but still linear in component count.
+# A single-chemical lookup does one resolution and is flat.
+#
+# Prod evidence (mcp_call_logs, all-time through 2026-07-26) — "hit 15s" means
+# duration_ms ≈ 15,0xx, i.e. pinned to this client ceiling, NOT a backend 5xx:
+#   get_chemical_risk_warnings      6/25 hit 15s (24%)  max 15,027  p90 15,024
+#   get_storage_guidance            1/7  hit 15s        max 15,022  p90  9,303
+#   get_transport_classification    1/2  hit 15s        max 15,018  p90 13,857
+#   batch_safety_check (was 45s)   27/38 ≥14.5s         max 45,026  p90 31,251
+# vs. the single-chemical / lookup tools, which are nowhere near the ceiling:
+#   search_chemical_database        0/41 hit 15s        max  8,800  p90  5,696
+#   get_sds_section                 0/39 hit 15s        max  1,499  p90    372
+# CI-176: a real user (2nd-deepest by call volume, credits to spare) hit the
+# 15s wall twice on get_chemical_risk_warnings for a 5-component excipient
+# formulation and never came back — a product failure, not a quota failure.
+#
+# ∴ raise ONLY the multi-component tools. Deliberately NOT raised for
+# single-chemical/lookup tools (_direct_sds_section, _direct_sds_document,
+# _direct_compare_sds, _direct_online_search, _direct_emergency,
+# _direct_compliance): their p90 is <1.5s, so a longer budget cannot turn a
+# failure into a success — it can only make a genuinely broken call spin longer
+# before failing, which is a worse experience, not a better one.
+# 45s stays well under the Container App ingress ~256s request timeout and
+# under TIMEOUT_LLM (this is NOT the multi-turn quick-chat path).
+# ---------------------------------------------------------------------------
+TIMEOUT_MULTI = 45.0  # every v2 endpoint taking `chemicals: list`
 # quick-chat runs up to 3 sequential gpt-5-mini turns (RAI → intent → summary); a
 # single reasoning summary legitimately takes 30-60s and an unlisted chemical was
 # measured end-to-end at ~55.7s on Prod. 45s cut those off mid-flight → httpx
@@ -426,7 +449,7 @@ def _strip_usage(data: dict) -> dict:
 
 async def _direct_compat(chemicals: list[str]) -> dict:
     """POST /api/v2/compatibility/check — direct service layer, bounded LLM fallback."""
-    async with httpx.AsyncClient(timeout=TIMEOUT_COMPAT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/compatibility/check",
             json={"chemicals": chemicals, "lang": LANG},
@@ -437,7 +460,7 @@ async def _direct_compat(chemicals: list[str]) -> dict:
 
 async def _direct_risk(chemicals: list[str]) -> dict:
     """POST /api/v2/risk-warnings — direct service layer, no LLM."""
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/risk-warnings",
             json={"chemicals": chemicals, "lang": LANG},
@@ -448,7 +471,7 @@ async def _direct_risk(chemicals: list[str]) -> dict:
 
 async def _direct_batch(chemicals: list[str]) -> dict:
     """POST /api/v2/batch-safety — combined compat + risk, bounded LLM fallback."""
-    async with httpx.AsyncClient(timeout=TIMEOUT_COMPAT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/batch-safety",
             json={"chemicals": chemicals, "lang": LANG},
@@ -459,7 +482,7 @@ async def _direct_batch(chemicals: list[str]) -> dict:
 
 async def _direct_ppe(chemicals: list[str]) -> dict:
     """POST /api/v2/ppe-recommendation — direct, no LLM."""
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/ppe-recommendation",
             json={"chemicals": chemicals, "lang": LANG},
@@ -470,7 +493,7 @@ async def _direct_ppe(chemicals: list[str]) -> dict:
 
 async def _direct_storage(chemicals: list[str]) -> dict:
     """POST /api/v2/storage-guidance — direct, no LLM."""
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/storage-guidance",
             json={"chemicals": chemicals, "lang": LANG},
@@ -514,7 +537,7 @@ async def _direct_online_search(chemical_name: str = "", cas_number: str = "") -
 
 async def _direct_exposure(chemicals: list[str], region: str | None = None) -> dict:
     """POST /api/v2/exposure-limits — direct, no LLM."""
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         payload: dict = {"chemicals": chemicals, "lang": LANG}
         if region:
             payload["region"] = region
@@ -528,7 +551,7 @@ async def _direct_exposure(chemicals: list[str], region: str | None = None) -> d
 
 async def _direct_transport(chemicals: list[str]) -> dict:
     """POST /api/v2/transport-classification — direct, no LLM."""
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/transport-classification",
             json={"chemicals": chemicals, "lang": LANG},
@@ -539,7 +562,7 @@ async def _direct_transport(chemicals: list[str]) -> dict:
 
 async def _direct_waste(chemicals: list[str]) -> dict:
     """POST /api/v2/waste-disposal — direct, no LLM."""
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/waste-disposal",
             json={"chemicals": chemicals, "lang": LANG},

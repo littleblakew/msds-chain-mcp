@@ -6,6 +6,7 @@ dependency — this repo's CI has no async plugin configured).
 """
 import asyncio
 
+import httpx
 import server
 from mcp.types import CallToolResult
 
@@ -249,18 +250,94 @@ def test_timeout_llm_budget_exceeds_slow_reasoning_turn():
     assert server.TIMEOUT_LLM >= 90.0
 
 
-def test_timeout_compat_exceeds_default_fast_path_timeout():
-    """check_chemical_compatibility / batch_safety_check can each make up to
-    MAX_LLM_FALLBACK_PAIRS (backend, compatibility_engine.py) serial LLM-escalation
-    calls for uncategorized chemical pairs, on top of DB work — a real ~1-3s+
-    round-trip per call. Prod evidence: 9-21 chemical batch_safety_check calls all
-    failed at ~15024ms, pinned to the plain TIMEOUT=15.0 ceiling. TIMEOUT_COMPAT
-    must give these two pairwise-heavy tools more headroom than the rest of the
-    no-LLM v2 fast path, but must stay under TIMEOUT_LLM (it is NOT the
+def test_timeout_multi_exceeds_default_fast_path_timeout():
+    """Multi-component v2 endpoints do work linear in component count (per-component
+    SDS resolution; compatibility/batch additionally make up to MAX_LLM_FALLBACK_PAIRS
+    serial LLM-escalation round-trips). Prod evidence: 9-21 chemical batch_safety_check
+    and 5-component get_chemical_risk_warnings calls failed at ~15,02x ms — pinned to
+    the plain TIMEOUT=15.0 client ceiling, not a backend 5xx. TIMEOUT_MULTI must give
+    them more headroom than the fast path, but stay under TIMEOUT_LLM (it is NOT the
     multi-turn quick-chat budget)."""
-    assert server.TIMEOUT_COMPAT > server.TIMEOUT
-    assert server.TIMEOUT_COMPAT < server.TIMEOUT_LLM
-    assert server.TIMEOUT_COMPAT >= 30.0
+    assert server.TIMEOUT_MULTI > server.TIMEOUT
+    assert server.TIMEOUT_MULTI < server.TIMEOUT_LLM
+    assert server.TIMEOUT_MULTI >= 30.0
+
+
+# ---------------------------------------------------------------------------
+# CI-176: the long budget must cover EVERY multi-component tool, not just the two
+# that happened to be raised first. A user hit the 15s wall twice on
+# get_chemical_risk_warnings (5-component excipient formulation) and churned.
+# Conversely single-chemical / pure-lookup tools must stay on the short budget:
+# their Prod p90 is <1.5s, so a longer budget can only make a broken call spin
+# longer, never turn a failure into a success.
+# ---------------------------------------------------------------------------
+
+# helper name -> (call args, expects long budget?)
+_DIRECT_TIMEOUT_EXPECTATIONS = {
+    # multi-component: signature takes `chemicals: list[str]`
+    "_direct_compat": ((["acetone", "ethanol"],), True),
+    "_direct_risk": ((["acetone", "ethanol"],), True),
+    "_direct_batch": ((["acetone", "ethanol"],), True),
+    "_direct_ppe": ((["acetone", "ethanol"],), True),
+    "_direct_storage": ((["acetone", "ethanol"],), True),
+    "_direct_exposure": ((["acetone", "ethanol"],), True),
+    "_direct_transport": ((["acetone", "ethanol"],), True),
+    "_direct_waste": ((["acetone", "ethanol"],), True),
+    # single-chemical / pure lookup: stay on the fast budget
+    "_direct_emergency": (("acetone", "spill"), False),
+    "_direct_compliance": (("acetone", ["EU"]), False),
+    "_direct_online_search": (("acetone",), False),
+    "_direct_sds_section": (("acetone", 2), False),
+    "_direct_compare_sds": (("acetone",), False),
+    "_direct_sds_document": (("acetone",), False),
+}
+
+
+class _TimeoutCapturingClient:
+    """Stand-in for httpx.AsyncClient that records the configured timeout and
+    returns an empty-JSON 200 for any get/post."""
+
+    captured: list = []
+
+    def __init__(self, *a, timeout=None, **kw):
+        type(self).captured.append(timeout)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def _respond(self, *a, **kw):
+        return httpx.Response(200, json={}, request=httpx.Request("POST", "http://test"))
+
+    post = _respond
+    get = _respond
+
+
+def test_every_multi_component_direct_helper_uses_long_timeout(monkeypatch):
+    """Behavioral, not just constant-level: actually invoke each direct helper and
+    assert which budget it configured on its httpx client."""
+    for name, (args, wants_long) in _DIRECT_TIMEOUT_EXPECTATIONS.items():
+        _TimeoutCapturingClient.captured = []
+        monkeypatch.setattr(server.httpx, "AsyncClient", _TimeoutCapturingClient)
+        asyncio.run(getattr(server, name)(*args))
+        assert len(_TimeoutCapturingClient.captured) == 1, name
+        got = _TimeoutCapturingClient.captured[0]
+        expected = server.TIMEOUT_MULTI if wants_long else server.TIMEOUT
+        assert got == expected, (
+            f"{name}: expected timeout={expected} "
+            f"({'multi-component' if wants_long else 'single/lookup'}), got {got}"
+        )
+
+
+def test_direct_timeout_expectations_cover_every_direct_helper():
+    """Guard against a new _direct_* helper silently defaulting to the wrong budget."""
+    helpers = {n for n in dir(server) if n.startswith("_direct_")}
+    assert helpers == set(_DIRECT_TIMEOUT_EXPECTATIONS), (
+        f"unclassified: {helpers - set(_DIRECT_TIMEOUT_EXPECTATIONS)}, "
+        f"stale: {set(_DIRECT_TIMEOUT_EXPECTATIONS) - helpers}"
+    )
 
 
 # ---------------------------------------------------------------------------
