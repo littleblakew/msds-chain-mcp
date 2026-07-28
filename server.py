@@ -42,20 +42,52 @@ API_URL = os.environ.get(
     "https://msds-chain-backend-prod.orangepond-4b408d49.southeastasia.azurecontainerapps.io",
 ).rstrip("/")
 LANG = os.environ.get("MSDS_LANG", "en")  # en | zh | ja | de | id
-TIMEOUT = 15.0        # v2 direct endpoints — fast, no LLM
-# compatibility/batch-safety pairwise checks can fall back to a serial LLM
-# escalation call per uncategorized pair (asymmetric-trust gate in
-# check_compatibility_pair — the rule engine is non-committal AND at least one
-# CAS is uncategorized). The backend now caps that at MAX_LLM_FALLBACK_PAIRS
-# (=12) serial calls per request instead of one per pair, but each capped call
-# is still a real ~1-3s+ Azure OpenAI round-trip on top of DB work — large
-# formulations (large agrochemical/biopesticide batches with many novel
-# adjuvants) can still legitimately need more than 15s. Prod evidence:
-# 9-21 chemical batch_safety_check calls all failed at ~15024ms — pinned to
-# this 15s ceiling, not a backend 5xx. Give these two pairwise-heavy tools
-# more headroom than the rest of the no-LLM v2 fast path, while staying well
-# under the Container App ingress ~256s request timeout.
-TIMEOUT_COMPAT = 45.0  # compatibility/check + batch-safety — bounded LLM fallback
+TIMEOUT = 15.0        # single-chemical / pure-lookup v2 endpoints — fast, no LLM
+# ---------------------------------------------------------------------------
+# TIMEOUT_MULTI — the budget for every v2 endpoint that takes `chemicals: list`.
+#
+# WHY these tools need more than 15s (and the single-chemical ones do not):
+# work on the backend scales with the number of components. Compatibility /
+# batch-safety additionally fall back to a serial LLM escalation call per
+# uncategorized pair (asymmetric-trust gate in check_compatibility_pair — the
+# rule engine is non-committal AND at least one CAS is uncategorized), capped at
+# MAX_LLM_FALLBACK_PAIRS (=12) serial ~1-3s Azure OpenAI round-trips. The other
+# multi-component endpoints do per-component SDS resolution (alias → CAS →
+# authoritative record), which is DB-bound but still linear in component count.
+# A single-chemical lookup does one resolution and is flat.
+#
+# Prod evidence (mcp_call_logs, all-time through 2026-07-26) — "hit 15s" means
+# duration_ms ≈ 15,0xx, i.e. pinned to this client ceiling, NOT a backend 5xx:
+#   get_chemical_risk_warnings      6/25 hit 15s (24%)  max 15,027  p90 15,024
+#   get_storage_guidance            1/7  hit 15s        max 15,022  p90  9,303
+#   get_transport_classification    1/2  hit 15s        max 15,018  p90 13,857
+#   batch_safety_check (was 45s)   27/38 ≥14.5s         max 45,026  p90 31,251
+# vs. the single-chemical / lookup tools, which are nowhere near the ceiling:
+#   search_chemical_database        0/41 hit 15s        max  8,800  p90  5,696
+#   get_sds_section                 0/39 hit 15s        max  1,499  p90    372
+# CI-176: a real user (2nd-deepest by call volume, credits to spare) hit the
+# 15s wall twice on get_chemical_risk_warnings for a 5-component excipient
+# formulation and never came back — a product failure, not a quota failure.
+#
+# ∴ raise ONLY the multi-component tools. Deliberately NOT raised for
+# single-chemical/lookup tools (_direct_sds_section, _direct_sds_document,
+# _direct_compare_sds, _direct_online_search, _direct_emergency): their p90 is
+# <1.5s, so a longer budget cannot turn a failure into a success — it can only
+# make a genuinely broken call spin longer before failing, which is a worse
+# experience, not a better one.
+#
+# 🔴 `_direct_compliance` also stays at 15s but for the OPPOSITE reason — it is
+# NOT fast. check_regulatory_compliance's Prod p90 is 23.1s and 2 of 4 calls
+# exceeded 14.5s. It stays short because the TOOL invokes this helper in a
+# SEQUENTIAL LOOP, once per chemical, so the per-item budget MULTIPLIES:
+# 3 chemicals × 45s = 135s, far past any client ceiling. Raising it here makes
+# the tail worse, not better. The real fix is the loop itself (parallelise, or
+# cap the chemical count and say so in the response) and belongs in the tool —
+# same class as the batch_safety_check O(n²) tail.
+# 45s stays well under the Container App ingress ~256s request timeout and
+# under TIMEOUT_LLM (this is NOT the multi-turn quick-chat path).
+# ---------------------------------------------------------------------------
+TIMEOUT_MULTI = 45.0  # every v2 endpoint taking `chemicals: list`
 # quick-chat runs up to 3 sequential gpt-5-mini turns (RAI → intent → summary); a
 # single reasoning summary legitimately takes 30-60s and an unlisted chemical was
 # measured end-to-end at ~55.7s on Prod. 45s cut those off mid-flight → httpx
@@ -426,7 +458,7 @@ def _strip_usage(data: dict) -> dict:
 
 async def _direct_compat(chemicals: list[str]) -> dict:
     """POST /api/v2/compatibility/check — direct service layer, bounded LLM fallback."""
-    async with httpx.AsyncClient(timeout=TIMEOUT_COMPAT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/compatibility/check",
             json={"chemicals": chemicals, "lang": LANG},
@@ -437,7 +469,7 @@ async def _direct_compat(chemicals: list[str]) -> dict:
 
 async def _direct_risk(chemicals: list[str]) -> dict:
     """POST /api/v2/risk-warnings — direct service layer, no LLM."""
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/risk-warnings",
             json={"chemicals": chemicals, "lang": LANG},
@@ -448,7 +480,7 @@ async def _direct_risk(chemicals: list[str]) -> dict:
 
 async def _direct_batch(chemicals: list[str]) -> dict:
     """POST /api/v2/batch-safety — combined compat + risk, bounded LLM fallback."""
-    async with httpx.AsyncClient(timeout=TIMEOUT_COMPAT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/batch-safety",
             json={"chemicals": chemicals, "lang": LANG},
@@ -459,7 +491,7 @@ async def _direct_batch(chemicals: list[str]) -> dict:
 
 async def _direct_ppe(chemicals: list[str]) -> dict:
     """POST /api/v2/ppe-recommendation — direct, no LLM."""
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/ppe-recommendation",
             json={"chemicals": chemicals, "lang": LANG},
@@ -470,7 +502,7 @@ async def _direct_ppe(chemicals: list[str]) -> dict:
 
 async def _direct_storage(chemicals: list[str]) -> dict:
     """POST /api/v2/storage-guidance — direct, no LLM."""
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/storage-guidance",
             json={"chemicals": chemicals, "lang": LANG},
@@ -514,7 +546,7 @@ async def _direct_online_search(chemical_name: str = "", cas_number: str = "") -
 
 async def _direct_exposure(chemicals: list[str], region: str | None = None) -> dict:
     """POST /api/v2/exposure-limits — direct, no LLM."""
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         payload: dict = {"chemicals": chemicals, "lang": LANG}
         if region:
             payload["region"] = region
@@ -528,7 +560,7 @@ async def _direct_exposure(chemicals: list[str], region: str | None = None) -> d
 
 async def _direct_transport(chemicals: list[str]) -> dict:
     """POST /api/v2/transport-classification — direct, no LLM."""
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/transport-classification",
             json={"chemicals": chemicals, "lang": LANG},
@@ -539,7 +571,7 @@ async def _direct_transport(chemicals: list[str]) -> dict:
 
 async def _direct_waste(chemicals: list[str]) -> dict:
     """POST /api/v2/waste-disposal — direct, no LLM."""
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/waste-disposal",
             json={"chemicals": chemicals, "lang": LANG},
@@ -1888,6 +1920,38 @@ async def compare_sds_versions(
                         _json.dumps({"chemical": chemical, "supplier": supplier, "region": region}))
 
 
+# ---------------------------------------------------------------------------
+# CI-169: upload_msds_pdf resolves `pdf_source` on the machine running THIS
+# server. For the hosted core that is our container — never the caller's laptop
+# and never the client's sandbox — so os.path.isfile() can only ever fail for a
+# remote client. Prod evidence: our deepest user called upload_msds_pdf twice on
+# 2026-07-26 (10:20, 10:21) and landed here both times — duration_ms=0, zero rows
+# in demo.msds_records, and (before this fix) success=t with an empty
+# error_message, so the failure was invisible to us and unexplained to him.
+# CI-101 telemetry says 100% of remote MCP traffic is chatgpt.com, i.e. this was
+# the entire contribution path for every remote user. The reply must therefore
+# name the constraint and give a next step the caller can actually take.
+# ---------------------------------------------------------------------------
+def _upload_local_path_message(pdf_source: str) -> str:
+    return (
+        f"❌ Could not read `{pdf_source}`.\n\n"
+        "This MCP server runs on MSDS Chain's servers, not on your machine, so it "
+        "cannot open files on your computer or inside your chat client's sandbox. "
+        "(A local file path only works for a self-hosted stdio server running on the "
+        "same machine as the file.)\n\n"
+        "Two ways to get this SDS in:\n"
+        "1. **Public link** — if the PDF has a publicly reachable HTTPS URL (supplier "
+        "site, or a share link that needs no login), call `upload_msds_pdf` again with "
+        "that URL and it will be fetched and parsed right here.\n"
+        "2. **Web upload** — go to https://msdschain.lagentbot.com, sign in with the "
+        "same account, and upload the PDF there. This works for any local file.\n\n"
+        "Either way the PDF is parsed into structured safety data (chemical name, CAS, "
+        "GHS classification, H-codes, PPE, storage, incompatibilities) and stored under "
+        "your account, so the other tools here can use it. Contributing an SDS we do "
+        "not already hold also earns credits."
+    )
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Upload & Parse MSDS PDF", readOnlyHint=False, destructiveHint=False, openWorldHint=False), structured_output=False)
 async def upload_msds_pdf(
     pdf_source: str,
@@ -1907,8 +1971,15 @@ async def upload_msds_pdf(
     Requires MSDS_API_KEY — the parsed data is stored under your account.
 
     Args:
-        pdf_source:      Either a local file path (e.g. "/tmp/acetone_sds.pdf")
-                         or an HTTPS URL pointing to a publicly accessible PDF.
+        pdf_source:      A publicly reachable HTTPS URL of the PDF — this is the
+                         only form that works from a REMOTE MCP client (ChatGPT,
+                         claude.ai, any hosted client), because the server reads
+                         the file on ITS OWN filesystem, not the user's. A local
+                         file path (e.g. "/tmp/acetone_sds.pdf") works only for a
+                         self-hosted stdio server running on the same machine as
+                         the file. Do NOT pass a path from the user's machine or
+                         from a client-side sandbox to the hosted server — it will
+                         not exist there; send the user to the web uploader instead.
         session_id:      Existing session ID to attach this upload to. If omitted,
                          a new session is created automatically.
         experiment_name: Label for the auto-created session (ignored if
@@ -1923,7 +1994,13 @@ async def upload_msds_pdf(
     error_msg = None
     success = True
     try:
+        # Every early return below is a FAILED upload: nothing is parsed and nothing
+        # is stored. They must be logged success=False — otherwise they inflate the
+        # mcp_call_logs success rate and we never see them (CI-169, same class as
+        # the CI-83 quick-chat-timeout fix).
         if not get_caller_credential():
+            success = False
+            error_msg = "no caller credential"
             return (
                 "upload_msds_pdf requires an authenticated API key so the record "
                 "is stored under your account. Get one at https://msdschain.lagentbot.com "
@@ -1949,13 +2026,17 @@ async def upload_msds_pdf(
         else:
             path = _os.path.expanduser(pdf_source)
             if not _os.path.isfile(path):
-                return f"File not found: {pdf_source}"
+                success = False
+                error_msg = "local file path not readable by server (remote client?)"
+                return _upload_local_path_message(pdf_source)
             with open(path, "rb") as f:
                 pdf_bytes = f.read()
             filename = _os.path.basename(path)
 
         if not pdf_bytes:
-            return "Could not read PDF content — file is empty."
+            success = False
+            error_msg = "empty pdf content"
+            return "Could not read PDF content — the file is empty (0 bytes)."
 
         # 2. Ensure session exists
         sid = session_id
