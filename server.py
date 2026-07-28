@@ -1911,6 +1911,38 @@ async def compare_sds_versions(
                         _json.dumps({"chemical": chemical, "supplier": supplier, "region": region}))
 
 
+# ---------------------------------------------------------------------------
+# CI-169: upload_msds_pdf resolves `pdf_source` on the machine running THIS
+# server. For the hosted core that is our container — never the caller's laptop
+# and never the client's sandbox — so os.path.isfile() can only ever fail for a
+# remote client. Prod evidence: our deepest user called upload_msds_pdf twice on
+# 2026-07-26 (10:20, 10:21) and landed here both times — duration_ms=0, zero rows
+# in demo.msds_records, and (before this fix) success=t with an empty
+# error_message, so the failure was invisible to us and unexplained to him.
+# CI-101 telemetry says 100% of remote MCP traffic is chatgpt.com, i.e. this was
+# the entire contribution path for every remote user. The reply must therefore
+# name the constraint and give a next step the caller can actually take.
+# ---------------------------------------------------------------------------
+def _upload_local_path_message(pdf_source: str) -> str:
+    return (
+        f"❌ Could not read `{pdf_source}`.\n\n"
+        "This MCP server runs on MSDS Chain's servers, not on your machine, so it "
+        "cannot open files on your computer or inside your chat client's sandbox. "
+        "(A local file path only works for a self-hosted stdio server running on the "
+        "same machine as the file.)\n\n"
+        "Two ways to get this SDS in:\n"
+        "1. **Public link** — if the PDF has a publicly reachable HTTPS URL (supplier "
+        "site, or a share link that needs no login), call `upload_msds_pdf` again with "
+        "that URL and it will be fetched and parsed right here.\n"
+        "2. **Web upload** — go to https://msdschain.lagentbot.com, sign in with the "
+        "same account, and upload the PDF there. This works for any local file.\n\n"
+        "Either way the PDF is parsed into structured safety data (chemical name, CAS, "
+        "GHS classification, H-codes, PPE, storage, incompatibilities), stored under "
+        "your account so the other tools here can use it — and contributing an SDS "
+        "earns credits."
+    )
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Upload & Parse MSDS PDF", readOnlyHint=False, destructiveHint=False, openWorldHint=False), structured_output=False)
 async def upload_msds_pdf(
     pdf_source: str,
@@ -1930,8 +1962,15 @@ async def upload_msds_pdf(
     Requires MSDS_API_KEY — the parsed data is stored under your account.
 
     Args:
-        pdf_source:      Either a local file path (e.g. "/tmp/acetone_sds.pdf")
-                         or an HTTPS URL pointing to a publicly accessible PDF.
+        pdf_source:      A publicly reachable HTTPS URL of the PDF — this is the
+                         only form that works from a REMOTE MCP client (ChatGPT,
+                         claude.ai, any hosted client), because the server reads
+                         the file on ITS OWN filesystem, not the user's. A local
+                         file path (e.g. "/tmp/acetone_sds.pdf") works only for a
+                         self-hosted stdio server running on the same machine as
+                         the file. Do NOT pass a path from the user's machine or
+                         from a client-side sandbox to the hosted server — it will
+                         not exist there; send the user to the web uploader instead.
         session_id:      Existing session ID to attach this upload to. If omitted,
                          a new session is created automatically.
         experiment_name: Label for the auto-created session (ignored if
@@ -1946,7 +1985,13 @@ async def upload_msds_pdf(
     error_msg = None
     success = True
     try:
+        # Every early return below is a FAILED upload: nothing is parsed and nothing
+        # is stored. They must be logged success=False — otherwise they inflate the
+        # mcp_call_logs success rate and we never see them (CI-169, same class as
+        # the CI-83 quick-chat-timeout fix).
         if not get_caller_credential():
+            success = False
+            error_msg = "no caller credential"
             return (
                 "upload_msds_pdf requires an authenticated API key so the record "
                 "is stored under your account. Get one at https://msdschain.lagentbot.com "
@@ -1972,13 +2017,17 @@ async def upload_msds_pdf(
         else:
             path = _os.path.expanduser(pdf_source)
             if not _os.path.isfile(path):
-                return f"File not found: {pdf_source}"
+                success = False
+                error_msg = "local file path not readable by server (remote client?)"
+                return _upload_local_path_message(pdf_source)
             with open(path, "rb") as f:
                 pdf_bytes = f.read()
             filename = _os.path.basename(path)
 
         if not pdf_bytes:
-            return "Could not read PDF content — file is empty."
+            success = False
+            error_msg = "empty pdf content"
+            return "Could not read PDF content — the file is empty (0 bytes)."
 
         # 2. Ensure session exists
         sid = session_id

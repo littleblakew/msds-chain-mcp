@@ -1223,3 +1223,89 @@ def test_search_msds_online_not_found(monkeypatch):
     res = asyncio.run(server.search_msds_online(chemical_name="zzz"))
     assert isinstance(res, str)
     assert "not found on PubChem" in res
+
+
+# ---------------------------------------------------------------------------
+# CI-169: upload_msds_pdf failure paths must log success=False AND be actionable
+#
+# The hosted core resolves pdf_source on ITS OWN filesystem, so a remote client's
+# local path can never exist. Prod: the deepest user called it twice, got the
+# silent `File not found` string back, and it was recorded as success=t /
+# duration_ms=0 with zero rows written. A non-raising early return is still a
+# failed upload — it must not inflate the success rate, and it must tell the
+# caller what to do instead.
+# ---------------------------------------------------------------------------
+
+def test_upload_missing_local_file_logs_failure(monkeypatch, tmp_path):
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    missing = str(tmp_path / "definitely-not-here.pdf")
+    res = asyncio.run(server.upload_msds_pdf(missing))
+
+    assert isinstance(res, str)
+    assert len(captured) == 1
+    assert captured[0]["tool_name"] == "upload_msds_pdf"
+    assert captured[0]["success"] is False, "unreadable path must not count as success"
+    assert captured[0]["error_message"]
+
+
+def test_upload_missing_local_file_message_is_actionable(tmp_path):
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+
+    res = asyncio.run(server.upload_msds_pdf(str(tmp_path / "nope.pdf")))
+    low = res.lower()
+    # names the constraint (server-side filesystem, not the caller's)
+    assert "server" in low and ("your machine" in low or "your computer" in low)
+    # offers both routes a remote caller can actually take
+    assert "https" in low and "msdschain.lagentbot.com" in low
+    assert "url" in low
+    # says what they get out of it
+    assert "credit" in low
+    # and is not the old bare error
+    assert not res.startswith("File not found:")
+
+
+def test_upload_empty_file_logs_failure(monkeypatch, tmp_path):
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    empty = tmp_path / "empty.pdf"
+    empty.write_bytes(b"")
+    res = asyncio.run(server.upload_msds_pdf(str(empty)))
+
+    assert isinstance(res, str)
+    assert captured[0]["success"] is False
+    assert captured[0]["error_message"] == "empty pdf content"
+
+
+def test_upload_without_credential_logs_failure(monkeypatch):
+    from request_identity import set_caller_credential
+    set_caller_credential(None)
+
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    try:
+        res = asyncio.run(server.upload_msds_pdf("/tmp/whatever.pdf"))
+    finally:
+        set_caller_credential("sk-msds-test")  # don't leak the cleared credential
+
+    assert isinstance(res, str) and "API key" in res
+    assert captured[0]["success"] is False
+    assert captured[0]["error_message"] == "no caller credential"
+
+
+def test_upload_docstring_warns_remote_clients_about_local_paths():
+    """The tool description is what an LLM client reads before choosing pdf_source.
+    It must steer remote callers to a URL / the web uploader, not a local path."""
+    doc = server.upload_msds_pdf.__doc__.lower()
+    assert "remote" in doc and "url" in doc
+    assert "self-hosted" in doc or "stdio" in doc
