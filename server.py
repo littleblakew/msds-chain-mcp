@@ -1961,7 +1961,7 @@ async def upload_msds_pdf(
     """
     Upload an MSDS/SDS PDF file to MSDS Chain and get AI-parsed safety data.
 
-    Parses the PDF with GPT-4o-mini to extract: chemical name, CAS number,
+    Parses the PDF with an LLM to extract: chemical name, CAS number,
     GHS hazard classification, NFPA ratings, flash point, LD50, H-codes,
     PPE requirements, storage conditions, incompatibilities, and safety rules.
 
