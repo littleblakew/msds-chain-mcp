@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "msds-chain",
-      "description": "22 chemical safety tools — compatibility, hazard, PPE, storage, waste disposal, mixing order, regulatory compliance, and signed audit reports",
+      "description": "23 chemical safety tools — compatibility, hazard, PPE, storage, waste disposal, mixing order, regulatory compliance, and signed audit reports",
       "source": "."
     }
   ]

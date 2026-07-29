@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "msds-chain",
-      "description": "22 chemical safety tools + Claude Code Skill for compatibility, hazard, PPE, storage, waste disposal, mixing order, exposure limits, transport classification, regulatory compliance (23 lists, 10 regions), and signed audit reports.",
+      "description": "23 chemical safety tools + Claude Code Skill for compatibility, hazard, PPE, storage, waste disposal, mixing order, exposure limits, transport classification, regulatory compliance (23 lists, 10 regions), and signed audit reports.",
       "source": "./"
     }
   ]

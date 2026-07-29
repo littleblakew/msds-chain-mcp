@@ -101,6 +101,13 @@ TOOL_COUNT_SURFACES = [
     "plugin.json",
     ".claude-plugin/plugin.json",
     ".codex-plugin/plugin.json",
+    # 2026-07-29: these two were ALSO missing — both still advertised "22 chemical
+    # safety tools" after the 22→23 fix. Same failure mode the comment above warns
+    # about, twice over: the surface list was short AND the regex below only matched
+    # a bare "N tools", so "N chemical safety tools" slipped through even where it
+    # was listed. Widened both.
+    ".claude-plugin/marketplace.json",
+    ".agents/plugins/marketplace.json",
 ]
 
 
@@ -119,7 +126,14 @@ def test_advertised_tool_count_matches_registered():
     for rel in TOOL_COUNT_SURFACES:
         with open(os.path.join(ROOT, rel)) as f:
             text = f.read()
-        claims = [int(n) for n in re.findall(r"\*{0,2}(\d+)\*{0,2}\s+tools\b", text)]
+        # allow a few qualifier words between the number and "tools"
+        # ("23 tools", "23 MCP tools", "23 chemical safety tools" all count)
+        claims = [
+            int(n)
+            for n in re.findall(
+                r"\*{0,2}(\d+)\*{0,2}\s+(?:[\w-]+\s+){0,3}tools\b", text
+            )
+        ]
         assert claims, f"{rel}: no 'N tools' claim found — update TOOL_COUNT_SURFACES"
         for n in claims:
             assert n == actual, (
