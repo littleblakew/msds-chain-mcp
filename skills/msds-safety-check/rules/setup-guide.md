@@ -16,10 +16,10 @@ Prompt the user:
 > The MSDS Chain MCP server is not configured yet. To enable chemical safety tools, run:
 >
 > ```bash
-> claude mcp add msds-chain --transport sse --url https://mcp.lagentbot.com/sse
+> claude mcp add msds-chain --transport http https://mcp.lagentbot.com/mcp
 > ```
 >
-> Then restart Claude Code. This connects to MSDS Chain's cloud API (free tier: 100 calls/month, no API key needed for basic queries).
+> Then restart Claude Code. This connects to MSDS Chain's cloud API (free tier: 100 calls/month, no API key needed for basic queries). For older clients that only speak SSE, use `--transport sse --url https://mcp.lagentbot.com/sse` instead.
 >
 > For local/offline use:
 > ```bash
@@ -56,7 +56,7 @@ When the user triggers one of these tools without an API key, prompt:
 > 3. Add the key to your MCP config:
 >    ```bash
 >    claude mcp remove msds-chain
->    claude mcp add msds-chain --transport sse --url https://mcp.lagentbot.com/sse -e MSDS_API_KEY=sk-msds-your-key
+>    claude mcp add msds-chain --transport http https://mcp.lagentbot.com/mcp -e MSDS_API_KEY=sk-msds-your-key
 >    ```
 > 4. Restart Claude Code
 
@@ -69,7 +69,7 @@ The MCP server supports 5 languages: English (en), Chinese (zh), Japanese (ja), 
 To set the default language:
 ```bash
 claude mcp remove msds-chain
-claude mcp add msds-chain --transport sse --url https://mcp.lagentbot.com/sse -e MSDS_LANG=zh
+claude mcp add msds-chain --transport http https://mcp.lagentbot.com/mcp -e MSDS_LANG=zh
 ```
 
 However, the skill should match the user's conversation language regardless of this setting.

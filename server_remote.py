@@ -56,8 +56,13 @@ TRANSPORT = os.environ.get("MSDS_MCP_TRANSPORT", "streamable-http")  # kept for 
 
 
 async def health(request: Request) -> JSONResponse:
-    """Health check endpoint for container orchestration."""
-    return JSONResponse({"status": "ok", "tools": 22})
+    """Health check endpoint for container orchestration.
+
+    Tool count is read from the live FastMCP registry (tools are registered on
+    `mcp` in server.py) so it never drifts when tools are added or removed.
+    """
+    tools = await mcp.list_tools()
+    return JSONResponse({"status": "ok", "tools": len(tools)})
 
 
 # ---------------------------------------------------------------------------

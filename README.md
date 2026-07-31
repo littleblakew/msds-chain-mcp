@@ -18,7 +18,7 @@ When you use Claude to plan a synthesis route or set up an Opentrons protocol, s
 - Verify compliance with EU REACH, US OSHA/TSCA, and 7 other jurisdictions
 - Generate signed audit reports for GLP/GMP compliance
 
-## Tools (22)
+## Tools (23)
 
 | Tool | Description |
 |------|-------------|
@@ -319,7 +319,7 @@ Industry-sourced, AI-verified, and cryptographically signed.
 ```
 Your AI Agent                  MSDS Chain MCP Server
 ┌──────────────────┐           ┌─────────────────────────┐
-│ Claude Code      │           │ 22 Safety Tools         │
+│ Claude Code      │           │ 23 Safety Tools         │
 │ Cursor / pi      │──MCP────▶│   ↓                     │
 │ Any MCP client   │           │ ChainSDS Platform       │
 └──────────────────┘           └─────────────────────────┘
@@ -342,7 +342,7 @@ npx @modelcontextprotocol/inspector python server.py
 |---------|--------------|-----|
 | `401 Unauthorized` on connect | Missing or invalid API key | Verify the `Authorization: Bearer sk-msds-...` header (or `MSDS_API_KEY` env var). Generate a fresh key at [msdschain.lagentbot.com](https://msdschain.lagentbot.com) → API Keys. |
 | Tools don't appear in the client | MCP server not loaded | Fully restart the client after adding the server. Confirm `msds-chain` shows in the MCP/tools list. |
-| Connection drops or times out | Wrong transport / endpoint | Use the SSE endpoint `https://mcp.lagentbot.com/sse`. Check `GET /health` returns `{"status":"ok","tools":22}`. |
+| Connection drops or times out | Wrong transport / endpoint | Prefer the streamable HTTP endpoint `https://mcp.lagentbot.com/mcp` (SSE sessions can drop when the server redeploys). Check `GET /health` returns `{"status":"ok","tools":23}`. |
 | `Quota exceeded` / 429 | Monthly call limit hit | Free keys are limited; upgrade your plan or wait for the monthly reset. |
 | Empty results for a known chemical | Name not matched | Retry with the CAS number or a common synonym; `search_chemical_database` accepts name, synonym, or CAS. |
 | OAuth login fails in a browser client | OAuth metadata unreachable (hosted gateway only — self-hosted core has no OAuth) | Confirm `GET https://mcp.lagentbot.com/.well-known/oauth-authorization-server` returns 200; the client should auto-discover the authorize/token endpoints. If self-hosting `server_remote.py` directly, skip OAuth and use a static `Authorization: Bearer` key instead. |

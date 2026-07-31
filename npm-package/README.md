@@ -31,7 +31,7 @@ Then run `/mcp` and authenticate (browser sign-in). The legacy SSE endpoint
 
 Get a free API key (100 calls/month) at [msdschain.lagentbot.com](https://msdschain.lagentbot.com) to unlock all tools.
 
-## Tools (22)
+## Tools (23)
 
 | Tool | Description |
 |------|-------------|
