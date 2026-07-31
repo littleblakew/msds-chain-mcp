@@ -984,8 +984,22 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
                 header += f"  {trace_label}"
             header += _inline_sds(doc_lut, item.get("chemical_name"), item.get("cas"))  # CI-89-inline
             lines.append(header)
-            lines.append(f"- Signal word: **{item.get('signal_word', 'N/A')}**")
-            lines.append(f"- Minimum PPE level: **{item.get('minimum_ppe_level', 'N/A')}**")
+            lines.append(f"- Signal word: **{item.get('signal_word') or 'N/A'}**")
+            # CI-243: the backend now returns null when the SDS parsed no hazards at
+            # all. `.get(k, 'N/A')` does NOT catch that — the key exists, its value is
+            # None — so this rendered the literal word "None" as if it were a level.
+            # Absence of a measurement must read as absence, and must say so loudly
+            # enough that a model relaying this does not fill the gap itself.
+            if item.get("insufficient_hazard_data") or item.get("minimum_ppe_level") is None:
+                lines.append(
+                    "- Minimum PPE level: **CANNOT BE DETERMINED** — this SDS record "
+                    "contains no hazard data (no H-codes, no signal word). This is NOT "
+                    "a low-hazard finding. Do not infer protective equipment from "
+                    "general knowledge; upload this substance's SDS or try another "
+                    "supplier's record."
+                )
+            else:
+                lines.append(f"- Minimum PPE level: **{item['minimum_ppe_level']}**")
             ppe = item.get("ppe", {})
             for category, recs in ppe.items():
                 if isinstance(recs, list):
