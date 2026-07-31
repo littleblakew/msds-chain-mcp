@@ -112,10 +112,18 @@ TOOL_COUNT_SURFACES = [
     # streamable-transport change. The root README was never in this list at all,
     # so THREE stale "22"s sat there (heading, architecture diagram, /health
     # example) while this test stayed green. Two causes: the short surface list,
-    # and TOOL_COUNT_PATTERNS below only matched a number BEFORE "tools" and only
-    # in lowercase — so "Tools (22)" and "22 Safety Tools" were invisible even
-    # once listed.
+    # and the pattern then in use matched only a number BEFORE "tools" and only in
+    # lowercase — so "Tools (22)" and "22 Safety Tools" were invisible even once
+    # listed. Both were widened in the same commit.
     "README.md",
+    # 2026-07-31, same day, FIFTH miss — found by a reviewer minutes after the
+    # fourth was patched, which is the whole argument against this guard's design:
+    # SKILL.md ships inside the plugin (`"skills": "./skills/"` in
+    # .claude-plugin/plugin.json), is read by users, and had drifted further than
+    # anything else — it still said 20 tools, not 22. Widening the list is losing
+    # ground; the durable fix is to have scripts/release.sh stamp the count from
+    # the live registry the way it already stamps VERSION.
+    "skills/msds-safety-check/SKILL.md",
 ]
 
 # Deliberately NOT a surface: server_remote.py. Its /health used to hardcode the
@@ -129,10 +137,8 @@ TOOL_COUNT_SURFACES = [
 TOOL_COUNT_PATTERNS = [
     # "23 tools", "23 MCP tools", "23 chemical safety tools", "**23** tools"
     r"\*{0,2}(\d+)\*{0,2}\s+(?:[\w-]+\s+){0,3}tools\b",
-    # "## Tools (23)"
-    r"\btools\s*\((\d+)\)",
-    # '{"status":"ok","tools":23}'
-    r'"tools"\s*:\s*(\d+)',
+    # "## Tools (23)" and '{"status":"ok","tools":23}' — same shape, either delimiter
+    r"\btools\s*[(:]\s*(\d+)",
 ]
 
 

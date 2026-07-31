@@ -21,7 +21,7 @@ Chemical safety intelligence powered by [MSDS Chain](https://msdschain.lagentbot
 
 ## How It Works
 
-This skill orchestrates MSDS Chain's 20 MCP tools. It requires the `msds-chain` MCP server to be configured. If not configured, it will guide the user through setup (see [rules/setup-guide.md](rules/setup-guide.md)).
+This skill orchestrates MSDS Chain's 23 MCP tools. It requires the `msds-chain` MCP server to be configured. If not configured, it will guide the user through setup (see [rules/setup-guide.md](rules/setup-guide.md)).
 
 ### Two Modes
 
