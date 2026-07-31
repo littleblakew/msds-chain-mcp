@@ -62,6 +62,18 @@ for f in "${JSON_MANIFESTS[@]}"; do
 done
 echo "✅ All surfaces stamped to $VERSION"
 
+# --- 1b. Stamp DERIVED metadata (tool count + primary endpoint + transport) --
+# VERSION is not the only value that drifts. The tool count ("N tools") and the
+# primary endpoint URL + transport type also surface across many files and used
+# to be hand-maintained (the count was policed by a "surface list + regex" guard
+# that missed drift five times; the endpoint/transport had no source of truth or
+# test at all). Derive them the same way — the count from the LIVE registry,
+# endpoint/transport from release_metadata.py — and stamp them here, so the guard
+# only has to check wiring, never re-audit copy. See scripts/stamp_derived.py.
+echo "▶ Stamping derived metadata (tool count + endpoint + transport)..."
+python scripts/stamp_derived.py
+echo "✅ Derived metadata stamped"
+
 # --- 2. Verify: guard test proves server.py == VERSION and serverInfo carries it
 echo "▶ Running version guard test..."
 python -m pytest tests/test_version.py -q

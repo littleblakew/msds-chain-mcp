@@ -14,7 +14,9 @@ come back:
 """
 import json
 import os
+import re
 
+import release_metadata as rm
 import server
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -86,85 +88,122 @@ def test_all_json_manifests_stamped():
             )
 
 
-# Files whose user-facing copy states the tool count ("N tools"). These are what
-# ChatGPT / claude.ai / npm / the Claude Code + Codex plugin listings show.
-TOOL_COUNT_SURFACES = [
-    # The npm PAGE's description is read from this file — the most externally
-    # visible surface of them all, and the one this list originally missed.
-    # Consequence (2026-07-25): the 22→23 fix landed everywhere except here, so npm
-    # advertised "22 MCP tools" while CI stayed green; it took a manual four-way
-    # audit (CI-167) to catch. Listed first as a reminder that the guard is only
-    # worth as much as its surface list.
-    "npm-package/package.json",
-    "npm-package/server.json",
-    "npm-package/README.md",
-    "plugin.json",
-    ".claude-plugin/plugin.json",
-    ".codex-plugin/plugin.json",
-    # 2026-07-29: these two were ALSO missing — both still advertised "22 chemical
-    # safety tools" after the 22→23 fix. Same failure mode the comment above warns
-    # about, twice over: the surface list was short AND the regex below only matched
-    # a bare "N tools", so "N chemical safety tools" slipped through even where it
-    # was listed. Widened both.
-    ".claude-plugin/marketplace.json",
-    ".agents/plugins/marketplace.json",
-    # 2026-07-31: fourth miss of the same shape, found while reviewing the
-    # streamable-transport change. The root README was never in this list at all,
-    # so THREE stale "22"s sat there (heading, architecture diagram, /health
-    # example) while this test stayed green. Two causes: the short surface list,
-    # and the pattern then in use matched only a number BEFORE "tools" and only in
-    # lowercase — so "Tools (22)" and "22 Safety Tools" were invisible even once
-    # listed. Both were widened in the same commit.
-    "README.md",
-    # 2026-07-31, same day, FIFTH miss — found by a reviewer minutes after the
-    # fourth was patched, which is the whole argument against this guard's design:
-    # SKILL.md ships inside the plugin (`"skills": "./skills/"` in
-    # .claude-plugin/plugin.json), is read by users, and had drifted further than
-    # anything else — it still said 20 tools, not 22. Widening the list is losing
-    # ground; the durable fix is to have scripts/release.sh stamp the count from
-    # the live registry the way it already stamps VERSION.
-    "skills/msds-safety-check/SKILL.md",
-]
-
-# Deliberately NOT a surface: server_remote.py. Its /health used to hardcode the
-# count (and drifted to 22); it now reads the live registry, so there is no
-# literal number left to guard. Adding it here would trip the "no 'N tools'
-# claim found" assert below. Dynamic beats guarded — don't add it back.
-
-# A tool count shows up in copy in three shapes. Match all of them,
-# case-insensitively; a number-before-"tools" pattern alone is what let the
-# 2026-07-31 miss through.
-TOOL_COUNT_PATTERNS = [
-    # "23 tools", "23 MCP tools", "23 chemical safety tools", "**23** tools"
-    r"\*{0,2}(\d+)\*{0,2}\s+(?:[\w-]+\s+){0,3}tools\b",
-    # "## Tools (23)" and '{"status":"ok","tools":23}' — same shape, either delimiter
-    r"\btools\s*[(:]\s*(\d+)",
-]
+# The tool-count surfaces + patterns now live in release_metadata.py so the
+# STAMPER (scripts/stamp_derived.py) and this GUARD read the same list — a new
+# surface added to one is automatically seen by the other. Before CI-237 this
+# list lived only here and the count was hand-maintained; the guard missed drift
+# five times (npm package.json, two marketplace.json files, the root README, and
+# skills/.../SKILL.md — the last stuck at 20). release.sh now stamps the count
+# from the live registry, so this test only has to confirm the wiring held.
+#
+# server_remote.py is deliberately NOT a surface: its /health reads the live
+# registry, so there is no literal to stamp or guard. Don't add it back — it
+# would trip the "no 'N tools' claim found" assert below.
 
 
 def test_advertised_tool_count_matches_registered():
     """Every "N tools" claim must equal the number of tools actually registered.
 
-    scripts/release.sh stamps the VERSION but NOT the tool count, and nothing else
-    guarded it — so adding the 23rd tool (search_msds_online, SE-19) silently left
-    five user-facing surfaces advertising "22 tools", including the description
-    already published to the MCP registry. This test makes that drift fail CI.
+    release.sh derives the count from the live registry and stamps it into every
+    surface in rm.TOOL_COUNT_SURFACES; this proves the stamp reached each one and
+    nothing drifted. The assert on `claims` also catches a surface that quietly
+    stopped carrying its literal (nothing left for the stamper to write).
     """
     import asyncio
-    import re
 
     actual = len(asyncio.run(server.mcp.list_tools()))
-    for rel in TOOL_COUNT_SURFACES:
+    for rel in rm.TOOL_COUNT_SURFACES:
         with open(os.path.join(ROOT, rel)) as f:
             text = f.read()
         claims = [
             int(n)
-            for pattern in TOOL_COUNT_PATTERNS
+            for pattern in rm.TOOL_COUNT_PATTERNS
             for n in re.findall(pattern, text, re.IGNORECASE)
         ]
-        assert claims, f"{rel}: no 'N tools' claim found — update TOOL_COUNT_SURFACES"
+        assert claims, (
+            f"{rel}: no 'N tools' claim found — the stamper had nothing to write; "
+            f"fix the copy or drop it from rm.TOOL_COUNT_SURFACES"
+        )
         for n in claims:
             assert n == actual, (
                 f"{rel} advertises {n} tools but {actual} are registered — "
-                f"update the copy when adding/removing a tool"
+                f"run scripts/release.sh to re-stamp"
+            )
+
+
+# --- Endpoint + transport wiring (CI-237) ---------------------------------
+# Before CI-237 there was NO source of truth and NO test for the advertised
+# endpoint or transport type, so the sse->streamable migration was six blind
+# hand-edits. release.sh now stamps rm.PRIMARY_ENDPOINT and the per-schema
+# transport; these guards confirm the stamp reached every surface.
+
+
+def test_primary_endpoint_is_streamable_mcp_path():
+    """The recommended endpoint is the streamable `/mcp` path, not `/sse`."""
+    assert rm.PRIMARY_ENDPOINT.startswith("https://")
+    assert rm.PRIMARY_ENDPOINT.endswith("/mcp"), (
+        f"PRIMARY_ENDPOINT should be the streamable /mcp path, got "
+        f"{rm.PRIMARY_ENDPOINT!r}"
+    )
+
+
+def test_advertised_endpoint_urls_match_primary():
+    """Every advertised `.../mcp` URL equals rm.PRIMARY_ENDPOINT.
+
+    Catches a surface left on an old host after an endpoint change. The `/sse`
+    fallback URLs are intentionally excluded (the pattern only matches `/mcp`),
+    so this does not fight the deliberate dual-transport docs.
+    """
+    for rel in rm.ENDPOINT_URL_SURFACES:
+        with open(os.path.join(ROOT, rel)) as f:
+            text = f.read()
+        urls = rm.ENDPOINT_URL_RE.findall(text)
+        assert urls, (
+            f"{rel}: no primary '/mcp' endpoint URL found — the stamper had "
+            f"nothing to write; fix the copy or drop it from ENDPOINT_URL_SURFACES"
+        )
+        for url in urls:
+            assert url == rm.PRIMARY_ENDPOINT, (
+                f"{rel} advertises {url!r} but PRIMARY_ENDPOINT is "
+                f"{rm.PRIMARY_ENDPOINT!r} — run scripts/release.sh to re-stamp"
+            )
+
+
+def _find_mcp_blocks(obj):
+    """Every dict carrying a machine-readable MCP-server `url` (ending /mcp)."""
+    found = []
+    if isinstance(obj, dict):
+        u = obj.get("url")
+        if isinstance(u, str) and u.endswith("/mcp"):
+            found.append(obj)
+        for v in obj.values():
+            found += _find_mcp_blocks(v)
+    elif isinstance(obj, list):
+        for item in obj:
+            found += _find_mcp_blocks(item)
+    return found
+
+
+def test_manifest_transport_type_matches_schema():
+    """Each structured manifest declares its schema's transport type for the
+    `/mcp` endpoint — "streamable-http" for the MCP registry's server.json,
+    "http" for the plugin/npm client configs. Both name the streamable transport;
+    the mapping is intentional, not drift. Also proves the connect url is `/mcp`,
+    never `/sse` (no manifest advertises SSE as its primary transport)."""
+    for rel, expected in rm.TRANSPORT_BY_SURFACE.items():
+        with open(os.path.join(ROOT, rel)) as f:
+            data = json.load(f)
+        blocks = _find_mcp_blocks(data)
+        assert blocks, (
+            f"{rel}: no MCP-server block with a '/mcp' url found — "
+            f"update rm.TRANSPORT_BY_SURFACE if the manifest changed shape"
+        )
+        for b in blocks:
+            assert b["url"] == rm.PRIMARY_ENDPOINT, (
+                f"{rel}: connect url {b['url']!r} != PRIMARY_ENDPOINT "
+                f"{rm.PRIMARY_ENDPOINT!r} — run scripts/release.sh"
+            )
+            assert b.get("type") == expected, (
+                f"{rel}: transport type {b.get('type')!r} != expected "
+                f"{expected!r} — run scripts/release.sh"
             )
