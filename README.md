@@ -18,7 +18,7 @@ When you use Claude to plan a synthesis route or set up an Opentrons protocol, s
 - Verify compliance with EU REACH, US OSHA/TSCA, and 7 other jurisdictions
 - Generate signed audit reports for GLP/GMP compliance
 
-## Tools (22)
+## Tools (23)
 
 | Tool | Description |
 |------|-------------|
@@ -77,7 +77,7 @@ claude mcp add msds-chain --transport http https://mcp.lagentbot.com/mcp
 Then run `/mcp` in Claude Code and authenticate — a browser opens to sign in (email
 code); your account is provisioned automatically and calls are metered to you (free
 plan includes a monthly free quota). The legacy SSE endpoint
-(`--transport sse --url https://mcp.lagentbot.com/sse`) still works but streamable
+(`--transport sse https://mcp.lagentbot.com/sse`) still works but streamable
 HTTP is preferred.
 
 **Claude Code (Plugin — includes skill + MCP):**
@@ -223,7 +223,7 @@ Connect to the hosted MSDS Chain MCP server from any AI platform that supports M
 
 **Server URL (preferred):** `https://mcp.lagentbot.com/mcp` (streamable HTTP)
 
-The hosted endpoint serves **both** transports — streamable HTTP (`/mcp`, preferred) and SSE (`/sse`, for clients that only speak SSE: Claude.ai, 悟空, Dify, Coze, etc.). Calls are metered per authenticated user.
+The hosted endpoint serves **both** transports — streamable HTTP (`/mcp`, preferred) and SSE (`/sse`, for clients that only speak SSE: 悟空, Dify, Coze, etc.). Calls are metered per authenticated user.
 
 | Transport | Endpoint | Notes |
 |-----------|----------|-------|
@@ -319,7 +319,7 @@ Industry-sourced, AI-verified, and cryptographically signed.
 ```
 Your AI Agent                  MSDS Chain MCP Server
 ┌──────────────────┐           ┌─────────────────────────┐
-│ Claude Code      │           │ 22 Safety Tools         │
+│ Claude Code      │           │ 23 Safety Tools         │
 │ Cursor / pi      │──MCP────▶│   ↓                     │
 │ Any MCP client   │           │ ChainSDS Platform       │
 └──────────────────┘           └─────────────────────────┘
@@ -342,7 +342,7 @@ npx @modelcontextprotocol/inspector python server.py
 |---------|--------------|-----|
 | `401 Unauthorized` on connect | Missing or invalid API key | Verify the `Authorization: Bearer sk-msds-...` header (or `MSDS_API_KEY` env var). Generate a fresh key at [msdschain.lagentbot.com](https://msdschain.lagentbot.com) → API Keys. |
 | Tools don't appear in the client | MCP server not loaded | Fully restart the client after adding the server. Confirm `msds-chain` shows in the MCP/tools list. |
-| Connection drops or times out | Wrong transport / endpoint | Use the SSE endpoint `https://mcp.lagentbot.com/sse`. Check `GET /health` returns `{"status":"ok","tools":22}`. |
+| Connection drops or times out | Wrong transport / endpoint | Prefer the streamable HTTP endpoint `https://mcp.lagentbot.com/mcp` (SSE sessions can drop when the server redeploys). Check `GET https://mcp.lagentbot.com/health` returns `{"status":"ok"}` — that is the gateway; the core's tool count lives on an internal endpoint that is not publicly reachable, so a missing `tools` field is expected. |
 | `Quota exceeded` / 429 | Monthly call limit hit | Free keys are limited; upgrade your plan or wait for the monthly reset. |
 | Empty results for a known chemical | Name not matched | Retry with the CAS number or a common synonym; `search_chemical_database` accepts name, synonym, or CAS. |
 | OAuth login fails in a browser client | OAuth metadata unreachable (hosted gateway only — self-hosted core has no OAuth) | Confirm `GET https://mcp.lagentbot.com/.well-known/oauth-authorization-server` returns 200; the client should auto-discover the authorize/token endpoints. If self-hosting `server_remote.py` directly, skip OAuth and use a static `Authorization: Bearer` key instead. |

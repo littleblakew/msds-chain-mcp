@@ -11,7 +11,7 @@ This is a remote MCP (Model Context Protocol) server providing **23 tools** for 
 claude mcp add msds-chain --transport http https://mcp.lagentbot.com/mcp
 ```
 Then run `/mcp` and authenticate (browser sign-in). The legacy SSE endpoint
-(`--transport sse --url https://mcp.lagentbot.com/sse`) still works for SSE-only clients.
+(`--transport sse https://mcp.lagentbot.com/sse`) still works for SSE-only clients.
 
 **claude.ai (Web):** Search "msds-chain" in Settings > Plugins.
 
@@ -31,7 +31,7 @@ Then run `/mcp` and authenticate (browser sign-in). The legacy SSE endpoint
 
 Get a free API key (100 calls/month) at [msdschain.lagentbot.com](https://msdschain.lagentbot.com) to unlock all tools.
 
-## Tools (22)
+## Tools (23)
 
 | Tool | Description |
 |------|-------------|

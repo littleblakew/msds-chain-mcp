@@ -23,12 +23,8 @@
   "skills": "./skills/",
   "mcpServers": {
     "msds-chain": {
-      "type": "sse",
-      "url": "https://mcp.lagentbot.com/sse",
-      "env": {
-        "MSDS_API_KEY": "${MSDS_API_KEY}",
-        "MSDS_LANG": "${MSDS_LANG:-en}"
-      }
+      "type": "http",
+      "url": "https://mcp.lagentbot.com/mcp"
     }
   }
 }

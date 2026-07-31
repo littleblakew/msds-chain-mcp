@@ -13,8 +13,8 @@
       "identifier": "msds-chain-mcp",
       "version": "1.5.2",
       "transport": {
-        "type": "sse",
-        "url": "https://mcp.lagentbot.com/sse"
+        "type": "streamable-http",
+        "url": "https://mcp.lagentbot.com/mcp"
       },
       "environmentVariables": [
         {
