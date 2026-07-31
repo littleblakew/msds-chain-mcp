@@ -108,6 +108,31 @@ TOOL_COUNT_SURFACES = [
     # was listed. Widened both.
     ".claude-plugin/marketplace.json",
     ".agents/plugins/marketplace.json",
+    # 2026-07-31: fourth miss of the same shape, found while reviewing the
+    # streamable-transport change. The root README was never in this list at all,
+    # so THREE stale "22"s sat there (heading, architecture diagram, /health
+    # example) while this test stayed green. Two causes: the short surface list,
+    # and TOOL_COUNT_PATTERNS below only matched a number BEFORE "tools" and only
+    # in lowercase — so "Tools (22)" and "22 Safety Tools" were invisible even
+    # once listed.
+    "README.md",
+]
+
+# Deliberately NOT a surface: server_remote.py. Its /health used to hardcode the
+# count (and drifted to 22); it now reads the live registry, so there is no
+# literal number left to guard. Adding it here would trip the "no 'N tools'
+# claim found" assert below. Dynamic beats guarded — don't add it back.
+
+# A tool count shows up in copy in three shapes. Match all of them,
+# case-insensitively; a number-before-"tools" pattern alone is what let the
+# 2026-07-31 miss through.
+TOOL_COUNT_PATTERNS = [
+    # "23 tools", "23 MCP tools", "23 chemical safety tools", "**23** tools"
+    r"\*{0,2}(\d+)\*{0,2}\s+(?:[\w-]+\s+){0,3}tools\b",
+    # "## Tools (23)"
+    r"\btools\s*\((\d+)\)",
+    # '{"status":"ok","tools":23}'
+    r'"tools"\s*:\s*(\d+)',
 ]
 
 
@@ -126,13 +151,10 @@ def test_advertised_tool_count_matches_registered():
     for rel in TOOL_COUNT_SURFACES:
         with open(os.path.join(ROOT, rel)) as f:
             text = f.read()
-        # allow a few qualifier words between the number and "tools"
-        # ("23 tools", "23 MCP tools", "23 chemical safety tools" all count)
         claims = [
             int(n)
-            for n in re.findall(
-                r"\*{0,2}(\d+)\*{0,2}\s+(?:[\w-]+\s+){0,3}tools\b", text
-            )
+            for pattern in TOOL_COUNT_PATTERNS
+            for n in re.findall(pattern, text, re.IGNORECASE)
         ]
         assert claims, f"{rel}: no 'N tools' claim found — update TOOL_COUNT_SURFACES"
         for n in claims:
