@@ -24,11 +24,7 @@
   "mcpServers": {
     "msds-chain": {
       "type": "http",
-      "url": "https://mcp.lagentbot.com/mcp",
-      "env": {
-        "MSDS_API_KEY": "${MSDS_API_KEY}",
-        "MSDS_LANG": "${MSDS_LANG:-en}"
-      }
+      "url": "https://mcp.lagentbot.com/mcp"
     }
   }
 }

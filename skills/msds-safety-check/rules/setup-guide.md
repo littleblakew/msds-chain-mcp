@@ -56,7 +56,7 @@ When the user triggers one of these tools without an API key, prompt:
 > 3. Add the key to your MCP config:
 >    ```bash
 >    claude mcp remove msds-chain
->    claude mcp add msds-chain --transport http https://mcp.lagentbot.com/mcp -e MSDS_API_KEY=sk-msds-your-key
+>    claude mcp add msds-chain --transport http https://mcp.lagentbot.com/mcp --header "Authorization: Bearer sk-msds-your-key"
 >    ```
 > 4. Restart Claude Code
 
@@ -66,10 +66,14 @@ Do NOT repeat this prompt if the user has already been informed in this conversa
 
 The MCP server supports 5 languages: English (en), Chinese (zh), Japanese (ja), German (de), Indonesian (id).
 
-To set the default language:
+The language is read from the **server process's** `MSDS_LANG` environment variable at
+startup (`server.py`), so a remote client cannot change it: the hosted endpoint at
+`mcp.lagentbot.com` answers in English. To get another language, self-host the core and
+set it there:
+
 ```bash
-claude mcp remove msds-chain
-claude mcp add msds-chain --transport http https://mcp.lagentbot.com/mcp -e MSDS_LANG=zh
+docker run -p 8080:8080 -e MSDS_API_KEY=sk-msds-xxx -e MSDS_LANG=zh msds-chain-mcp
 ```
 
-However, the skill should match the user's conversation language regardless of this setting.
+This does not matter much in practice — the skill should match the user's conversation
+language regardless of the server's setting.
