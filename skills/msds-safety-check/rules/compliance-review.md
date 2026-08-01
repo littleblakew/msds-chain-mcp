@@ -67,7 +67,10 @@ If the user needs to compare SDS versions:
 ```
 compare_sds_versions(chemical="Acetone", version_old="2023-01", version_new="2025-06")
 ```
-Returns: 7-dimension structured diff (hazard, H-codes, PPE, exposure limits, regulatory, storage, transport changes).
+Returns: whether a newer version exists, the two version/revision-date pairs, and the
+**hazard changes** between them (H-code additions/removals) plus whether those changes
+are verdict-relevant. It does NOT diff PPE, exposure limits, regulatory, storage or
+transport — do not promise the user a comparison on those dimensions.
 
 ## SDS Section Lookup (On Request)
 

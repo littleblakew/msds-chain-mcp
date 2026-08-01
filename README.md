@@ -22,7 +22,7 @@ When you use Claude to plan a synthesis route or set up an Opentrons protocol, s
 
 | Tool | Description |
 |------|-------------|
-| **`batch_safety_check`** | One-call comprehensive report: compatibility + PPE + storage grouping for a chemical list |
+| **`batch_safety_check`** | One-call report for a chemical list: pairwise compatibility + per-chemical risk warnings |
 | **`check_regulatory_lists`** | Cross-reference a chemical against 23 regulatory watch lists across 10 regions |
 | **`get_sds_section`** | Retrieve a specific SDS section (1-16) for a chemical |
 | **`get_sds_document`** | Signed download URL (~5 min) for the original SDS/MSDS PDF; includes source provenance |
@@ -31,7 +31,7 @@ When you use Claude to plan a synthesis route or set up an Opentrons protocol, s
 | **`check_mixing_order`** | Safe addition sequence for reagent pairs (e.g., acid into water) |
 | **`get_waste_disposal`** | Waste classification, container type, and disposal procedures |
 | **`upload_msds_pdf`** | Upload MSDS PDF for AI-powered parsing and data extraction (requires API key) |
-| **`compare_sds_versions`** | Structured 7-dimension diff between SDS versions of a chemical |
+| **`compare_sds_versions`** | Hazard-change diff between two SDS versions (H-code additions/removals + whether they change a verdict) |
 | `check_chemical_compatibility` | Pairwise compatibility for 2+ chemicals |
 | `get_chemical_risk_warnings` | GHS classification, H-codes, signal words, flash point |
 | `get_ppe_recommendation` | Gloves, eye protection, respiratory, body protection |
@@ -141,7 +141,7 @@ User: I'm planning a Grignard reaction with magnesium turnings, diethyl ether,
 
 Claude:
   → calls batch_safety_check(["magnesium", "diethyl ether", "bromobenzene"])
-  → Returns: compatibility matrix, PPE requirements, storage grouping
+  → Returns: compatibility matrix + per-chemical risk warnings (with source SDS)
 ```
 
 ### Opentrons Deck Safety Audit
@@ -204,8 +204,8 @@ Each prompt reliably triggers the named tool. Use them to evaluate the connector
 | `get_chemical_alternatives` | "Is there a safer substitute for hexane in extraction?" | Lower-hazard alternatives |
 | `validate_protocol_chemicals` | "Validate the chemicals in this protocol: [paste text]" | Extracted + verified chemical list |
 | `get_sds_section` | "Show me section 4 (first aid) of the SDS for methanol." | Requested SDS section content |
-| `compare_sds_versions` | "What changed between SDS versions for acetone?" | 7-dimension structured diff |
-| `batch_safety_check` | "Run a full safety check on acetone, methanol, and hexane." | Compatibility + PPE + storage report |
+| `compare_sds_versions` | "What changed between SDS versions for acetone?" | Hazard changes between the two versions |
+| `batch_safety_check` | "Run a full safety check on acetone, methanol, and hexane." | Compatibility matrix + risk warnings |
 | `upload_msds_pdf` | "Parse this MSDS PDF and extract its hazard data." *(API key)* | Structured extraction from the PDF |
 | `create_audit_session` | "Create a signed audit report for our solvent cabinet." *(API key)* | Audit session + signed PDF |
 | `get_audit_report` | "Give me the download link for that audit report." *(API key)* | Signed PDF URL |
@@ -312,7 +312,7 @@ Industry-sourced, AI-verified, and cryptographically signed.
 - **23 regulatory watch lists across 10 regions** (structured compliance for EU, US, CN, JP, KR, CA, AU, TW, SG)
 - **Occupational exposure limits** from 5 standards (OSHA PEL, ACGIH TLV, EU IOELV, JP OEL, CN GBZ)
 - **UN transport data** for 16+ common lab chemicals
-- **Version tracking** with 7-dimension SDS diff for regulatory updates
+- **Version tracking** — detects a newer SDS and diffs its hazard classification against the one you relied on
 
 ## Architecture
 
