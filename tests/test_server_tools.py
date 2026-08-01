@@ -1309,3 +1309,106 @@ def test_upload_docstring_warns_remote_clients_about_local_paths():
     doc = server.upload_msds_pdf.__doc__.lower()
     assert "remote" in doc and "url" in doc
     assert "self-hosted" in doc or "stdio" in doc
+
+
+# ---------------------------------------------------------------------------
+# CI-248 / CI-250: dropped logs must leave a trace, and the trace must never
+# be an empty error_message.
+# ---------------------------------------------------------------------------
+
+def test_error_text_never_empty_for_blank_str_exception():
+    """httpx.ReadTimeout (and its sibling TimeoutException subclasses) stringify
+    to "" — this was the measured root cause of 66% of failed mcp_call_logs
+    rows having no error_message (CI-250). _error_text must never return "" or
+    a value that round-trips to '' after class-name stripping."""
+    exc = httpx.ReadTimeout("")  # explicit blank message, matching prod behavior
+    assert str(exc) == ""  # sanity: confirms the underlying stringify-empty bug
+    text = server._error_text(exc)
+    assert text != ""
+    assert "ReadTimeout" in text
+    assert "no message" in text
+
+
+def test_error_text_preserves_real_message():
+    exc = httpx.HTTPStatusError("Client error '402' for url X", request=None, response=None)
+    text = server._error_text(exc)
+    assert "HTTPStatusError" in text
+    assert "402" in text
+
+
+def test_error_text_truncates_to_500_chars():
+    exc = ValueError("x" * 1000)
+    text = server._error_text(exc)
+    assert len(text) <= 500
+
+
+def test_log_call_post_failure_is_logged_not_swallowed(monkeypatch, caplog):
+    """CI-248: a bare `except Exception: pass` in _log_call meant a dropped
+    call-log POST left no trace anywhere. It must now surface via logger.warning
+    without raising into the caller (fire-and-forget contract preserved)."""
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+
+    class _FailingClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **k):
+            raise httpx.ConnectError("")  # blank message, mirrors prod exceptions
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", _FailingClient)
+
+    import logging
+    caplog.set_level(logging.WARNING, logger="msds_mcp")
+    before = server._call_log_post_failures
+
+    # Must not raise — this is awaited from a tool's `finally` block.
+    asyncio.run(server._log_call("search_chemical_database", ["acetone"], 12, True))
+
+    assert server._call_log_post_failures == before + 1
+    assert any("mcp_call_log_post_failed" in r.message for r in caplog.records)
+    assert any("search_chemical_database" in r.message for r in caplog.records)
+
+
+def test_log_call_treats_non_2xx_response_as_failure(monkeypatch, caplog):
+    """A non-2xx response from /mcp/call-log itself (e.g. 422 validation, 500)
+    was previously accepted silently since no exception was raised without
+    raise_for_status(). It must now be counted and logged too."""
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+
+    class _FakeResponse:
+        status_code = 500
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError("500", request=None, response=self)
+
+    class _ErrorClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **k):
+            return _FakeResponse()
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", _ErrorClient)
+
+    import logging
+    caplog.set_level(logging.WARNING, logger="msds_mcp")
+    before = server._call_log_post_failures
+
+    asyncio.run(server._log_call("get_sds_document", ["acetone"], 5, True))
+
+    assert server._call_log_post_failures == before + 1
+    assert any("mcp_call_log_post_failed" in r.message for r in caplog.records)
