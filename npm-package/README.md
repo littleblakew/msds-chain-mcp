@@ -35,7 +35,7 @@ Get a free API key (100 calls/month) at [msdschain.lagentbot.com](https://msdsch
 
 | Tool | Description |
 |------|-------------|
-| `batch_safety_check` | One-call comprehensive report: compatibility + PPE + storage |
+| `batch_safety_check` | One-call report: pairwise compatibility + per-chemical risk warnings |
 | `validate_protocol_chemicals` | Extract chemical names from protocol text or code |
 | `check_chemical_compatibility` | Pairwise compatibility matrix |
 | `check_mixing_order` | Safe addition sequence for reagent pairs |
@@ -56,7 +56,7 @@ Get a free API key (100 calls/month) at [msdschain.lagentbot.com](https://msdsch
 | `create_audit_session` | Full audit with signed PDF report |
 | `get_audit_report` | Download signed audit report |
 | `upload_msds_pdf` | Upload PDF or URL, extract & parse MSDS |
-| `compare_sds_versions` | Structured SDS version diff (7 dimensions) |
+| `compare_sds_versions` | Hazard-change diff between two SDS versions |
 
 ## Coverage — ChainSDS
 
@@ -64,7 +64,7 @@ Get a free API key (100 calls/month) at [msdschain.lagentbot.com](https://msdsch
 - 8 regulatory jurisdictions (EU/US/CN/JP/KR/CA/AU/TW)
 - 5 exposure limit standards (OSHA/ACGIH/EU/JP/CN)
 - 5 languages (EN/ZH/JA/DE/ID)
-- Version tracking with 7-dimension SDS diff
+- Version tracking — detects a newer SDS and diffs its hazard classification
 
 ## Links
 

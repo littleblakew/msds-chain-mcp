@@ -2170,13 +2170,15 @@ async def batch_safety_check(chemicals: list[str]) -> str:
 
     Returns a combined report with:
     - Pairwise compatibility matrix (compatible/caution/incompatible)
-    - PPE requirements (merged across all chemicals)
-    - Storage grouping recommendations (which chemicals can share a cabinet)
-    - Key risk warnings
+    - Key risk warnings per chemical, with the source SDS for each
 
-    This is the recommended first call when reviewing an experiment protocol
-    or Opentrons deck layout — it gives a complete safety picture without
-    needing to call multiple tools separately.
+    It does NOT return PPE or storage grouping — for those call
+    `get_ppe_recommendation` / `get_storage_guidance`. (This list previously
+    advertised both; the description is what you read when choosing a tool, so
+    naming an output that never arrives invites answering from nothing.)
+
+    Good first call when reviewing an experiment protocol or Opentrons deck
+    layout: it covers the pairwise interactions in one round-trip.
 
     Args:
         chemicals: List of chemical names or CAS numbers (2-20 items), e.g.

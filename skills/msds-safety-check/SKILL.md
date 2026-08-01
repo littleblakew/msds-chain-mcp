@@ -37,7 +37,7 @@ Output adapts to context — concise for auto-detect, detailed for manual audit.
 
 ### Tool Call Principles
 
-- **Minimum calls first:** Use `batch_safety_check` for one-shot results (compatibility + PPE + storage). Don't call individual tools unless the user asks to drill down.
+- **Minimum calls first:** Use `batch_safety_check` for one-shot pairwise results (compatibility + per-chemical risk warnings). It does NOT cover PPE or storage grouping — call `get_ppe_recommendation` / `get_storage_guidance` when the user needs those.
 - **Progressive disclosure:** Only call `get_emergency_response`, `check_mixing_order`, or `get_chemical_alternatives` when the user asks follow-up questions.
 - **Freemium upgrade:** Audit tools (`create_audit_session`, `get_audit_report`, `upload_msds_pdf`) require an API key. Prompt for registration only when the user requests audit functionality, not during basic queries.
 
