@@ -23,6 +23,7 @@ from __future__ import annotations
 import functools
 import json
 import json as _json
+import logging
 import os
 import textwrap
 import time
@@ -32,6 +33,11 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from request_identity import caller_headers, get_caller_credential, set_caller_credential
+
+# Writes to stderr only (never stdout — stdout is the JSON-RPC channel for the
+# stdio transport, see module docstring). Container Apps captures stderr into
+# Log Analytics, so this is queryable in prod without any extra infra (CI-248).
+logger = logging.getLogger("msds_mcp")
 
 # ---------------------------------------------------------------------------
 # Config
@@ -345,20 +351,62 @@ def _format_tool_results(tool_results: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _error_text(e: BaseException) -> str:
+    """Render an exception for storage/logging — never an empty string.
+
+    CI-250: measured on prod `mcp_call_logs`, 66% of external failed calls had
+    no `error_message` at all. Root cause: several httpx exceptions (notably
+    ReadTimeout / PoolTimeout and other httpx.TimeoutException subclasses)
+    stringify to "" — `str(e) == ""` — and every tool's except-block did
+    `error_msg = _error_text(e)` with no fallback. Duration histograms on the
+    empty-message rows land exactly on TIMEOUT / TIMEOUT_MULTI (15000 / 45000
+    ms), confirming this is the mechanism, not a one-off. Always prefix with
+    the exception's class name so rows are groupable even when the message
+    itself is empty or generic.
+    """
+    msg = str(e).strip()
+    label = type(e).__name__
+    text = f"{label}: {msg}" if msg else f"{label}: (no message)"
+    return text[:500]
+
+
+# Process-local counter for dropped call-log POSTs (CI-248). Not persisted —
+# it exists so a single `logger.warning` line carries a running rate, not just
+# an isolated one-off, without standing up separate metrics infra for a
+# network-isolated core that only ships stderr → Log Analytics.
+_call_log_post_failures = 0
+
+
 async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: int,
                     success: bool, error_message: str | None = None,
                     input_params: str | None = None):
-    """Fire-and-forget: POST call record to backend. Never raises."""
+    """Fire-and-forget: POST call record to backend.
+
+    Never raises into the caller — a logging failure must not break the user's
+    tool call, so the POST is still wrapped in try/except and awaited without
+    blocking the tool's own response path (this coroutine is only ever awaited
+    from each tool's own `finally` block, after the result is already computed).
+
+    CI-248: previously the except-block was a bare `except Exception: pass` —
+    any backend hiccup (network blip, 5xx, auth resolution failure) dropped the
+    call record with literally no trace anywhere, so a low call count could
+    silently be an undercount with no way to know by how much. Now every drop
+    is logged to stderr (Container Apps → Log Analytics for this
+    network-isolated core) with enough context to correlate: which tool, the
+    caller's credential presence, why it failed, and a running per-process
+    count.
+    """
+    global _call_log_post_failures
+    cred = get_caller_credential()
+    # CI-113: strip "Bearer " prefix before logging so the backend's sk-msds-
+    # prefix check resolves correctly. The gateway always forwards the resolved
+    # sk-msds- key via X-API-Key (no Bearer), so this only fires for direct-to-
+    # core callers that set Authorization instead of X-API-Key.
+    if cred and cred.startswith("Bearer "):
+        cred = cred[len("Bearer "):].strip()
     try:
-        cred = get_caller_credential()
-        # CI-113: strip "Bearer " prefix before logging so the backend's sk-msds-
-        # prefix check resolves correctly. The gateway always forwards the resolved
-        # sk-msds- key via X-API-Key (no Bearer), so this only fires for direct-to-
-        # core callers that set Authorization instead of X-API-Key.
-        if cred and cred.startswith("Bearer "):
-            cred = cred[len("Bearer "):].strip()
         async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(
+            res = await client.post(
                 f"{API_URL}/mcp/call-log",
                 json={
                     "tool_name": tool_name,
@@ -371,8 +419,18 @@ async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: in
                 },
                 headers=_headers(),
             )
-    except Exception:
-        pass  # fire-and-forget
+            # Previously unchecked: a non-2xx response from the logging
+            # endpoint itself (e.g. validation 4xx, backend 5xx) was silently
+            # accepted as "logged" since no exception was raised without this.
+            res.raise_for_status()
+    except Exception as e:
+        _call_log_post_failures += 1
+        logger.warning(
+            "mcp_call_log_post_failed tool=%s call_success=%s dur_ms=%s "
+            "cred_present=%s reason=%s failures_this_process=%d",
+            tool_name, success, duration_ms, bool(cred), _error_text(e),
+            _call_log_post_failures,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -706,7 +764,7 @@ async def check_chemical_compatibility(chemicals: list[str]) -> CallToolResult:
         ), data)
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -804,7 +862,7 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
         ), data)
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -882,7 +940,7 @@ async def check_regulatory_compliance(
         ), {"_usage": _usage})
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -926,7 +984,7 @@ async def ask_chemical_safety(question: str) -> str:
         return _quick_result(data)
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -1027,7 +1085,7 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
         )
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -1082,7 +1140,7 @@ async def get_storage_guidance(chemicals: list[str]) -> str:
         )
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -1140,7 +1198,7 @@ async def get_emergency_response(chemical: str, scenario: str = "spill") -> str:
         )
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -1199,7 +1257,7 @@ async def get_exposure_limits(chemicals: list[str], region: str | None = None) -
         )
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -1243,7 +1301,7 @@ async def get_transport_classification(chemicals: list[str]) -> str:
         )
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -1390,7 +1448,7 @@ async def create_audit_session(
         )
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -1451,7 +1509,7 @@ async def get_audit_report(session_id: str) -> str:
         )
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -1520,7 +1578,7 @@ async def search_chemical_database(query: str) -> str:
             return f"Chemical search failed (HTTP {res.status_code}). Try a different name or CAS number."
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -1579,7 +1637,7 @@ async def search_msds_online(chemical_name: str = "", cas_number: str = "") -> "
         )
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -1659,7 +1717,7 @@ async def get_sds_section(chemical: str, section: int) -> str:
         )
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -1706,7 +1764,7 @@ async def get_chemical_alternatives(chemical: str, use_case: str = "") -> str:
         return _quick_result(data)
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -1758,7 +1816,7 @@ async def validate_protocol_chemicals(protocol_text: str) -> str:
         return _quick_result(data)
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -1806,7 +1864,7 @@ async def check_mixing_order(chemical_a: str, chemical_b: str, context: str = ""
         return _quick_result(data)
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -1856,7 +1914,7 @@ async def get_waste_disposal(chemicals: list[str]) -> str:
         )
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -1926,7 +1984,7 @@ async def compare_sds_versions(
         )
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -2154,7 +2212,7 @@ async def upload_msds_pdf(
         )
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -2307,7 +2365,7 @@ async def batch_safety_check(chemicals: list[str]) -> str:
         ), data)
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -2347,7 +2405,7 @@ async def check_regulatory_lists(chemical: str) -> str:
         return _quick_result(data)
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
@@ -2451,7 +2509,7 @@ async def get_sds_document(chemical: str) -> CallToolResult:
             )
     except Exception as e:
         success = False
-        error_msg = str(e)[:500]
+        error_msg = _error_text(e)
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
