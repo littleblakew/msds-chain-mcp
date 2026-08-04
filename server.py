@@ -706,6 +706,7 @@ async def check_chemical_compatibility(chemicals: list[str]) -> CallToolResult:
 
         if data.get("unresolved"):
             lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}\n")
+        lines.extend(_rejected_products_block(data))
 
         # CI-89-inline: per-chemical link lookup so each pair row carries its own
         # SDS links (survives client-model summarization better than a trailing block).
@@ -754,6 +755,7 @@ async def check_chemical_compatibility(chemicals: list[str]) -> CallToolResult:
         structured = {
             "chemicals": chemicals,
             "unresolved": data.get("unresolved", []),
+            "rejected_products": data.get("rejected_products", []),
             "pairs": struct_pairs,
             "summary": {"total_pairs": len(struct_pairs), **counts},
             "documents": documents,
@@ -799,6 +801,7 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
 
         if data.get("unresolved"):
             lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}\n")
+        lines.extend(_rejected_products_block(data))
 
         # CI-89: build a set of chemicals that have SDS-backed documents
         documents = data.get("documents", [])
@@ -843,6 +846,7 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
         structured = {
             "chemicals": chemicals,
             "unresolved": data.get("unresolved", []),
+            "rejected_products": data.get("rejected_products", []),
             "warnings": [
                 {
                     "chemical": w.get("chemical"),
@@ -1515,6 +1519,39 @@ async def get_audit_report(session_id: str) -> str:
         dur = int((time.monotonic() - t0) * 1000)
         await _log_call("get_audit_report", None, dur, success, error_msg,
                         _json.dumps({"session_id": session_id}))
+
+
+def _rejected_products_block(data: dict) -> list[str]:
+    """CI-277: render the backend's explicit product/mixture refusals.
+
+    🔴 Why this must never be silently dropped: the backend removes formulated
+    products from BOTH `name_to_cas` and `unresolved` and reports them only in
+    `rejected_products`. A renderer that ignores the key shows "2 chemicals
+    submitted, 0 unresolved, 0 incompatible pairs" for
+    `["Windex", "hydrochloric acid"]` — an unearned all-clear for a pair that
+    was never evaluated at all. Absence of a verdict must read as absence, not
+    as safety.
+    """
+    rejected = data.get("rejected_products") or []
+    if not rejected:
+        return []
+    lines = [
+        "**⚠️ Not evaluated — formulated products (mixtures):**",
+    ]
+    for r in rejected:
+        name = r.get("query") or "(unnamed)"
+        lines.append(
+            f"- **{name}** — a formulated product. Its hazard classification "
+            f"applies to the whole formulation, so it is NOT accepted as an input "
+            f"to compatibility or batch safety checks, and it was NOT substituted "
+            f"by any of its components. Its SDS is retrievable with "
+            f"`get_sds_document(\"{name}\")`."
+        )
+    lines.append(
+        "These were **excluded from the results below** — treat any conclusion "
+        "here as covering only the other inputs.\n"
+    )
+    return lines
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Search Chemical Database", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
@@ -2274,6 +2311,7 @@ async def batch_safety_check(chemicals: list[str]) -> str:
 
         if data.get("unresolved"):
             sections.append(f"**Unresolved:** {', '.join(data['unresolved'])}\n")
+        sections.extend(_rejected_products_block(data))
 
         # CI-89: extract documents and build SDS-backed chemical set
         documents = data.get("documents", [])
@@ -2348,6 +2386,7 @@ async def batch_safety_check(chemicals: list[str]) -> str:
         structured = {
             "chemicals": chemicals,
             "unresolved": data.get("unresolved", []),
+            "rejected_products": data.get("rejected_products", []),
             "compatibility": {
                 "summary": compat.get("summary", {}),
                 "pairs": [
