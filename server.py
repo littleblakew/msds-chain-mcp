@@ -1557,13 +1557,27 @@ async def search_chemical_database(query: str) -> str:
                     cas = c.get("cas_number", "—")
                     flam = c.get("flammability", "—")
                     tox = c.get("toxicity", "—")
-                    lines.append(
-                        f"• **{name}** (CAS: {cas})\n"
-                        f"  Flammability: {flam}  |  Toxicity: {tox}"
-                    )
+                    # CI-277: a formulated product (mixture) has no CAS of its own and
+                    # its GHS classification describes the whole formulation. Label it
+                    # so the caller never reads it as a substance record.
+                    kind = c.get("record_kind") or "substance"
+                    if kind == "product":
+                        lines.append(
+                            f"• **{name}** — formulated product (mixture, no single CAS)\n"
+                            f"  Its hazard classification applies to the whole "
+                            f"formulation and cannot be extrapolated to any single "
+                            f"ingredient. Not accepted as an input to compatibility "
+                            f"or batch safety checks."
+                        )
+                    else:
+                        lines.append(
+                            f"• **{name}** (CAS: {cas})\n"
+                            f"  Flammability: {flam}  |  Toxicity: {tox}"
+                        )
                     struct_results.append({
                         "name": name,
                         "cas_number": c.get("cas_number"),
+                        "record_kind": kind,
                         "flammability": c.get("flammability"),
                         "toxicity": c.get("toxicity"),
                     })
@@ -2455,9 +2469,16 @@ async def get_sds_document(chemical: str) -> CallToolResult:
             cas = data.get("cas", "N/A")
             chem_name = data.get("chemical_name", chemical)
 
+            # CI-277: product/mixture SDS records carry no CAS of their own.
+            kind = data.get("record_kind") or "substance"
             region_suffix = f" · {region}" if region else ""
+            heading = (
+                f"**SDS Document: {chem_name}** (formulated product — no single CAS)"
+                if kind == "product"
+                else f"**SDS Document: {chem_name}** (CAS: {cas})"
+            )
             lines = [
-                f"**SDS Document: {chem_name}** (CAS: {cas})",
+                heading,
                 f"- **Source:** {supplier}{region_suffix}",
                 f"- **Revision date:** {revision_date}",
                 f"- **Signed URL** (valid ~5 min):",
@@ -2465,10 +2486,17 @@ async def get_sds_document(chemical: str) -> CallToolResult:
                 "",
                 "Open in a browser or `curl -O` to download the PDF.",
             ]
+            if kind == "product":
+                lines.insert(1, (
+                    "- ⚠️ This is a **formulated product**. Its GHS classification "
+                    "applies to the mixture as a whole and must not be extrapolated "
+                    "to any individual ingredient."
+                ))
             return CallToolResult(
                 content=[TextContent(type="text", text="\n".join(lines))],
                 structuredContent={
                     "available": True,
+                    "record_kind": kind,
                     "chemical_name": chem_name,
                     "cas": cas,
                     "supplier": supplier,
@@ -2497,15 +2525,30 @@ async def get_sds_document(chemical: str) -> CallToolResult:
                     "`upload_msds_pdf(pdf_source)` to add it to the database."
                 )
 
+            # CI-277: the backend may report that we hold no SDS for this substance
+            # but DO hold product SDSs that contain it. That is NOT a hit — the
+            # message says so, and the concentration + no-extrapolation disclaimer
+            # travel with it so a model cannot present the product's (milder) whole-
+            # formulation hazards as the pure substance's.
+            component_of = data.get("component_of_products")
+            if component_of:
+                hint = (
+                    "\n\nThis is context, not a match: we do not have an SDS for the "
+                    "substance itself. Do not use the product's hazard data for it."
+                )
+
             display = f"{chem_name} (CAS: {cas})" if cas else chem_name
+            structured = {
+                "available": False,
+                "chemical_name": chem_name,
+                "cas": cas,
+                "message": message,
+            }
+            if component_of:
+                structured["component_of_products"] = component_of
             return CallToolResult(
                 content=[TextContent(type="text", text=f"**{display}**: {message}{hint}")],
-                structuredContent={
-                    "available": False,
-                    "chemical_name": chem_name,
-                    "cas": cas,
-                    "message": message,
-                },
+                structuredContent=structured,
             )
     except Exception as e:
         success = False
