@@ -20,11 +20,14 @@ Claude Code integration (~/.claude/settings.json):
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import functools
 import json
 import json as _json
 import logging
 import os
+import re
 import textwrap
 import time
 
@@ -2054,7 +2057,130 @@ async def compare_sds_versions(
 # CI-101 telemetry says 100% of remote MCP traffic is chatgpt.com, i.e. this was
 # the entire contribution path for every remote user. The reply must therefore
 # name the constraint and give a next step the caller can actually take.
+#
+# The remaining gap (this pass): a public HTTPS URL is *also* something a
+# remote client rarely has — a PDF the user just uploaded into ChatGPT/claude.ai
+# lives in that client's sandbox with no public URL at all. So `pdf_source` now
+# also accepts the file bytes inline, base64-encoded, either as a
+# `data:application/pdf;base64,...` URI or as a bare base64 string long enough
+# to decode to a real PDF (checked via the `%PDF` magic bytes). Resolution
+# order: http(s) URL -> data URI -> bare base64 -> local path (last one only
+# ever succeeds for a self-hosted stdio server on the same machine as the file).
 # ---------------------------------------------------------------------------
+
+_MAX_INLINE_PDF_BYTES = 10 * 1024 * 1024  # 10 MB decoded — inline-upload guardrail
+_BASE64_CHARS_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
+
+
+class _InlinePdfError(ValueError):
+    """pdf_source clearly declared itself as inline content (data: URI, or a
+    long base64-looking string that decoded to a %PDF) but failed validation.
+    Distinct from "doesn't look like inline content at all", which falls
+    through to local-path handling instead of raising."""
+
+
+def _sanitize_upload_filename(name: str | None, fallback: str = "upload.pdf") -> str:
+    """Make a caller-supplied filename safe to hand to the upload endpoint.
+
+    The filename travels to POST /sessions/{sid}/upload and is used there to
+    build a path on disk, so a raw passthrough of a tool argument would let a
+    caller write outside the session directory ("../x", "/etc/y"). Before this
+    tool grew a `filename` parameter every filename was machine-derived (URL
+    last segment / os.path.basename), so this is a new surface: strip it back
+    to a bare basename with a conservative charset, and keep the .pdf suffix
+    the backend dispatches on.
+    """
+    import os as _os
+    raw = (name or "").strip().replace("\x00", "")
+    raw = raw.replace("\\", "/").split("/")[-1]      # kill both separators, keep basename
+    raw = _os.path.basename(raw)
+    raw = re.sub(r"[^A-Za-z0-9._-]", "_", raw)
+    raw = raw.lstrip(".")                             # no hidden/relative names
+    if len(raw) > 120:
+        stem, _, _ext = raw.rpartition(".")
+        raw = (stem or raw)[:116] + ".pdf"
+    if not raw:
+        raw = fallback
+    if not raw.lower().endswith(".pdf"):
+        raw += ".pdf"
+    return raw
+
+
+def _reject_oversize_encoded(payload: str) -> None:
+    """Reject before decoding. base64 inflates by 4/3, so an encoded payload
+    longer than that bound cannot decode under the cap — checking first keeps a
+    multi-GB string from being materialised in memory just to be rejected."""
+    max_encoded = (_MAX_INLINE_PDF_BYTES * 4) // 3 + 8
+    if len(payload) > max_encoded:
+        raise _InlinePdfError(
+            f"encoded payload is {len(payload) / 1_048_576:.1f} MB, which cannot "
+            f"decode under the {_MAX_INLINE_PDF_BYTES // 1_048_576} MB inline-upload "
+            "limit. Host it at a public HTTPS URL instead and pass that URL."
+        )
+
+
+def _validate_inline_pdf(data: bytes) -> None:
+    if not data.startswith(b"%PDF"):
+        raise _InlinePdfError(
+            "decoded content does not start with the PDF magic bytes (%PDF) — "
+            "make sure you are base64-encoding the raw PDF file bytes, not "
+            "text extracted from it."
+        )
+    if len(data) > _MAX_INLINE_PDF_BYTES:
+        raise _InlinePdfError(
+            f"decoded PDF is {len(data) / 1_048_576:.1f} MB, over the "
+            f"{_MAX_INLINE_PDF_BYTES // 1_048_576} MB inline-upload limit. "
+            "Host it at a public HTTPS URL instead and pass that URL."
+        )
+
+
+def _decode_data_uri_pdf(pdf_source: str) -> bytes:
+    """Decode a `data:...;base64,<payload>` URI. Raises _InlinePdfError on any
+    failure — a data: prefix is an unambiguous declaration of intent, so
+    failures here are real errors, never a signal to fall through."""
+    header, sep, payload = pdf_source.partition(",")
+    if not sep or "base64" not in header or not payload:
+        raise _InlinePdfError(
+            "data URI must be base64-encoded, e.g. "
+            "data:application/pdf;base64,<...>"
+        )
+    _reject_oversize_encoded(payload)
+    try:
+        data = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError) as e:
+        raise _InlinePdfError(f"could not base64-decode data URI content: {e}") from e
+    _validate_inline_pdf(data)
+    return data
+
+
+def _decode_bare_base64_pdf(pdf_source: str) -> bytes | None:
+    """Try to interpret pdf_source as a bare (no `data:` prefix) base64 PDF
+    blob. Returns None — never raises — when pdf_source doesn't decode to a
+    %PDF payload, so the caller falls through to local-path handling; that is
+    the only way a short local path like "a.pdf" keeps working. The one
+    exception is a decoded payload that IS a real PDF but over the size cap —
+    that's unambiguously inline content, so it raises instead of silently
+    trying (and failing) local-path handling next.
+    """
+    stripped = pdf_source.strip()
+    if len(stripped) < 100 or not _BASE64_CHARS_RE.match(stripped):
+        return None
+    _reject_oversize_encoded(stripped)
+    try:
+        data = base64.b64decode(stripped, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if not data.startswith(b"%PDF"):
+        return None
+    if len(data) > _MAX_INLINE_PDF_BYTES:
+        raise _InlinePdfError(
+            f"decoded PDF is {len(data) / 1_048_576:.1f} MB, over the "
+            f"{_MAX_INLINE_PDF_BYTES // 1_048_576} MB inline-upload limit. "
+            "Host it at a public HTTPS URL instead and pass that URL."
+        )
+    return data
+
+
 def _upload_local_path_message(pdf_source: str) -> str:
     return (
         f"❌ Could not read `{pdf_source}`.\n\n"
@@ -2080,6 +2206,7 @@ async def upload_msds_pdf(
     pdf_source: str,
     session_id: str | None = None,
     experiment_name: str = "MCP Upload",
+    filename: str | None = None,
 ) -> str:
     """
     Upload an MSDS/SDS PDF file to MSDS Chain and get AI-parsed safety data.
@@ -2094,19 +2221,38 @@ async def upload_msds_pdf(
     Requires MSDS_API_KEY — the parsed data is stored under your account.
 
     Args:
-        pdf_source:      A publicly reachable HTTPS URL of the PDF — this is the
-                         only form that works from a REMOTE MCP client (ChatGPT,
-                         claude.ai, any hosted client), because the server reads
-                         the file on ITS OWN filesystem, not the user's. A local
-                         file path (e.g. "/tmp/acetone_sds.pdf") works only for a
-                         self-hosted stdio server running on the same machine as
-                         the file. Do NOT pass a path from the user's machine or
-                         from a client-side sandbox to the hosted server — it will
-                         not exist there; send the user to the web uploader instead.
+        pdf_source:      One of, tried in this order:
+                         1. A publicly reachable HTTPS URL of the PDF (fetched
+                            server-side).
+                         2. **Inline file bytes, base64-encoded** — use this
+                            when you already have the PDF's bytes in this
+                            conversation (e.g. the user just uploaded a PDF to
+                            you and you can read/attach it), which is the
+                            common case for remote clients like ChatGPT or
+                            claude.ai where the file lives in YOUR sandbox with
+                            no public URL. Pass either a data URI
+                            (`data:application/pdf;base64,<...>`) or a bare
+                            base64 string of the raw PDF bytes. Max 10 MB
+                            decoded.
+                         3. A local file path (e.g. "/tmp/acetone_sds.pdf") —
+                            works ONLY for a self-hosted stdio server running
+                            on the same machine as the file. Do NOT pass a path
+                            from the user's machine or a client-side sandbox to
+                            the hosted server; it will not exist there. If you
+                            cannot get a URL or the raw bytes, send the user to
+                            the web uploader instead.
+
+                         Rule of thumb: if you (the model) can see/hold the PDF's
+                         bytes right now, base64-encode them and pass that —
+                         don't go looking for a local path that only exists on
+                         the user's machine, not the server's.
         session_id:      Existing session ID to attach this upload to. If omitted,
                          a new session is created automatically.
         experiment_name: Label for the auto-created session (ignored if
                          session_id is provided). Defaults to "MCP Upload".
+        filename:        Optional display filename, used when pdf_source is
+                         inline base64 content (which has no filename of its
+                         own). Defaults to "upload.pdf" if omitted.
 
     Returns:
         Parsed chemical info (name, CAS, risk level, key fields) and session_id.
@@ -2131,10 +2277,10 @@ async def upload_msds_pdf(
                 "callers authenticate through the gateway."
             )
 
-        # 1. Resolve PDF bytes
+        # 1. Resolve PDF bytes: http(s) URL -> data URI -> bare base64 -> local path
         import os as _os
         pdf_bytes: bytes
-        filename: str
+        resolved_filename: str
 
         if pdf_source.startswith("http://") or pdf_source.startswith("https://"):
             async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as dl:
@@ -2143,18 +2289,39 @@ async def upload_msds_pdf(
                 pdf_bytes = resp.content
                 # Derive filename from URL path
                 url_path = pdf_source.rstrip("/").split("?")[0]
-                filename = url_path.split("/")[-1] or "upload.pdf"
-                if not filename.lower().endswith(".pdf"):
-                    filename += ".pdf"
-        else:
-            path = _os.path.expanduser(pdf_source)
-            if not _os.path.isfile(path):
+                resolved_filename = _sanitize_upload_filename(
+                    filename or url_path.split("/")[-1]
+                )
+        elif pdf_source.startswith("data:"):
+            try:
+                pdf_bytes = _decode_data_uri_pdf(pdf_source)
+            except _InlinePdfError as e:
                 success = False
-                error_msg = "local file path not readable by server (remote client?)"
-                return _upload_local_path_message(pdf_source)
-            with open(path, "rb") as f:
-                pdf_bytes = f.read()
-            filename = _os.path.basename(path)
+                error_msg = f"invalid inline pdf (data URI): {e}"
+                return f"❌ Could not use the inline PDF you sent: {e}"
+            resolved_filename = _sanitize_upload_filename(filename)
+        else:
+            try:
+                inline_bytes = _decode_bare_base64_pdf(pdf_source)
+            except _InlinePdfError as e:
+                success = False
+                error_msg = f"invalid inline pdf (base64): {e}"
+                return f"❌ Could not use the inline PDF you sent: {e}"
+
+            if inline_bytes is not None:
+                pdf_bytes = inline_bytes
+                resolved_filename = _sanitize_upload_filename(filename)
+            else:
+                path = _os.path.expanduser(pdf_source)
+                if not _os.path.isfile(path):
+                    success = False
+                    error_msg = "local file path not readable by server (remote client?)"
+                    return _upload_local_path_message(pdf_source)
+                with open(path, "rb") as f:
+                    pdf_bytes = f.read()
+                resolved_filename = _sanitize_upload_filename(
+                    filename or _os.path.basename(path)
+                )
 
         if not pdf_bytes:
             success = False
@@ -2177,7 +2344,7 @@ async def upload_msds_pdf(
             upload_headers = {k: v for k, v in _headers().items() if k != "Content-Type"}
             res = await client.post(
                 f"{API_URL}/sessions/{sid}/upload",
-                files={"file": (filename, pdf_bytes, "application/pdf")},
+                files={"file": (resolved_filename, pdf_bytes, "application/pdf")},
                 headers=upload_headers,
                 timeout=60.0,
             )
@@ -2194,7 +2361,7 @@ async def upload_msds_pdf(
                 f"Session: `{sid}`"
             )
 
-        lines = [f"**Session:** `{sid}`", f"**File:** {filename}", ""]
+        lines = [f"**Session:** `{sid}`", f"**File:** {resolved_filename}", ""]
 
         for r in results:
             status = r.get("status", "unknown")
@@ -2243,7 +2410,7 @@ async def upload_msds_pdf(
         )
         structured = {
             "session_id": sid,
-            "file": filename,
+            "file": resolved_filename,
             "summary": summary,
             "results": [
                 {
@@ -2267,8 +2434,17 @@ async def upload_msds_pdf(
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
+        # Inline base64 IS the document's bytes — logging even a prefix of it
+        # would put customer SDS content into mcp_call_logs.input_params (a table
+        # other roles can read). Record only the shape, never the payload.
+        if pdf_source.startswith("data:"):
+            logged_source = f"<inline data URI, {len(pdf_source)} chars>"
+        elif len(pdf_source) > 200:
+            logged_source = f"<inline base64 or long source, {len(pdf_source)} chars>"
+        else:
+            logged_source = pdf_source
         await _log_call("upload_msds_pdf", None, dur, success, error_msg,
-                        _json.dumps({"pdf_source": pdf_source, "session_id": session_id}))
+                        _json.dumps({"pdf_source": logged_source, "session_id": session_id}))
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Batch Safety Check", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
