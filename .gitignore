@@ -6,3 +6,6 @@ __pycache__/
 *.db
 .pytest_cache/
 .hermes_*
+
+# Claude Code 的 agent worktree（绝不能提交成 gitlink，会炸 CI 的 actions/checkout）
+.claude/
