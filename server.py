@@ -2079,6 +2079,46 @@ class _InlinePdfError(ValueError):
     through to local-path handling instead of raising."""
 
 
+def _sanitize_upload_filename(name: str | None, fallback: str = "upload.pdf") -> str:
+    """Make a caller-supplied filename safe to hand to the upload endpoint.
+
+    The filename travels to POST /sessions/{sid}/upload and is used there to
+    build a path on disk, so a raw passthrough of a tool argument would let a
+    caller write outside the session directory ("../x", "/etc/y"). Before this
+    tool grew a `filename` parameter every filename was machine-derived (URL
+    last segment / os.path.basename), so this is a new surface: strip it back
+    to a bare basename with a conservative charset, and keep the .pdf suffix
+    the backend dispatches on.
+    """
+    import os as _os
+    raw = (name or "").strip().replace("\x00", "")
+    raw = raw.replace("\\", "/").split("/")[-1]      # kill both separators, keep basename
+    raw = _os.path.basename(raw)
+    raw = re.sub(r"[^A-Za-z0-9._-]", "_", raw)
+    raw = raw.lstrip(".")                             # no hidden/relative names
+    if len(raw) > 120:
+        stem, _, _ext = raw.rpartition(".")
+        raw = (stem or raw)[:116] + ".pdf"
+    if not raw:
+        raw = fallback
+    if not raw.lower().endswith(".pdf"):
+        raw += ".pdf"
+    return raw
+
+
+def _reject_oversize_encoded(payload: str) -> None:
+    """Reject before decoding. base64 inflates by 4/3, so an encoded payload
+    longer than that bound cannot decode under the cap — checking first keeps a
+    multi-GB string from being materialised in memory just to be rejected."""
+    max_encoded = (_MAX_INLINE_PDF_BYTES * 4) // 3 + 8
+    if len(payload) > max_encoded:
+        raise _InlinePdfError(
+            f"encoded payload is {len(payload) / 1_048_576:.1f} MB, which cannot "
+            f"decode under the {_MAX_INLINE_PDF_BYTES // 1_048_576} MB inline-upload "
+            "limit. Host it at a public HTTPS URL instead and pass that URL."
+        )
+
+
 def _validate_inline_pdf(data: bytes) -> None:
     if not data.startswith(b"%PDF"):
         raise _InlinePdfError(
@@ -2104,6 +2144,7 @@ def _decode_data_uri_pdf(pdf_source: str) -> bytes:
             "data URI must be base64-encoded, e.g. "
             "data:application/pdf;base64,<...>"
         )
+    _reject_oversize_encoded(payload)
     try:
         data = base64.b64decode(payload, validate=True)
     except (binascii.Error, ValueError) as e:
@@ -2124,6 +2165,7 @@ def _decode_bare_base64_pdf(pdf_source: str) -> bytes | None:
     stripped = pdf_source.strip()
     if len(stripped) < 100 or not _BASE64_CHARS_RE.match(stripped):
         return None
+    _reject_oversize_encoded(stripped)
     try:
         data = base64.b64decode(stripped, validate=True)
     except (binascii.Error, ValueError):
@@ -2247,9 +2289,9 @@ async def upload_msds_pdf(
                 pdf_bytes = resp.content
                 # Derive filename from URL path
                 url_path = pdf_source.rstrip("/").split("?")[0]
-                resolved_filename = filename or url_path.split("/")[-1] or "upload.pdf"
-                if not resolved_filename.lower().endswith(".pdf"):
-                    resolved_filename += ".pdf"
+                resolved_filename = _sanitize_upload_filename(
+                    filename or url_path.split("/")[-1]
+                )
         elif pdf_source.startswith("data:"):
             try:
                 pdf_bytes = _decode_data_uri_pdf(pdf_source)
@@ -2257,7 +2299,7 @@ async def upload_msds_pdf(
                 success = False
                 error_msg = f"invalid inline pdf (data URI): {e}"
                 return f"❌ Could not use the inline PDF you sent: {e}"
-            resolved_filename = filename or "upload.pdf"
+            resolved_filename = _sanitize_upload_filename(filename)
         else:
             try:
                 inline_bytes = _decode_bare_base64_pdf(pdf_source)
@@ -2268,7 +2310,7 @@ async def upload_msds_pdf(
 
             if inline_bytes is not None:
                 pdf_bytes = inline_bytes
-                resolved_filename = filename or "upload.pdf"
+                resolved_filename = _sanitize_upload_filename(filename)
             else:
                 path = _os.path.expanduser(pdf_source)
                 if not _os.path.isfile(path):
@@ -2277,7 +2319,9 @@ async def upload_msds_pdf(
                     return _upload_local_path_message(pdf_source)
                 with open(path, "rb") as f:
                     pdf_bytes = f.read()
-                resolved_filename = filename or _os.path.basename(path)
+                resolved_filename = _sanitize_upload_filename(
+                    filename or _os.path.basename(path)
+                )
 
         if not pdf_bytes:
             success = False
@@ -2390,12 +2434,15 @@ async def upload_msds_pdf(
         raise
     finally:
         dur = int((time.monotonic() - t0) * 1000)
-        # Inline base64 payloads can be many MB — never write the raw pdf_source
-        # into the call-log input_params, just its length and a short prefix
-        # (enough to tell "URL" from "inline base64" from "local path" later).
-        logged_source = pdf_source if len(pdf_source) <= 200 else (
-            f"{pdf_source[:200]}... [{len(pdf_source)} chars total]"
-        )
+        # Inline base64 IS the document's bytes — logging even a prefix of it
+        # would put customer SDS content into mcp_call_logs.input_params (a table
+        # other roles can read). Record only the shape, never the payload.
+        if pdf_source.startswith("data:"):
+            logged_source = f"<inline data URI, {len(pdf_source)} chars>"
+        elif len(pdf_source) > 200:
+            logged_source = f"<inline base64 or long source, {len(pdf_source)} chars>"
+        else:
+            logged_source = pdf_source
         await _log_call("upload_msds_pdf", None, dur, success, error_msg,
                         _json.dumps({"pdf_source": logged_source, "session_id": session_id}))
 

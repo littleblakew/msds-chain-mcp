@@ -1675,3 +1675,53 @@ def test_log_call_treats_non_2xx_response_as_failure(monkeypatch, caplog):
 
     assert server._call_log_post_failures == before + 1
     assert any("mcp_call_log_post_failed" in r.message for r in caplog.records)
+
+
+# ── CI-169 review 补测：filename 消毒 / 预解码尺寸闸门 / 日志不含内容 ──────────
+
+def test_sanitize_upload_filename_strips_traversal():
+    """filename 直通到后端会被拼进磁盘路径，必须先削成裸文件名。"""
+    from server import _sanitize_upload_filename as san
+    assert san("../../etc/passwd") == "etc_passwd.pdf" or "/" not in san("../../etc/passwd")
+    for bad in ["../../x.pdf", "/etc/cron.d/x", "..\\..\\win.pdf", "a/b/c.pdf"]:
+        out = san(bad)
+        assert "/" not in out and "\\" not in out, out
+        assert not out.startswith("."), out
+        assert out.lower().endswith(".pdf"), out
+
+
+def test_sanitize_upload_filename_appends_pdf_suffix():
+    """后端按扩展名分发，没有 .pdf 会被判成不支持的类型、静默不解析。"""
+    from server import _sanitize_upload_filename as san
+    assert san("acetone_sds") == "acetone_sds.pdf"
+    assert san(None) == "upload.pdf"
+    assert san("   ") == "upload.pdf"
+
+
+def test_reject_oversize_encoded_before_decoding():
+    """超大 payload 必须在 b64decode 之前就被拒，否则先把内存吃满再报错。"""
+    import pytest
+    from server import _reject_oversize_encoded, _InlinePdfError, _MAX_INLINE_PDF_BYTES
+    ok = "A" * 1000
+    _reject_oversize_encoded(ok)  # 不该抛
+    huge = "A" * (_MAX_INLINE_PDF_BYTES * 4 // 3 + 1000)
+    with pytest.raises(_InlinePdfError):
+        _reject_oversize_encoded(huge)
+
+
+def test_upload_log_never_contains_inline_payload(monkeypatch):
+    """内联 base64 就是文档字节本身，调用日志里不能出现它的任何片段。"""
+    import asyncio, base64 as _b64, server as _s
+    logged = {}
+
+    async def _fake_log(tool, sid, dur, success, err, params):
+        logged["params"] = params
+
+    monkeypatch.setattr(_s, "_log_call", _fake_log)
+    monkeypatch.setattr(_s, "get_caller_credential", lambda: None)  # 早退即可，日志仍写
+    payload = _b64.b64encode(b"%PDF-1.4 secret customer sds " + b"x" * 400).decode()
+    data_uri = "data:application/pdf;base64," + payload
+    asyncio.run(_s.upload_msds_pdf(data_uri))
+    assert payload[:40] not in logged["params"], logged["params"]
+    assert "secret" not in logged["params"]
+    assert "chars" in logged["params"]
