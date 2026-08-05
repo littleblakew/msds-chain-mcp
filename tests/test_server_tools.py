@@ -1311,6 +1311,269 @@ def test_upload_docstring_warns_remote_clients_about_local_paths():
     assert "self-hosted" in doc or "stdio" in doc
 
 
+def test_upload_docstring_tells_model_to_use_inline_base64():
+    """CI-169 remainder: a remote client holding the file's bytes (the common
+    case — user just uploaded a PDF into ChatGPT/claude.ai) must be told to
+    base64-encode and pass them inline, not go hunting for a local path."""
+    doc = server.upload_msds_pdf.__doc__.lower()
+    assert "base64" in doc
+    assert "data:application/pdf;base64" in doc
+
+
+# ---------------------------------------------------------------------------
+# CI-169 (remainder): inline base64 PDF content — data URI and bare base64
+#
+# A public HTTPS URL is *also* something a remote client rarely has: a PDF the
+# user just uploaded into ChatGPT/claude.ai lives in that client's sandbox with
+# no public URL. So pdf_source must also accept the raw file bytes, inline,
+# base64-encoded — either as a data URI or a long bare base64 string that
+# decodes to a real PDF (%PDF magic bytes). Guardrails: must decode to %PDF,
+# capped at 10 MB decoded, and a base64 decode failure must return
+# success=False with a readable message, never a raw exception.
+# ---------------------------------------------------------------------------
+
+import base64 as _b64  # local alias — avoid clashing with server's own `base64` import
+
+
+def _minimal_pdf_bytes(padding: int = 100) -> bytes:
+    """A PDF-shaped byte string long enough that its base64 form clears the
+    100-char bare-base64 sniff threshold in _decode_bare_base64_pdf."""
+    return b"%PDF-1.4\n" + (b"A" * padding) + b"\n%%EOF"
+
+
+# _FakeResp (defined near the top of this file) has no .content attribute —
+# GET responses in upload_msds_pdf read `.content`, not `.json()`. Small
+# standalone helper rather than touching the shared class used by every other
+# test in this file.
+def _fake_resp_with_content(content: bytes):
+    resp = _FakeResp(status=200)
+    resp.content = content
+    return resp
+
+
+class _FakeUploadFlowClient:
+    """Fake httpx.AsyncClient covering the full upload_msds_pdf network flow:
+    GET <pdf_source> (http(s) URL branch only), POST {API_URL}/sessions
+    (auto session create), POST {API_URL}/sessions/{id}/upload (multipart).
+    One instance is reused across both `async with httpx.AsyncClient(...)`
+    call sites in the tool so upload_calls captures the real multipart body."""
+
+    def __init__(self, get_body: bytes | None = None):
+        self._get_body = get_body if get_body is not None else b""
+        self.upload_calls: list[dict] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, url, **kw):
+        return _fake_resp_with_content(self._get_body)
+
+    async def post(self, url, **kw):
+        if url.endswith("/sessions"):
+            return _FakeResp(status=200, body={"session_id": "SESS-1"})
+        if "/upload" in url:
+            self.upload_calls.append(kw)
+            return _FakeResp(status=200, body={
+                "results": [{
+                    "status": "success",
+                    "chemical_name": "Acetone",
+                    "cas_number": "67-64-1",
+                    "risk_level": "medium",
+                    "fields": {},
+                    "missing": [],
+                }],
+                "summary": {"success": 1, "warning": 0, "failed": 0},
+            })
+        raise AssertionError(f"unexpected POST {url}")
+
+
+def _patch_upload_flow_client(monkeypatch, get_body: bytes | None = None):
+    fake = _FakeUploadFlowClient(get_body=get_body)
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda **kw: fake)
+    return fake
+
+
+def _set_upload_credential():
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+
+
+def test_upload_https_url_still_works(monkeypatch):
+    """CI-169 regression guard: adding inline-base64 support must not break
+    the existing http(s) URL branch."""
+    _set_upload_credential()
+    pdf_bytes = _minimal_pdf_bytes()
+    fake = _patch_upload_flow_client(monkeypatch, get_body=pdf_bytes)
+
+    res = asyncio.run(server.upload_msds_pdf("https://supplier.example.com/acetone_sds.pdf"))
+
+    assert isinstance(res, CallToolResult)
+    assert res.structuredContent["session_id"] == "SESS-1"
+    assert len(fake.upload_calls) == 1
+    sent_filename, sent_bytes, sent_ctype = fake.upload_calls[0]["files"]["file"]
+    assert sent_filename == "acetone_sds.pdf"
+    assert sent_bytes == pdf_bytes
+
+
+def test_upload_local_path_still_works(monkeypatch, tmp_path):
+    """CI-169 regression guard: local-path handling (self-hosted stdio case)
+    must still work after adding inline-base64 support."""
+    _set_upload_credential()
+    pdf_bytes = _minimal_pdf_bytes()
+    real_file = tmp_path / "acetone.pdf"
+    real_file.write_bytes(pdf_bytes)
+    fake = _patch_upload_flow_client(monkeypatch)
+
+    res = asyncio.run(server.upload_msds_pdf(str(real_file)))
+
+    assert isinstance(res, CallToolResult)
+    assert len(fake.upload_calls) == 1
+    sent_filename, sent_bytes, sent_ctype = fake.upload_calls[0]["files"]["file"]
+    assert sent_filename == "acetone.pdf"
+    assert sent_bytes == pdf_bytes
+
+
+def test_upload_data_uri_pdf_success(monkeypatch):
+    """A data:application/pdf;base64,<...> URI is decoded and uploaded."""
+    _set_upload_credential()
+    pdf_bytes = _minimal_pdf_bytes()
+    fake = _patch_upload_flow_client(monkeypatch)
+    data_uri = "data:application/pdf;base64," + _b64.b64encode(pdf_bytes).decode()
+
+    res = asyncio.run(server.upload_msds_pdf(data_uri))
+
+    assert isinstance(res, CallToolResult), f"expected success, got: {res!r}"
+    assert len(fake.upload_calls) == 1
+    sent_filename, sent_bytes, sent_ctype = fake.upload_calls[0]["files"]["file"]
+    assert sent_bytes == pdf_bytes, "decoded bytes must exactly match the original PDF"
+    assert sent_filename == "upload.pdf", "no filename given -> default upload.pdf"
+
+
+def test_upload_data_uri_respects_explicit_filename(monkeypatch):
+    """The optional `filename` arg names the file when pdf_source has none."""
+    _set_upload_credential()
+    pdf_bytes = _minimal_pdf_bytes()
+    fake = _patch_upload_flow_client(monkeypatch)
+    data_uri = "data:application/pdf;base64," + _b64.b64encode(pdf_bytes).decode()
+
+    res = asyncio.run(server.upload_msds_pdf(data_uri, filename="my_acetone_sds.pdf"))
+
+    assert isinstance(res, CallToolResult)
+    sent_filename = fake.upload_calls[0]["files"]["file"][0]
+    assert sent_filename == "my_acetone_sds.pdf"
+
+
+def test_upload_bare_base64_pdf_success(monkeypatch):
+    """A long bare base64 string (no data: prefix) that decodes to %PDF is
+    treated as inline content, not a local path."""
+    _set_upload_credential()
+    pdf_bytes = _minimal_pdf_bytes()
+    fake = _patch_upload_flow_client(monkeypatch)
+    bare_b64 = _b64.b64encode(pdf_bytes).decode()
+    assert len(bare_b64) >= 100, "test fixture must clear the bare-base64 sniff threshold"
+
+    res = asyncio.run(server.upload_msds_pdf(bare_b64))
+
+    assert isinstance(res, CallToolResult), f"expected success, got: {res!r}"
+    sent_bytes = fake.upload_calls[0]["files"]["file"][1]
+    assert sent_bytes == pdf_bytes
+
+
+def test_upload_bare_base64_non_pdf_falls_through_to_local_path(monkeypatch):
+    """A long base64-looking string that decodes fine but ISN'T a PDF must not
+    be swallowed as inline content — it falls through to local-path handling
+    (and fails there, since it isn't a real path either)."""
+    _set_upload_credential()
+    not_a_pdf = b"this is definitely not a pdf file, just padding " * 3
+    bare_b64 = _b64.b64encode(not_a_pdf).decode()
+    assert len(bare_b64) >= 100
+
+    res = asyncio.run(server.upload_msds_pdf(bare_b64))
+
+    assert isinstance(res, str)
+    assert "server" in res.lower() and "your machine" in res.lower(), (
+        "non-PDF base64 blob must fall through to the local-path message, not "
+        "be accepted as inline content"
+    )
+
+
+def test_upload_data_uri_non_pdf_content_rejected(monkeypatch):
+    """A data URI that decodes fine but isn't a PDF (wrong magic bytes) is an
+    explicit inline-content declaration, so it must be rejected outright, not
+    silently fall through to local-path handling."""
+    _set_upload_credential()
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+    not_a_pdf = _b64.b64encode(b"hello world, not a pdf").decode()
+    data_uri = f"data:application/pdf;base64,{not_a_pdf}"
+
+    res = asyncio.run(server.upload_msds_pdf(data_uri))
+
+    assert isinstance(res, str)
+    assert "%PDF" in res or "pdf" in res.lower()
+    assert captured[0]["success"] is False
+    assert captured[0]["error_message"]
+
+
+def test_upload_data_uri_over_size_limit_rejected(monkeypatch):
+    """Decoded content over the 10 MB inline cap is rejected with a clear
+    message pointing at the URL alternative, even though it IS a valid PDF."""
+    _set_upload_credential()
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+    oversized = b"%PDF-1.4\n" + b"0" * (server._MAX_INLINE_PDF_BYTES + 1)
+    data_uri = "data:application/pdf;base64," + _b64.b64encode(oversized).decode()
+
+    res = asyncio.run(server.upload_msds_pdf(data_uri))
+
+    assert isinstance(res, str)
+    low = res.lower()
+    assert "mb" in low and ("10" in low or "limit" in low)
+    assert captured[0]["success"] is False
+    assert captured[0]["error_message"]
+
+
+def test_upload_data_uri_corrupt_base64_returns_error_not_exception(monkeypatch):
+    """A malformed base64 payload in an explicit data: URI must return
+    success=False with a readable message — never propagate a raw
+    binascii.Error/exception out of the tool call."""
+    _set_upload_credential()
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+    data_uri = "data:application/pdf;base64,not-valid-base64!!!***"
+
+    res = asyncio.run(server.upload_msds_pdf(data_uri))
+
+    assert isinstance(res, str)
+    assert "base64" in res.lower() or "decode" in res.lower()
+    assert captured[0]["success"] is False
+    assert captured[0]["error_message"]
+
+
+def test_upload_data_uri_missing_base64_marker_rejected(monkeypatch):
+    """A data: URI without `;base64` (e.g. a URL-encoded text data URI) is not
+    something this tool supports — reject clearly instead of misparsing.
+
+    The payload here is deliberately a VALID base64 encoding of a real PDF —
+    if the ";base64" marker check were ever dropped, this would silently
+    decode and succeed instead of being rejected, so this is a stronger check
+    than a payload that merely fails to decode either way.
+    """
+    _set_upload_credential()
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+    valid_b64_of_real_pdf = _b64.b64encode(_minimal_pdf_bytes()).decode()
+
+    res = asyncio.run(server.upload_msds_pdf(f"data:application/pdf,{valid_b64_of_real_pdf}"))
+
+    assert isinstance(res, str)
+    assert "base64" in res.lower()
+    assert captured[0]["success"] is False
+
+
 # ---------------------------------------------------------------------------
 # CI-248 / CI-250: dropped logs must leave a trace, and the trace must never
 # be an empty error_message.
