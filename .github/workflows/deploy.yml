@@ -19,10 +19,13 @@ env:
   # Network-isolated public MCP core behind the private gateway (msds-chain-mcp-gateway,
   # separate repo). mcp.lagentbot.com → gateway → THIS app (internal ingress).
   APP_NAME: msds-chain-mcp-core
+  # GitHub-hosted images ship az CLI without the containerapp extension; install it
+  # without an interactive prompt (self-hosted runners had it installed once, by hand).
+  AZURE_EXTENSION_USE_DYNAMIC_INSTALL: yes_without_prompt
 
 jobs:
   deploy:
-    runs-on: [self-hosted, azure-sea]
+    runs-on: ubuntu-latest
     environment:
       name: production
       url: https://mcp.lagentbot.com/health
@@ -40,8 +43,8 @@ jobs:
       - name: Run tests
         run: python -m pytest tests/ -v
 
-      # Shared self-hosted runners share $HOME → a parallel job's az logout can wipe
-      # the default credential store mid-run. Give each run an isolated config dir.
+      # Kept from the self-hosted era (shared $HOME → a parallel job's az logout could
+      # wipe the default credential store mid-run). Harmless on hosted runners.
       - name: Isolate Azure CLI config
         run: echo "AZURE_CONFIG_DIR=${RUNNER_TEMP}/.azure-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
 
