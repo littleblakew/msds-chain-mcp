@@ -1764,6 +1764,17 @@ async def get_sds_section(chemical: str, section: int) -> str:
             lines.append(content)
         else:
             lines.append("No data available for this section in the canonical SDS.")
+        # CI-308: this section's text may come from a different underlying SDS
+        # record than get_sds_document's — surface the supplier/revision here too
+        # so a mismatch between the two tools is visible without reading the raw
+        # section text. Omit the line entirely (never "unknown supplier") when the
+        # backend doesn't provide it, since that would misleadingly imply a
+        # deliberate "no source" answer rather than a field the backend omitted.
+        if not data.get("unresolved") and data.get("supplier"):
+            region_suffix = f" · {data['region']}" if data.get("region") else ""
+            lines.append(f"\n- **Source:** {data['supplier']}{region_suffix}")
+            if data.get("revision_date"):
+                lines.append(f"- **Revision date:** {data['revision_date']}")
         lines.append(f"\n*Data source: {data.get('data_source', 'unknown')}*")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
@@ -2718,6 +2729,10 @@ async def get_sds_document(chemical: str) -> CallToolResult:
                     "revision_date": revision_date,
                     "region": region,
                     "record_id": data.get("record_id"),
+                    # CI-308: sha256 of the raw PDF bytes — the only exact key for
+                    # "is this the same physical file as get_sds_section returned",
+                    # since record_id comes from a different table on each path.
+                    "pdf_hash": data.get("pdf_hash"),
                     "pdf_url": full_url,
                     "expires_in_seconds": 300,
                 },
