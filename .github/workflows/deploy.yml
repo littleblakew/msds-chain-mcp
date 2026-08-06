@@ -5,9 +5,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# CI-328: 排队，不抢杀。抢杀会把正在跑的部署半路杀掉，可能停在「镜像已推 ACR、
+# Container App 还没切流量」的中间态。部署要的是按顺序全部跑完，不是只留最新那个。
+# （msds-chain 的 deploy-dev/deploy-prod 同批改，那边有完整背景注释。）
 concurrency:
   group: deploy-mcp-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   id-token: write
