@@ -718,6 +718,117 @@ def test_get_sds_document_no_credential_returns_auth_message(monkeypatch):
     assert "api key" in text or "authenticat" in text or "msds_api_key" in text
 
 
+def test_get_sds_document_includes_pdf_hash_when_backend_provides_it(monkeypatch):
+    """CI-308: pdf_hash must reach structuredContent — it's the only exact key
+    for reconciling get_sds_document against get_sds_section's own source."""
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+
+    body = {
+        "available": True,
+        "chemical_name": "Acetone",
+        "cas": "67-64-1",
+        "supplier": "Carl Roth",
+        "revision_date": "2024-09-18",
+        "region": "EU",
+        "record_id": 42,
+        "pdf_url": "/msds/token/abc123",
+        "pdf_hash": "deadbeef" * 8,
+    }
+    _patch_sds_doc_client(monkeypatch, 200, body)
+    monkeypatch.setattr(server, "_log_call", _capture_log_call()[0])
+
+    res = asyncio.run(server.get_sds_document("acetone"))
+
+    assert res.structuredContent["pdf_hash"] == "deadbeef" * 8
+
+
+def test_get_sds_document_pdf_hash_absent_on_old_backend(monkeypatch):
+    """Old backend (pre CI-308) doesn't send pdf_hash yet — must degrade to
+    None, not KeyError, and must not fabricate a placeholder hash."""
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+
+    body = {
+        "available": True,
+        "chemical_name": "Acetone",
+        "cas": "67-64-1",
+        "supplier": "Carl Roth",
+        "revision_date": "2024-09-18",
+        "region": "EU",
+        "record_id": 42,
+        "pdf_url": "/msds/token/abc123",
+        # no pdf_hash key at all
+    }
+    _patch_sds_doc_client(monkeypatch, 200, body)
+    monkeypatch.setattr(server, "_log_call", _capture_log_call()[0])
+
+    res = asyncio.run(server.get_sds_document("acetone"))
+
+    assert res.structuredContent["pdf_hash"] is None
+
+
+# ---------------------------------------------------------------------------
+# CI-308: get_sds_section must surface the section's own source (supplier /
+# region / revision date) in the TEXT output, not just structuredContent —
+# that's what makes a mismatch against get_sds_document visible to a human
+# or an LLM reading the answer, instead of requiring someone to diff two
+# raw structuredContent blobs or read the SDS's own letterhead text.
+# ---------------------------------------------------------------------------
+
+def _patch_sds_section_direct(monkeypatch, data: dict):
+    async def fake(chemical, section):
+        return data
+    monkeypatch.setattr(server, "_direct_sds_section", fake)
+
+
+def test_get_sds_section_shows_source_when_backend_provides_it(monkeypatch):
+    _patch_sds_section_direct(monkeypatch, {
+        "chemical": "Acetone",
+        "cas": "67-64-1",
+        "content": "Store in a cool, well-ventilated area away from oxidizers.",
+        "data_source": "canonical",
+        "supplier": "GB CLP",
+        "region": "UK",
+        "revision_date": "2023-05-24",
+    })
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    res = asyncio.run(server.get_sds_section("acetone", 7))
+
+    assert isinstance(res, CallToolResult)
+    text = res.content[0].text
+    assert "GB CLP" in text
+    assert "UK" in text
+    assert "2023-05-24" in text
+    assert captured[0]["success"] is True
+
+
+def test_get_sds_section_omits_source_line_when_backend_lacks_it(monkeypatch):
+    """Old backend (pre CI-308) doesn't send supplier/region/revision_date on
+    this endpoint yet — the tool must degrade to simply not showing the
+    source line, never a placeholder like 'unknown supplier' that would read
+    as a deliberate (and misleading) answer."""
+    _patch_sds_section_direct(monkeypatch, {
+        "chemical": "Acetone",
+        "cas": "67-64-1",
+        "content": "Store in a cool, well-ventilated area away from oxidizers.",
+        "data_source": "canonical",
+        # no supplier / region / revision_date keys at all
+    })
+    log_fn, captured = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    res = asyncio.run(server.get_sds_section("acetone", 7))
+
+    assert isinstance(res, CallToolResult)
+    text = res.content[0].text
+    assert "**Source:**" not in text
+    assert "unknown supplier" not in text.lower()
+    assert captured[0]["success"] is True
+
+
 # ---------------------------------------------------------------------------
 # CI-89: traceability surface — documents links + traceability labels
 #
