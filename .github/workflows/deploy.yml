@@ -147,4 +147,21 @@ jobs:
             echo "::warning::MCP_SMOKE_KEY not set — skipping tool-level smoke (only /health gated). Provision a CI-scoped prod key + add the secret to enable."
             exit 0
           fi
-          python scripts/smoke_mcp.py
+          # CI-371: 这一步在 revision 切换后 ~20s 就发起 MCP 握手，会在连接阶段炸
+          # （ExceptionGroup，一行输出都没有），2026-08-07 连续两次部署各红一次，
+          # 而两次的 Prod 都是好的、重跑即过。前面那步「Verify new core revision is
+          # running」只查 revision 的 provisioning 状态，**不代表网关已经能完成一次
+          # MCP 握手**——两者之间有真实的空窗。
+          # 🔴 重试只吸收「连接建立」这一类时序噪声：脚本内部的断言失败同样会让最后
+          # 一次尝试非零退出，硬门没有被削弱。别把重试次数加到能盖住真故障。
+          for attempt in 1 2 3; do
+            if python scripts/smoke_mcp.py; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::MCP smoke attempt $attempt failed — retrying in 20s (CI-371)"
+              sleep 20
+            fi
+          done
+          echo "::error::MCP smoke failed 3× over ~40s — this is not the revision-switch window"
+          exit 1
