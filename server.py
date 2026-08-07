@@ -678,6 +678,31 @@ async def _direct_sds_document(chemical: str) -> dict:
 # Tools
 # ---------------------------------------------------------------------------
 
+def _insufficient_lines(item: dict, what: str) -> list[str]:
+    """CI-360: 把后端的「判不了」渲染成人看得懂的文字，而不是一行 `Data source: none`。
+
+    背景：后端（CI-243）在「记录在库、但没有危害数据」时会返回
+    `insufficient_hazard_data: true` + `insufficient_reason`，但这一面**只渲染
+    `data_source`**。多数 MCP 客户端只读 text（`structuredContent` 不进模型上下文），
+    于是用户看到的是「一段空荡荡的输出 + Data source: none」——`none` 不在任何既有
+    枚举里，模型多半读成「来源未知但建议有效」，**比修之前的 hcode_mapping 更含混**。
+
+    🔴 与 PPE 那段（本文件更早的 `CANNOT BE DETERMINED` 分支）保持同一措辞：
+    说清「判不了」、说清「这不是低危结论」、明确禁止模型用常识补空。
+    """
+    reason = item.get("insufficient_reason")
+    lines = [
+        f"- **{what}: CANNOT BE DETERMINED** — the SDS record we hold for this "
+        "substance parsed no hazard data we can answer from. This is NOT a "
+        "low-hazard finding and NOT permission to proceed. Do not infer it from "
+        "general knowledge; upload this substance's SDS or try another supplier's "
+        "record.",
+    ]
+    if reason:
+        lines.append(f"  - Why: {reason}")
+    return lines
+
+
 @mcp.tool(
     annotations=ToolAnnotations(title="Check Chemical Compatibility", readOnlyHint=True, destructiveHint=False, openWorldHint=False),
     structured_output=False,
@@ -1195,6 +1220,12 @@ async def get_emergency_response(chemical: str, scenario: str = "spill") -> str:
         if hcode:
             lines.append("**Hazard Code Guidance:**")
             lines.extend(f"  - {a}" for a in hcode)
+            lines.append("")
+        # CI-360: 「判不了」要说出来，别让用户从一行 `Data source: none` 里猜。
+        # 🔴 只在**这个场景**判不了；上面 immediate_actions 里与化学品无关的通用动作
+        # （呼叫急救、参照 SDS 第 6 节）照常渲染 —— 该说的不说也是失真。
+        if data.get("insufficient_hazard_data"):
+            lines.extend(_insufficient_lines(data, "Scenario-specific response"))
             lines.append("")
         lines.append(f"*Data source: {data.get('data_source', 'unknown')}*")
         if data.get("unresolved"):
@@ -1964,7 +1995,14 @@ async def get_waste_disposal(chemicals: list[str]) -> str:
         lines = ["**Waste Disposal Guidance**\n"]
         for item in data.get("results", []):
             lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
-            lines.append(f"- **Waste classification:** {item.get('waste_classification', 'N/A')}")
+            # 🔴 CI-360：无依据时 `waste_classification` 是后端的兜底桶
+            # （`general_chemical_waste`），把它当分类结论渲染，会和同一段里的
+            # `Data source: none` 直接打架——一句说「这是普通化学废物」，一句说
+            # 「我们没有依据」。诚实的那句必须赢。
+            if item.get("insufficient_hazard_data"):
+                lines.extend(_insufficient_lines(item, "Waste classification"))
+            else:
+                lines.append(f"- **Waste classification:** {item.get('waste_classification', 'N/A')}")
             sds_13 = item.get("sds_section_13")
             if sds_13:
                 lines.append(f"- **SDS Section 13 (Disposal Considerations):** {sds_13[:600]}")
