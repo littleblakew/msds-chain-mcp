@@ -120,23 +120,55 @@ def test_cannot_determine_still_says_so_in_text():
     assert "NOT a low-hazard finding" in text
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CI-336 finding, 2026-08-08 — defect exists only in this layer, which is "
-        "why the /api/v2 suite cannot see it. get_ppe_recommendation's trace_label "
-        "falls back to 'is there a document for this name' when traceability is "
-        "neither sds_backed nor rule_based. `none` — the value CI-243/CI-365 "
-        "introduced precisely to mean 'nothing was read' — lands in that fallback, "
-        "so a record with no hazard data gets stamped '[Source: SDS document]' in "
-        "the text a model consumes. The backend removed the claim; the wrapper puts "
-        "it back. xfail(strict) rather than a fix: the fix belongs to whoever owns "
-        "the CI-365 contract, and this file must not gate a release."
-    ),
-)
+# 🔴 2026-08-08 已修（CI-365 的 owner）：原为 xfail(strict)，因为缺陷只活在这一层、
+# /api/v2 的套件看不见它。`traceability: none` 曾掉进「有没有文档」的推断分支，
+# 于是一条**没有任何危害数据**的记录被盖上 "[Source: SDS document]"——
+# 后端刚拿掉的虚假出处声明，被包装层原样加了回去。现在 `none` 显式处理为无标签。
 def test_no_sds_source_label_when_nothing_was_read():
     """Invariant ④ on the wrapper's text: `traceability: none` ⇒ no source claim."""
     res = _run(server.get_ppe_recommendation, "_direct_ppe",
                INSUFFICIENT_WITH_PDF, ["invented filler b"])
     header = res.content[0].text.split("\n")[2]
     assert "[Source: SDS document]" not in header, header
+
+
+def test_a_real_sds_backed_result_still_gets_its_source_label():
+    """🔴 正向锚点 —— 没有这条，「把标签功能整个删掉」也能全绿。
+
+    2026-08-08 实测：把 `sds_backed` 分支改成返回空字符串，本文件 4 条测试**一条都不红**。
+    也就是说此前这套测试只能证明「不该标的没标」，无法证明「该标的标了」——
+    一个恒返回空的实现可以骗过它。
+
+    这是本仓反复记录的形态（`my-own-guards-are-often-no-ops`）：修一个方向的错误时，
+    必须同时钉住反方向，否则「修复」和「把功能删掉」在测试眼里一模一样。
+    """
+    backed = {
+        "results": [{
+            "chemical_name": "Acetone", "cas": "67-64-1",
+            "minimum_ppe_level": "standard",
+            "traceability": "sds_backed",
+            "insufficient_hazard_data": False,
+        }],
+        "documents": [],
+        "unresolved": [],
+    }
+    res = _run(server.get_ppe_recommendation, "_direct_ppe", backed, ["acetone"])
+    text = res.content[0].text
+    assert "[Source: SDS document]" in text, text
+
+
+def test_rule_based_says_rule_not_sds():
+    """规则引擎的结论要标成规则，不能标成 SDS —— 另一个方向的锚点。"""
+    ruled = {
+        "results": [{
+            "chemical_name": "Acetone", "cas": "67-64-1",
+            "minimum_ppe_level": "standard",
+            "traceability": "rule_based",
+            "insufficient_hazard_data": False,
+        }],
+        "documents": [],
+        "unresolved": [],
+    }
+    text = _run(server.get_ppe_recommendation, "_direct_ppe", ruled, ["acetone"]).content[0].text
+    assert "[Basis: rule/standard]" in text, text
+    assert "[Source: SDS document]" not in text, text

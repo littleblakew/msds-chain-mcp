@@ -256,6 +256,35 @@ def _doc_link_lookup(documents: list[dict]) -> dict[str, str]:
     return lut
 
 
+def _traceability_label(traceability: str | None, chem_key: str | None,
+                        sds_backed_chemicals: set) -> str:
+    """把后端的 `traceability` 翻成给模型读的一句出处标注。
+
+    🔴 **单一实现，三个格式化点共用。** 此前这段逻辑在 `server.py` 里**抄了三份**
+    （risk-warnings / PPE / 综合报告），CI-336 只在其中一处发现缺陷——
+    与 CI-277 记的「收口不止一处，判定链有三个入口会漏」是同一个形态：
+    分头修会修三次补丁，而下一类错值来时还得有人记得再改三遍。
+
+    🔴 **`none` 不等于「字段缺失」。** 它是 CI-243 引入、CI-365 沿用的值，含义是
+    **什么依据都没有读到**（记录连危害数据都没有）。它一度掉进下面那个
+    「这个化学品有没有 PDF」的推断分支，于是一条零危害数据的记录被盖上
+    `[Source: SDS document]` —— **后端刚拿掉的虚假出处声明，被这一层原样加了回去**，
+    而且是在模型直接消费的文本里。产品唯一的对外主张就是「答案可追溯到具体供应商 SDS」，
+    这句话在这里是假的。
+
+    推断分支只保留给**后端根本没给这个字段**的情况（老后端）。即便如此，它断言的也只是
+    「这个化学品有文档」，不是「这条结论出自那份文档」——所以别把它扩大到任何已知值上。
+    """
+    if traceability == "sds_backed":
+        return "[Source: SDS document]"
+    if traceability == "rule_based":
+        return "[Basis: rule/standard]"
+    if traceability == "none":
+        return ""
+    key = (chem_key or "").lower()
+    return "[Source: SDS document]" if key and key in sds_backed_chemicals else ""
+
+
 def _inline_sds(lookup: dict[str, str], *keys: str) -> str:
     """Return a compact inline SDS-link suffix for the first matching key, else ''."""
     for k in keys:
@@ -843,17 +872,8 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
             level = w.get("level", "unknown").upper()
             # CI-89: label each warning by its traceability
             traceability = w.get("traceability")
-            if traceability == "sds_backed":
-                trace_label = "[Source: SDS document]"
-            elif traceability == "rule_based":
-                trace_label = "[Basis: rule/standard]"
-            else:
-                # Backend didn't provide field — infer from documents list
-                chem_key = (w.get("chemical") or "").lower()
-                if chem_key and chem_key in sds_backed_chemicals:
-                    trace_label = "[Source: SDS document]"
-                else:
-                    trace_label = ""
+            trace_label = _traceability_label(
+                traceability, w.get("chemical"), sds_backed_chemicals)
             # CI-89-inline: SDS link on the warning line itself
             inline = _inline_sds(doc_lut, w.get("chemical"), w.get("cas"))
             lines.append(
@@ -1059,16 +1079,8 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
         for item in data.get("results", []):
             # CI-89: label each result by its traceability
             traceability = item.get("traceability")
-            if traceability == "sds_backed":
-                trace_label = "[Source: SDS document]"
-            elif traceability == "rule_based":
-                trace_label = "[Basis: rule/standard]"
-            else:
-                chem_key = (item.get("chemical_name") or "").lower()
-                if chem_key and chem_key in sds_backed_chemicals:
-                    trace_label = "[Source: SDS document]"
-                else:
-                    trace_label = ""
+            trace_label = _traceability_label(
+                traceability, item.get("chemical_name"), sds_backed_chemicals)
             header = f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})"
             if trace_label:
                 header += f"  {trace_label}"
@@ -2579,16 +2591,8 @@ async def batch_safety_check(chemicals: list[str]) -> str:
         for w in data.get("risk_warnings", []):
             # CI-89: label each warning by traceability
             traceability = w.get("traceability")
-            if traceability == "sds_backed":
-                trace_label = "[Source: SDS document]"
-            elif traceability == "rule_based":
-                trace_label = "[Basis: rule/standard]"
-            else:
-                chem_key = (w.get("chemical") or "").lower()
-                if chem_key and chem_key in sds_backed_chemicals:
-                    trace_label = "[Source: SDS document]"
-                else:
-                    trace_label = ""
+            trace_label = _traceability_label(
+                traceability, w.get("chemical"), sds_backed_chemicals)
             inline = _inline_sds(doc_lut, w.get("chemical"), w.get("cas"))  # CI-89-inline
             sections.append(
                 f"### {w.get('chemical', 'Unknown')} — {w.get('level', 'unknown').upper()} RISK "
