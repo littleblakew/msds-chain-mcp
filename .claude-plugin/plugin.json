@@ -1,6 +1,6 @@
 {
   "name": "msds-chain",
-  "version": "1.5.6",
+  "version": "1.5.7",
   "description": "Chemical safety intelligence for AI-assisted experiment design — 23 tools for compatibility, hazard, PPE, storage, waste disposal, mixing order, exposure limits, transport classification, regulatory compliance (23 lists, 10 regions), SDS version diff, PDF upload, chemical substitution, first aid, GHS labels, signed audit reports, SDS PDF signed download URLs, and online PubChem GHS fallback for chemicals not yet in the database.",
   "author": {
     "name": "LAgentBot Pte. Ltd.",
