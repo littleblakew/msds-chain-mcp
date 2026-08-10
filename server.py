@@ -112,7 +112,7 @@ TIMEOUT_LLM = 120.0   # quick-chat endpoints — multi-turn LLM reasoning
 # we assign it on the underlying low-level server after construction; this is what
 # surfaces as serverInfo.version in the MCP `initialize` handshake (what ChatGPT,
 # claude.ai and any raw MCP client display).
-__version__ = "1.5.7"
+__version__ = "1.5.8"
 
 mcp = FastMCP(
     "MSDS Chain",

@@ -6,12 +6,12 @@
     "url": "https://github.com/littleblakew/msds-chain-mcp",
     "source": "github"
   },
-  "version": "1.5.7",
+  "version": "1.5.8",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "msds-chain-mcp",
-      "version": "1.5.7",
+      "version": "1.5.8",
       "transport": {
         "type": "streamable-http",
         "url": "https://mcp.lagentbot.com/mcp"
