@@ -1806,7 +1806,18 @@ async def get_sds_section(chemical: str, section: int) -> str:
         elif content:
             lines.append(content)
         else:
-            lines.append("No data available for this section in the canonical SDS.")
+            # CI-408: 这条工具是 structured_output=False —— LLM 读的是这段文本，
+            # 不是 structuredContent。后端把「为什么没有正文」建模成了
+            # no_section_text_note（三种原因：整份没解析出分段 / 这一节不在里面 /
+            # 没有 canonical 记录），如果这里仍然回那句无区分度的固定文案，
+            # 后端那个修复对模型来说等于不存在。
+            #
+            # 🔴 为什么必须说清「这是数据缺口，不是危害结论」：本项目栽过——
+            # 「空」在下游被读成「无危害」，40% HF 的储存建议因此掉进普通柜。
+            lines.append(
+                data.get("no_section_text_note")
+                or "No data available for this section in the canonical SDS."
+            )
         # CI-308: this section's text may come from a different underlying SDS
         # record than get_sds_document's — surface the supplier/revision here too
         # so a mismatch between the two tools is visible without reading the raw
