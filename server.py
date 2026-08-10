@@ -1167,6 +1167,13 @@ async def get_storage_guidance(chemicals: list[str]) -> str:
             reqs = item.get("storage_requirements", [])
             if reqs:
                 lines.append("- **Storage requirements:** " + "; ".join(str(r) for r in reqs))
+            # CI-370：GHS 官方存储段处置语（通风/密闭/阴凉/避光/上锁），每条带 P 码。
+            # 与上面的 storage_requirements 分开渲染：那是按危害类别推的柜型/温度要求，
+            # 这是官方指派语 —— 出处不同，别混成一段（同 get_emergency_response）。
+            conditions = item.get("precaution_conditions", [])
+            if conditions:
+                lines.append("- **GHS Standard Precautions (storage):** "
+                             + "; ".join(str(c) for c in conditions))
             incompatible = item.get("incompatible_materials", [])
             if incompatible:
                 lines.append("- **Incompatible materials:** " + ", ".join(str(m) for m in incompatible))
@@ -1232,6 +1239,19 @@ async def get_emergency_response(chemical: str, scenario: str = "spill") -> str:
         if hcode:
             lines.append("**Hazard Code Guidance:**")
             lines.extend(f"  - {a}" for a in hcode)
+            lines.append("")
+        # CI-370: GHS 官方为该危害类别指派的处置语（P 句），每条自带 P 码。
+        # 🔴 必须渲进**文本**：后端可答率因这一层从 15.5% 升到 79.2%（exposure 场景），
+        # 但多数 MCP 客户端只把 text 喂给模型（见 CI-360 的同一教训）——只放在
+        # structuredContent 里，等于后端声称有依据而用户看到零条指引。
+        # 🔴 标题写明出处：这是**这一类危害**的标准处置语，不是这份 SDS 的正文。
+        # 两者混在一段渲染会让模型把通用语当成「这份 SDS 这么说」，侵蚀「可追溯」这个主张。
+        precaution = data.get("precaution_actions", [])
+        if precaution:
+            lines.append("**GHS Standard Precautions** "
+                         "(official GHS statements for this hazard class — "
+                         "not text from this specific SDS):")
+            lines.extend(f"  - {a}" for a in precaution)
             lines.append("")
         # CI-360: 「判不了」要说出来，别让用户从一行 `Data source: none` 里猜。
         # 🔴 只在**这个场景**判不了；上面 immediate_actions 里与化学品无关的通用动作
