@@ -1849,6 +1849,16 @@ async def get_sds_section(chemical: str, section: int) -> str:
             lines.append(f"\n- **Source:** {data['supplier']}{region_suffix}")
             if data.get("revision_date"):
                 lines.append(f"- **Revision date:** {data['revision_date']}")
+        # 🔴 CI-347：同一个 CAS 可以是两种形态（无水氟化氢 vs 氢氟酸水溶液），
+        # 而**储存/泄漏处置/急救都不同**。后端把「这份数据是哪种形态、另一种我们没有」
+        # 建模成了 `physical_form_disclosure`；这条工具是 structured_output=False，
+        # **LLM 读的是这段文本**，不放进来后端那个修复对模型就等于不存在
+        # ——CI-408 已经栽过一次同样的形态，别再来第三次。
+        #
+        # `None` ＝ 未判定（不是「只有一种形态」）⇒ 那时**什么都不说**，
+        # 别编一句「本品为某某形态」出来。
+        if data.get("physical_form_disclosure"):
+            lines.append(f"- **⚠️ {data['physical_form_disclosure']}**")
         lines.append(f"\n*Data source: {data.get('data_source', 'unknown')}*")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
