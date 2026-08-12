@@ -762,7 +762,7 @@ async def check_chemical_compatibility(chemicals: list[str]) -> CallToolResult:
         lines = [f"**Compatibility Check** ({len(chemicals)} chemicals)\n"]
 
         if data.get("unresolved"):
-            lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}\n")
+            lines.extend(_unresolved_block(data, trailing_newline=True))
         lines.extend(_rejected_products_block(data))
 
         # CI-89-inline: per-chemical link lookup so each pair row carries its own
@@ -857,7 +857,7 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
         lines = [f"**Risk Warnings** ({len(chemicals)} chemicals)\n"]
 
         if data.get("unresolved"):
-            lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}\n")
+            lines.extend(_unresolved_block(data, trailing_newline=True))
         lines.extend(_rejected_products_block(data))
 
         # CI-89: build a set of chemicals that have SDS-backed documents
@@ -1110,7 +1110,7 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
                     lines.append(f"- **{category.title()}:** {recs}")
             lines.append("")
         if data.get("unresolved"):
-            lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}")
+            lines.extend(_unresolved_block(data))
         if not data.get("results"):
             lines.append("No PPE data found for the given chemicals.")
 
@@ -1182,7 +1182,7 @@ async def get_storage_guidance(chemicals: list[str]) -> str:
                 lines.append("- **NFPA ratings:** " + ", ".join(f"{k.title()} {v}" for k, v in nfpa.items()))
             lines.append("")
         if data.get("unresolved"):
-            lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}")
+            lines.extend(_unresolved_block(data))
         if not data.get("results"):
             lines.append("No storage data found for the given chemicals.")
         return CallToolResult(
@@ -1318,7 +1318,7 @@ async def get_exposure_limits(chemicals: list[str], region: str | None = None) -
                 lines.append("- No OEL data found for this chemical.")
             lines.append(f"*Data source: {item.get('data_source', 'unknown')}*\n")
         if data.get("unresolved"):
-            lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}")
+            lines.extend(_unresolved_block(data))
         if not data.get("results"):
             lines.append("No exposure-limit data found for the given chemicals.")
         return CallToolResult(
@@ -1362,7 +1362,7 @@ async def get_transport_classification(chemicals: list[str]) -> str:
                 lines.extend(f"  - {mode.upper()}: {details}" for mode, details in modes.items())
             lines.append(f"*Data source: {item.get('data_source', 'unknown')}*\n")
         if data.get("unresolved"):
-            lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}")
+            lines.extend(_unresolved_block(data))
         if not data.get("results"):
             lines.append("No transport-classification data found for the given chemicals.")
         return CallToolResult(
@@ -1585,6 +1585,41 @@ async def get_audit_report(session_id: str) -> str:
         dur = int((time.monotonic() - t0) * 1000)
         await _log_call("get_audit_report", None, dur, success, error_msg,
                         _json.dumps({"session_id": session_id}))
+
+
+def _unresolved_block(data: dict, *, trailing_newline: bool = False) -> list[str]:
+    """CI-470 phase 3b: render WHY each name was unresolved, not just that it was.
+
+    The backend has always known the difference between "we hold no record",
+    "a lookup step failed so this absence is not trustworthy" and "the name and
+    the CAS you gave contradict each other, so we refused" — and until now this
+    surface flattened all three into one line of bare names. A model reading
+    `**Unresolved:** hydrofluoric acid` reasonably concludes we have no data and
+    tells the user so; that conclusion is one we are not entitled to when the
+    real cause was a failed lookup.
+
+    🔴 Falls back to the plain name list whenever the backend did not send
+    `unresolved_detail` (older backend, or an endpoint that does not build it
+    yet). Silence must never turn into an invented reason.
+    """
+    names = data.get("unresolved") or []
+    if not names:
+        return []
+    tail = "\n" if trailing_newline else ""
+    detail = {d.get("query"): d for d in (data.get("unresolved_detail") or [])
+              if isinstance(d, dict)}
+    if not detail:
+        return [f"**Unresolved:** {', '.join(names)}{tail}"]
+    lines = ["**Unresolved:**"]
+    for name in names:
+        d = detail.get(name)
+        # English surface: this server renders in English (see the tool
+        # descriptions); `reason_en` is the backend's own English sentence, and
+        # `reason` (zh) is deliberately NOT used as a fallback — a Chinese
+        # sentence dropped into an English answer reads as a rendering bug.
+        why = (d or {}).get("reason_en")
+        lines.append(f"- **{name}**" + (f" — {why}" if why else ""))
+    return lines + ([""] if trailing_newline else [])
 
 
 def _rejected_products_block(data: dict) -> list[str]:
@@ -2110,7 +2145,7 @@ async def get_waste_disposal(chemicals: list[str]) -> str:
                 lines.append(f"- **SDS Section 13 (Disposal Considerations):** {sds_13[:600]}")
             lines.append(f"*Data source: {item.get('data_source', 'unknown')}*\n")
         if data.get("unresolved"):
-            lines.append(f"**Unresolved:** {', '.join(data['unresolved'])}")
+            lines.extend(_unresolved_block(data))
         if not data.get("results"):
             lines.append("No waste-disposal data found for the given chemicals.")
         return CallToolResult(
@@ -2637,7 +2672,7 @@ async def batch_safety_check(chemicals: list[str]) -> str:
         sections.append(f"**Chemicals ({len(chemicals)}):** {chem_list}\n")
 
         if data.get("unresolved"):
-            sections.append(f"**Unresolved:** {', '.join(data['unresolved'])}\n")
+            sections.extend(_unresolved_block(data, trailing_newline=True))
         sections.extend(_rejected_products_block(data))
 
         # CI-89: extract documents and build SDS-backed chemical set
