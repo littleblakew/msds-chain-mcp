@@ -117,3 +117,25 @@ def test_structured_content_marks_exclusion_on_every_row():
     assert by_name[NAME]["included_in_assessment"] is False
     assert by_name[NAME]["catalog_number"] == CATALOG
     assert by_name["Acetone"]["included_in_assessment"] is True
+
+
+def test_no_cas_row_survives_truncation_when_ordinary_hits_fill_the_budget():
+    """🔴 后端把无 CAS 行**追加在结果尾部**（只在前两层没填满时才补），而这里原本只
+    渲染前 5 条 —— 一个名字片段撞上 5~9 条无关的普通物质（"aminomethyl"、
+    "cyclopropane" 这类片段在语料里成千上万条），用户真正要找的那条连同它的 GHS 和
+    披露就被整段切掉，抬头却仍写着 "Found 10 result(s)"，模型看不出发生过截断。
+    """
+    ordinary = [dict(ORDINARY_ROW, id=100 + i, name=f"Unrelated {i}") for i in range(9)]
+    txt, struct = _search([*ordinary, NO_CAS_ROW])
+
+    assert NAME in txt, f"无 CAS 行被截断掉了，披露没有发生 —— 实际：{txt!r}"
+    assert "NOT included" in txt
+    assert any(r["name"] == NAME for r in struct["results"])
+
+
+def test_truncation_is_announced_rather_than_silent():
+    """静默的上限读起来和「这就是全部」一模一样。"""
+    ordinary = [dict(ORDINARY_ROW, id=200 + i, name=f"Unrelated {i}") for i in range(9)]
+    txt, _ = _search([*ordinary, NO_CAS_ROW])
+
+    assert "not shown" in txt, f"截断了却没说 —— 实际：{txt!r}"

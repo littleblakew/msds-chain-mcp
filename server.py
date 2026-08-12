@@ -1653,9 +1653,21 @@ async def search_chemical_database(query: str) -> str:
                 chemicals = data if isinstance(data, list) else data.get("chemicals", [])
                 if not chemicals:
                     return f'No chemicals found matching "{query}" in the MSDS Chain database.'
+                # 🔴 CI-322: 无 CAS 行由后端**追加在结果尾部**（只在前两层没填满时才
+                # 补），而这里只渲染前 5 条 —— 一个名字片段撞上 5~9 条无关的普通物质，
+                # 用户真正要找的那条无 CAS 记录连同它的 GHS 和披露就被整段切掉，抬头
+                # 却仍写着 "Found 10 result(s)"。模型完全看不出发生过截断。
+                # 所以按类别分别取：普通行 5 条的预算不变，无 CAS 行**单独保留名额**
+                # —— 它们是唯一带披露义务的一类，被截掉等于披露没发生。
+                _no_cas = [c for c in chemicals
+                           if (c.get("record_kind") or "") == "substance_no_cas"]
+                _ordinary = [c for c in chemicals
+                             if (c.get("record_kind") or "") != "substance_no_cas"]
+                shown = _ordinary[:5] + _no_cas[:3]
+                omitted = len(chemicals) - len(shown)
                 lines = [f"Found {len(chemicals)} result(s) for '{query}':\n"]
                 struct_results = []
-                for c in chemicals[:5]:
+                for c in shown:
                     name = c.get("name") or c.get("chemical_name", "Unknown")
                     cas = c.get("cas_number", "—")
                     flam = c.get("flammability", "—")
@@ -1715,6 +1727,12 @@ async def search_chemical_database(query: str) -> str:
                             "disclosure": c.get("disclosure")}
                            if kind == "substance_no_cas" else {}),
                     })
+                if omitted > 0:
+                    # 截断必须说出来。静默的上限读起来和「这就是全部」一模一样。
+                    lines.append(
+                        f"\n_({omitted} further result(s) not shown — refine the query "
+                        f"or search by CAS / supplier catalog number.)_"
+                    )
                 return CallToolResult(
                     content=[TextContent(type="text", text="\n".join(lines))],
                     structuredContent={
