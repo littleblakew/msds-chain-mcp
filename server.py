@@ -1664,7 +1664,27 @@ async def search_chemical_database(query: str) -> str:
                     # its GHS classification describes the whole formulation. Label it
                     # so the caller never reads it as a substance record.
                     kind = c.get("record_kind") or "substance"
-                    if kind == "product":
+                    if kind == "substance_no_cas":
+                        # CI-322 B2: a legitimately CAS-less substance (a newly
+                        # synthesised building block that has never been assigned
+                        # one). We DO hold its supplier SDS and its full GHS, so
+                        # withholding is the more dangerous option — an empty
+                        # hazard field reads downstream as "no hazard". Quote what
+                        # we have AND say plainly it is not part of any verdict.
+                        ghs = c.get("ghs") or {}
+                        h_codes = ", ".join(ghs.get("hazard_statements") or []) or "—"
+                        catalog = c.get("catalog_number") or "—"
+                        lines.append(
+                            f"• **{name}** — no CAS number (supplier catalog "
+                            f"{catalog}, {c.get('supplier') or 'unknown supplier'})\n"
+                            f"  GHS from the supplier SDS, quoted verbatim: "
+                            f"{ghs.get('signal_word') or '—'} / {h_codes}\n"
+                            f"  🔴 This record has NO CAS number, so it is NOT "
+                            f"included in compatibility, storage or hazard "
+                            f"assessment — those need a CAS-level identity. Report "
+                            f"both halves to the user; do not present it as assessed."
+                        )
+                    elif kind == "product":
                         lines.append(
                             f"• **{name}** — formulated product (mixture, no single CAS)\n"
                             f"  Its hazard classification applies to the whole "
@@ -1683,6 +1703,17 @@ async def search_chemical_database(query: str) -> str:
                         "record_kind": kind,
                         "flammability": c.get("flammability"),
                         "toxicity": c.get("toxicity"),
+                        # CI-322: machine-readable half of the disclosure. Present
+                        # on every row (True for ordinary substances) so a caller
+                        # reading this field never has to infer exclusion from a
+                        # missing key — absence and False must not look the same.
+                        "included_in_assessment": c.get(
+                            "included_in_assessment", kind == "substance"
+                        ),
+                        **({"catalog_number": c.get("catalog_number"),
+                            "ghs": c.get("ghs"),
+                            "disclosure": c.get("disclosure")}
+                           if kind == "substance_no_cas" else {}),
                     })
                 return CallToolResult(
                     content=[TextContent(type="text", text="\n".join(lines))],
