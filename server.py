@@ -1653,9 +1653,21 @@ async def search_chemical_database(query: str) -> str:
                 chemicals = data if isinstance(data, list) else data.get("chemicals", [])
                 if not chemicals:
                     return f'No chemicals found matching "{query}" in the MSDS Chain database.'
+                # 🔴 CI-322: 无 CAS 行由后端**追加在结果尾部**（只在前两层没填满时才
+                # 补），而这里只渲染前 5 条 —— 一个名字片段撞上 5~9 条无关的普通物质，
+                # 用户真正要找的那条无 CAS 记录连同它的 GHS 和披露就被整段切掉，抬头
+                # 却仍写着 "Found 10 result(s)"。模型完全看不出发生过截断。
+                # 所以按类别分别取：普通行 5 条的预算不变，无 CAS 行**单独保留名额**
+                # —— 它们是唯一带披露义务的一类，被截掉等于披露没发生。
+                _no_cas = [c for c in chemicals
+                           if (c.get("record_kind") or "") == "substance_no_cas"]
+                _ordinary = [c for c in chemicals
+                             if (c.get("record_kind") or "") != "substance_no_cas"]
+                shown = _ordinary[:5] + _no_cas[:3]
+                omitted = len(chemicals) - len(shown)
                 lines = [f"Found {len(chemicals)} result(s) for '{query}':\n"]
                 struct_results = []
-                for c in chemicals[:5]:
+                for c in shown:
                     name = c.get("name") or c.get("chemical_name", "Unknown")
                     cas = c.get("cas_number", "—")
                     flam = c.get("flammability", "—")
@@ -1664,7 +1676,27 @@ async def search_chemical_database(query: str) -> str:
                     # its GHS classification describes the whole formulation. Label it
                     # so the caller never reads it as a substance record.
                     kind = c.get("record_kind") or "substance"
-                    if kind == "product":
+                    if kind == "substance_no_cas":
+                        # CI-322 B2: a legitimately CAS-less substance (a newly
+                        # synthesised building block that has never been assigned
+                        # one). We DO hold its supplier SDS and its full GHS, so
+                        # withholding is the more dangerous option — an empty
+                        # hazard field reads downstream as "no hazard". Quote what
+                        # we have AND say plainly it is not part of any verdict.
+                        ghs = c.get("ghs") or {}
+                        h_codes = ", ".join(ghs.get("hazard_statements") or []) or "—"
+                        catalog = c.get("catalog_number") or "—"
+                        lines.append(
+                            f"• **{name}** — no CAS number (supplier catalog "
+                            f"{catalog}, {c.get('supplier') or 'unknown supplier'})\n"
+                            f"  GHS from the supplier SDS, quoted verbatim: "
+                            f"{ghs.get('signal_word') or '—'} / {h_codes}\n"
+                            f"  🔴 This record has NO CAS number, so it is NOT "
+                            f"included in compatibility, storage or hazard "
+                            f"assessment — those need a CAS-level identity. Report "
+                            f"both halves to the user; do not present it as assessed."
+                        )
+                    elif kind == "product":
                         lines.append(
                             f"• **{name}** — formulated product (mixture, no single CAS)\n"
                             f"  Its hazard classification applies to the whole "
@@ -1683,7 +1715,24 @@ async def search_chemical_database(query: str) -> str:
                         "record_kind": kind,
                         "flammability": c.get("flammability"),
                         "toxicity": c.get("toxicity"),
+                        # CI-322: machine-readable half of the disclosure. Present
+                        # on every row (True for ordinary substances) so a caller
+                        # reading this field never has to infer exclusion from a
+                        # missing key — absence and False must not look the same.
+                        "included_in_assessment": c.get(
+                            "included_in_assessment", kind == "substance"
+                        ),
+                        **({"catalog_number": c.get("catalog_number"),
+                            "ghs": c.get("ghs"),
+                            "disclosure": c.get("disclosure")}
+                           if kind == "substance_no_cas" else {}),
                     })
+                if omitted > 0:
+                    # 截断必须说出来。静默的上限读起来和「这就是全部」一模一样。
+                    lines.append(
+                        f"\n_({omitted} further result(s) not shown — refine the query "
+                        f"or search by CAS / supplier catalog number.)_"
+                    )
                 return CallToolResult(
                     content=[TextContent(type="text", text="\n".join(lines))],
                     structuredContent={
