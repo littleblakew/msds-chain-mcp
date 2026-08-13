@@ -211,6 +211,15 @@ def _quick_result(data: dict) -> CallToolResult:
     )
 
 
+# 后端没给 note 时的兜底文案（老后端、或将来新增的 reason）。键是机器可判的
+# `document_unavailable_reason`；未知 reason 落到空串 ⇒ 只少一句解释，不会瞎猜原因。
+_UNAVAILABLE_FALLBACK = {
+    "daily_pdf_quota_reached": "we hold this SDS, but your daily download quota is used up",
+    "insufficient_credits": "we hold this SDS, but your credit balance is insufficient to fetch it",
+    "quota_check_failed": "we hold this SDS, but the download check is temporarily unavailable",
+}
+
+
 def _format_sds_documents(documents: list[dict]) -> str:
     """Render a `documents` list as an '📄 Original SDS' section.
 
@@ -233,6 +242,19 @@ def _format_sds_documents(documents: list[dict]) -> str:
             entry += f" ({meta})"
         if url:
             entry += f": {url}"
+        else:
+            # 🔴 CI-488：没有 URL **不等于**「我们没有这份 SDS」。
+            #
+            # 后端现在会在每日下载额度用尽（或配额子系统故障）时保留条目、去掉链接，
+            # 并附上 `document_unavailable_reason` / `_note`。少了这一句，这里渲染出来
+            # 的是「📄 Original SDS」标题下一行**没有链接也没有解释**的条目——人和模型
+            # 都只会读成「这份文件不存在/坏了」，正是后端那两个字段要避免的歧义。
+            # 后端建模好了而渲染层没接，本仓吃过的亏就叫「修了但没到达真正的消费者」。
+            note = doc.get("document_unavailable_note") or _UNAVAILABLE_FALLBACK.get(
+                doc.get("document_unavailable_reason") or "", ""
+            )
+            if note:
+                entry += f" — {note}"
         lines.append(entry)
     return "\n".join(lines)
 
