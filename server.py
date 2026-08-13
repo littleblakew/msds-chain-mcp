@@ -953,11 +953,16 @@ async def check_regulatory_compliance(
     """
     Check multi-region regulatory compliance status for chemicals.
 
-    Checks against: EU (SVHC/REACH/CLP/CMR), US (OSHA PEL/TSCA),
-    CN, JP, KR, CA, AU, TW regulations.
+    Backed by a regulatory list per region:
+      EU (SVHC / REACH Annex XVII / CLP Annex VI / CMR), US (OSHA PEL / TSCA / Prop 65),
+      CN (Catalogue of Hazardous Chemicals), JP (CSCL), CA (DSL), AU (AIIC).
+    Accepted but NOT backed by a list today: KR, TW. For those the tool can only read
+    the SDS Section 15 text, so a negative result there means "we have no list to check
+    against", not "cleared for that market".
 
     Use this when preparing export documentation, compliance audits,
     or when working with chemicals that may be restricted in certain jurisdictions.
+    A "not listed" result is never on its own an import/export clearance.
 
     Args:
         chemicals: List of chemical names or CAS numbers
@@ -2807,11 +2812,22 @@ async def check_regulatory_lists(chemical: str) -> str:
     """
     Check which international regulatory lists a chemical appears on.
 
-    Searches across 15+ regulatory databases including:
-    - US: EPA TSCA, OSHA PEL, California Prop 65, CompTox
-    - EU: SVHC Candidate List, REACH Annex XVII, CLP, Seveso III
-    - APAC: China Hazardous Chemicals, Japan CSCL, Australia AIIC, Singapore EPMA
+    Searches 23 lists — 8 jurisdictions plus 3 international conventions:
+    - US: EPA TSCA Inventory, OSHA PEL, California Prop 65
+    - EU: SVHC Candidate List, REACH Annex XVII, REACH Annex XIV, REACH registered
+      substances, CLP Annex VI, Seveso III, Water Framework Directive priority substances
+    - APAC: China Catalogue of Hazardous Chemicals, China IECSC, Japan CSCL,
+      Korea KECL, Australia AIIC, Singapore EPMA
     - Americas: Canada DSL
+    - Conventions: Rotterdam PIC, Stockholm POPs, Montreal Protocol
+    - Dual-use / export control: CWC Schedules 1/2/3, Australia Group precursors
+    It also reports presence in the EPA CompTox Dashboard, which is an identifier
+    resource rather than a regulatory list.
+
+    Coverage limits, so the answer is not over-read:
+    - There is NO Taiwan and NO IARC coverage. Do not infer either from this tool.
+    - The lists are a curated snapshot, not a live regulatory feed. A chemical missing
+      from a list means "not found in our copy of that list", never "not regulated".
 
     Returns a summary of all matching lists, helping you understand
     a chemical's global regulatory footprint at a glance.
