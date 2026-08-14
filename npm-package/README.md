@@ -2,7 +2,7 @@
 
 Chemical safety intelligence for AI-assisted experiment design. Powered by **ChainSDS** — verified, current, and growing.
 
-This is a remote MCP (Model Context Protocol) server providing **23 tools** for chemical safety reasoning — compatibility checks, hazard analysis, PPE recommendations, storage guidance, waste disposal, mixing order safety, exposure limits, transport classification, regulatory compliance (23 lists, 10 regions), regulatory watch-list cross-reference, SDS version diff, PDF upload, signed SDS document download, chemical substitution, first aid, GHS labels, signed audit reports, and online PubChem GHS fallback for chemicals not yet in the database.
+This is a remote MCP (Model Context Protocol) server providing **23 tools** for chemical safety reasoning — compatibility checks, hazard analysis, PPE recommendations, storage guidance, waste disposal, mixing order safety, exposure limits, transport classification, regulatory compliance (23 lists, 8 jurisdictions), regulatory watch-list cross-reference, SDS version diff, PDF upload, signed SDS document download, chemical substitution, first aid, GHS labels, signed audit reports, and online PubChem GHS fallback for chemicals not yet in the database.
 
 ## Quick Start
 
@@ -46,8 +46,8 @@ Get a free API key (100 calls/month) at [msdschain.lagentbot.com](https://msdsch
 | `get_emergency_response` | Spill, fire, or exposure procedures |
 | `get_exposure_limits` | OEL/TLV/PEL across US, EU, JP, CN, INT |
 | `get_transport_classification` | UN number, hazard class, packing group |
-| `check_regulatory_compliance` | EU, US, CN, JP, KR, CA, AU, TW |
-| `check_regulatory_lists` | Cross-reference a chemical against 23 regulatory watch lists across 10 regions |
+| `check_regulatory_compliance` | EU, US, CN, JP, CA, AU, SG list-backed; KR/TW accepted but no list wired |
+| `check_regulatory_lists` | Cross-reference a chemical against 23 regulatory watch lists across 8 jegions |
 | `get_chemical_alternatives` | Safer substitutes for restricted chemicals |
 | `get_sds_section` | Query specific SDS sections (1-16) |
 | `get_sds_document` | Signed download URL (~5 min) for the original SDS/MSDS PDF |
@@ -61,7 +61,7 @@ Get a free API key (100 calls/month) at [msdschain.lagentbot.com](https://msdsch
 ## Coverage — ChainSDS
 
 - 28,000+ chemicals with multi-language aliases (EN/ZH/JA)
-- 8 regulatory jurisdictions (EU/US/CN/JP/KR/CA/AU/TW)
+- 8 regulatory jurisdictions (EU/US/CN/JP/KR/CA/AU/SG) + 3 international conventions
 - 5 exposure limit standards (OSHA/ACGIH/EU/JP/CN)
 - 5 languages (EN/ZH/JA/DE/ID)
 - Version tracking — detects a newer SDS and diffs its hazard classification
