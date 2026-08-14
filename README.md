@@ -23,7 +23,7 @@ When you use Claude to plan a synthesis route or set up an Opentrons protocol, s
 | Tool | Description |
 |------|-------------|
 | **`batch_safety_check`** | One-call report for a chemical list: pairwise compatibility + per-chemical risk warnings |
-| **`check_regulatory_lists`** | Cross-reference a chemical against 23 regulatory watch lists across 10 regions |
+| **`check_regulatory_lists`** | Cross-reference a chemical against 23 regulatory watch lists across 8 jurisdictions + 3 international conventions |
 | **`get_sds_section`** | Retrieve a specific SDS section (1-16) for a chemical |
 | **`get_sds_document`** | Signed download URL (~5 min) for the original SDS/MSDS PDF; includes source provenance |
 | **`get_chemical_alternatives`** | Safer substitutes for restricted or high-risk chemicals |
@@ -39,7 +39,7 @@ When you use Claude to plan a synthesis route or set up an Opentrons protocol, s
 | `get_emergency_response` | Spill, fire, or exposure emergency procedures |
 | `get_exposure_limits` | OEL/TLV/PEL/MAC across US, EU, JP, CN, INT |
 | `get_transport_classification` | UN number, hazard class, packing group, ADR/IATA/IMDG |
-| `check_regulatory_compliance` | Multi-region: EU, US, CN, JP, KR, CA, AU, TW, SG |
+| `check_regulatory_compliance` | Multi-region: EU, US, CN, JP, CA, AU, SG list-backed; KR/TW accepted but no list wired |
 | `search_chemical_database` | Look up chemicals by name, synonym, or CAS number |
 | `ask_chemical_safety` | Natural language catch-all for any safety question |
 | `create_audit_session` | Full audit with signed PDF report (requires API key) |
@@ -309,7 +309,7 @@ Industry-sourced, AI-verified, and cryptographically signed.
 
 - **4,000,000+ chemical records** with multi-language aliases (EN/ZH/JA)
 - **NFPA/GHS classification** for compatibility rules
-- **23 regulatory watch lists across 10 regions** (structured compliance for EU, US, CN, JP, KR, CA, AU, TW, SG)
+- **23 regulatory watch lists across 8 jurisdictions + 3 international conventions** (EU, US, CN, JP, KR, CA, AU, SG; no Taiwan and no IARC coverage)
 - **Occupational exposure limits** from 5 standards (OSHA PEL, ACGIH TLV, EU IOELV, JP OEL, CN GBZ)
 - **UN transport data** for 16+ common lab chemicals
 - **Version tracking** — detects a newer SDS and diffs its hazard classification against the one you relied on
