@@ -33,6 +33,8 @@ import time
 
 from typing import Annotated, Literal
 
+from contextvars import ContextVar
+
 import httpx
 from mcp.server import MCPServer
 from mcp.server.caching import CacheHint
@@ -517,7 +519,7 @@ _call_log_post_failures = 0
 
 async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: int,
                     success: bool, error_message: str | None = None,
-                    input_params: str | None = None):
+                    input_params: str | None = None, response_text: str | None = None):
     """Fire-and-forget: POST call record to backend.
 
     Never raises into the caller — a logging failure must not break the user's
@@ -553,6 +555,9 @@ async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: in
                     "success": success,
                     "error_message": error_message,
                     "input_params": input_params,
+                    # CI-333：客户端真正读到的正文。后端在 CI-333/344 那版之前会静默
+                    # 忽略这个字段（pydantic 默认 ignore extra），所以先发后存是安全的。
+                    "response_text": response_text,
                     "api_key": cred,
                 },
                 headers=_headers(),
@@ -569,6 +574,100 @@ async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: in
             tool_name, success, duration_ms, bool(cred), _error_text(e),
             _call_log_post_failures,
         )
+
+
+
+# ---------------------------------------------------------------------------
+# CI-333：把「何时上报、上报多少」收进一个装饰器
+# ---------------------------------------------------------------------------
+# 要记的新东西是**回复正文**，而它在每个工具的 `finally` 里拿不到——返回值是在 `try` 里
+# 直接 `return` 掉的（23 个工具共 48 个 return 点）。逐个改成 `result = …; return result`
+# 的话，**漏掉任何一个 return，那条路径就永远没有正文，且不报错**。
+#
+# 所以反过来：工具在 `finally` 里只**声明要记什么**（`_log_intent`），由外层装饰器统一负责
+# 计时、成败、取返回值、发 POST。装饰器拿到的是**函数真正返回的那个对象**，
+# 结构上不可能漏掉某条 return 路径。
+#
+# 🔴 **声明的内容仍然由各工具自己算，装饰器不去 dump 入参**——那些手写的 dict
+# **编码的是脱敏决定**：`upload_msds_pdf` 记的是 `<inline data URI, N chars>` 而不是那段
+# base64（见该处注释：记录哪怕一个前缀都会把客户 SDS 内容写进 `mcp_call_logs`）。
+# CI-344 之后 `input_params` 原文真的落库 ⇒ 这条脱敏从「防御性」变成「承重」，
+# 自动 dump 入参会直接把客户文档字节写进日志表。
+_log_slot: ContextVar[dict | None] = ContextVar("mcp_log_slot", default=None)
+
+
+def _log_intent(tool_name: str, chemicals: list[str] | None,
+                input_params: str | None = None, *,
+                success: bool = True, error_message: str | None = None) -> None:
+    """工具声明：本次调用要记的身份 + **已脱敏的**入参（+ 可选的失败标记）。
+
+    🔴 `success` 存在是因为**有些失败不抛异常**：quick-chat 超时被转成一句可读消息、
+    `upload_msds_pdf` 把失败作为文本返回。装饰器只看得见「抛没抛」，看不见这一类
+    ⇒ 工具必须能把它降级。初版漏了这个参数，基线比对当场抓到 `upload_msds_pdf`
+    从 `success=False` 变成了 `True`——一个只在日志里、线上完全看不出来的退化。
+
+    只能**降级**：装饰器那边取的是 `抛没抛 and 这里说的`，工具说不了「其实成功」。
+    """
+    _log_slot.set({"tool_name": tool_name, "chemicals": chemicals,
+                   "input_params": input_params,
+                   "success": success, "error_message": error_message})
+
+
+# 发送侧的上限。后端也会截（`_clean_payload`），这里再挡一道是因为**这一段要走网络**：
+# 一份 PDF 抽出来的正文可以很大，让它先跑一趟 HTTP 再被对面砍掉是白费带宽和延迟，
+# 而这个 POST 挂在每个工具调用的关键路径后面。数值与后端保持一致，改一处要改两处。
+_MAX_RESPONSE_LOG_CHARS = 20_000
+
+
+def _response_text(result) -> str | None:
+    """把工具的返回值压成一段文本——客户端真正读到的那一份。"""
+    if result is None:
+        return None
+    if isinstance(result, str):
+        return _cap(result)
+    content = getattr(result, "content", None)
+    if content:
+        parts = [t for b in content if (t := getattr(b, "text", None))]
+        if parts:
+            return _cap(("\n".join(parts)))
+    return None
+
+
+def _cap(text: str) -> str:
+    return text if len(text) <= _MAX_RESPONSE_LOG_CHARS else text[:_MAX_RESPONSE_LOG_CHARS] + "…[truncated]"
+
+
+def _reported(fn):
+    """包在每个工具最内层：计时 / 成败 / 回复正文 / 上报，一处做完。
+
+    🔴 必须在 `_graceful_timeout` **内层**（装饰器列表里写在它下面）：超时被转成一句
+    可读消息之前，这里要先看到原始异常，否则超时会被记成 success=True——那正是
+    CI-55 想看见的信号。
+    """
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        token = _log_slot.set(None)
+        t0 = time.monotonic()
+        success, error_msg, result = True, None, None
+        try:
+            result = await fn(*args, **kwargs)
+            return result
+        except Exception as e:  # noqa: BLE001 — 记完再抛，行为不变
+            success, error_msg = False, _error_text(e)
+            raise
+        finally:
+            slot = _log_slot.get()
+            if slot is not None:
+                # 只能降级：工具报的失败与「抛了异常」取与
+                ok = success and slot.get("success", True)
+                err = error_msg or slot.get("error_message")
+                await _log_call(
+                    slot["tool_name"], slot["chemicals"],
+                    int((time.monotonic() - t0) * 1000), ok, err,
+                    slot["input_params"], _response_text(result),
+                )
+            _log_slot.reset(token)
+    return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -881,6 +980,7 @@ def _insufficient_lines(item: dict, what: str) -> list[str]:
     structured_output=False,
 )
 @_graceful_timeout
+@_reported
 async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = None) -> CallToolResult:
     """
     Check pairwise compatibility between a list of chemicals.
@@ -895,7 +995,6 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
         chemicals: List of chemical names or CAS numbers, e.g.
                    ["acetone", "methanol", "ethanol"] or ["67-64-1", "67-56-1"]
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -965,18 +1064,15 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=structured,
         ), data)
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("check_chemical_compatibility", chemicals, dur, success, error_msg,
-                        _json.dumps({"chemicals": chemicals}))
+        _log_intent("check_chemical_compatibility", chemicals,
+                        _json.dumps({"chemicals": chemicals}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Chemical Risk Warnings", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
+@_reported
 async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None) -> str:
     """
     Get hazard and risk warnings for one or more chemicals.
@@ -993,7 +1089,6 @@ async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None)
         chemicals: List of chemical names or CAS numbers, e.g.
                    ["acetone", "67-56-1"]
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -1046,18 +1141,15 @@ async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None)
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=structured,
         ), data)
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("get_chemical_risk_warnings", chemicals, dur, success, error_msg,
-                        _json.dumps({"chemicals": chemicals}))
+        _log_intent("get_chemical_risk_warnings", chemicals,
+                        _json.dumps({"chemicals": chemicals}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Compliance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
+@_reported
 async def check_regulatory_compliance(
     chemicals: ChemicalList,
     regions: Annotated[list[str] | None, Field(
@@ -1086,7 +1178,6 @@ async def check_regulatory_compliance(
                    Defaults to EU + US if not specified.
                    Valid codes: EU, US, CN, JP, KR, CA, AU, TW
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -1133,17 +1224,14 @@ async def check_regulatory_compliance(
                 "results": results,
             },
         ), {"_usage": _usage})
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("check_regulatory_compliance", chemicals, dur, success, error_msg,
-                        _json.dumps({"chemicals": chemicals, "regions": regions}))
+        _log_intent("check_regulatory_compliance", chemicals,
+                        _json.dumps({"chemicals": chemicals, "regions": regions}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Ask Chemical Safety Question", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@_reported
 async def ask_chemical_safety(
     question: Annotated[str, Field(
     description='A chemical safety question in natural language, e.g. "What are the main '
@@ -1175,7 +1263,6 @@ async def ask_chemical_safety(
                   "How should I store acetone and methanol in the same cabinet?"
                   "A worker got hydrofluoric acid on their skin — first aid?"
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -1184,18 +1271,15 @@ async def ask_chemical_safety(
             success = False
             error_msg = "timeout"
         return _quick_result(data)
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("ask_chemical_safety", None, dur, success, error_msg,
-                        _json.dumps({"question": question}))
+        _log_intent("ask_chemical_safety", None,
+                        _json.dumps({"question": question}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get PPE Recommendation", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
+@_reported
 async def get_ppe_recommendation(chemicals: ChemicalList) -> str:
     """
     Get PPE (Personal Protective Equipment) recommendations for chemicals.
@@ -1211,7 +1295,6 @@ async def get_ppe_recommendation(chemicals: ChemicalList) -> str:
         chemicals: List of chemical names or CAS numbers, e.g.
                    ["acetone", "hydrochloric acid"] or ["67-64-1"]
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -1277,18 +1360,15 @@ async def get_ppe_recommendation(chemicals: ChemicalList) -> str:
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=sc,
         )
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("get_ppe_recommendation", chemicals, dur, success, error_msg,
-                        _json.dumps({"chemicals": chemicals}))
+        _log_intent("get_ppe_recommendation", chemicals,
+                        _json.dumps({"chemicals": chemicals}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Storage Guidance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
+@_reported
 async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None) -> str:
     """
     Get storage and isolation guidance for chemicals.
@@ -1302,7 +1382,6 @@ async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None) -> st
         chemicals: List of chemical names or CAS numbers, e.g.
                    ["acetone", "sulfuric acid"] or ["67-64-1"]
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -1339,18 +1418,15 @@ async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None) -> st
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
         )
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("get_storage_guidance", chemicals, dur, success, error_msg,
-                        _json.dumps({"chemicals": chemicals}))
+        _log_intent("get_storage_guidance", chemicals,
+                        _json.dumps({"chemicals": chemicals}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Emergency Response", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
+@_reported
 async def get_emergency_response(
     chemical: Chemical,
     scenario: Annotated[Literal["spill", "fire", "exposure"], Field(
@@ -1372,7 +1448,6 @@ async def get_emergency_response(
         scenario: Type of emergency — "spill" (leak/release), "fire", or
                   "exposure" (skin/eye/inhalation first aid). Defaults to "spill".
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -1425,18 +1500,15 @@ async def get_emergency_response(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
         )
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("get_emergency_response", [chemical], dur, success, error_msg,
-                        _json.dumps({"chemical": chemical, "scenario": scenario}))
+        _log_intent("get_emergency_response", [chemical],
+                        _json.dumps({"chemical": chemical, "scenario": scenario}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Exposure Limits", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
+@_reported
 async def get_exposure_limits(
     chemicals: ChemicalList,
     region: Annotated[str | None, Field(
@@ -1458,7 +1530,6 @@ async def get_exposure_limits(
         chemicals: List of chemical names or CAS numbers
         region: Optional filter — "US", "EU", "JP", "CN", or "INT"
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -1491,18 +1562,15 @@ async def get_exposure_limits(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
         )
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("get_exposure_limits", chemicals, dur, success, error_msg,
-                        _json.dumps({"chemicals": chemicals, "region": region}))
+        _log_intent("get_exposure_limits", chemicals,
+                        _json.dumps({"chemicals": chemicals, "region": region}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Transport Classification", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
+@_reported
 async def get_transport_classification(chemicals: ChemicalList) -> str:
     """Get UN transport classification for chemicals (dangerous goods shipping).
     Returns UN number, proper shipping name, hazard class, packing group,
@@ -1510,7 +1578,6 @@ async def get_transport_classification(chemicals: ChemicalList) -> str:
     Args:
         chemicals: List of chemical names or CAS numbers
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -1535,17 +1602,14 @@ async def get_transport_classification(chemicals: ChemicalList) -> str:
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
         )
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("get_transport_classification", chemicals, dur, success, error_msg,
-                        _json.dumps({"chemicals": chemicals}))
+        _log_intent("get_transport_classification", chemicals,
+                        _json.dumps({"chemicals": chemicals}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Create Audit Session", read_only_hint=False, destructive_hint=False, open_world_hint=False), structured_output=False)
+@_reported
 async def create_audit_session(
     experiment_name: Annotated[str, Field(
         description='Short human-readable label for the audit, shown on the report, e.g. '
@@ -1575,7 +1639,6 @@ async def create_audit_session(
         counts + top warnings). An API key must be configured (MSDS_API_KEY) so
         the session is bound to your account and the report is retrievable.
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -1685,17 +1748,14 @@ async def create_audit_session(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=structured,
         )
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("create_audit_session", chemicals, dur, success, error_msg,
-                        _json.dumps({"experiment_name": experiment_name, "chemicals": chemicals}))
+        _log_intent("create_audit_session", chemicals,
+                        _json.dumps({"experiment_name": experiment_name, "chemicals": chemicals}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Audit Report", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@_reported
 async def get_audit_report(session_id: Annotated[str, Field(
     description='The session id returned by `create_audit_session`, e.g. "DEMO-A1B2C3D4".',
 )]) -> str:
@@ -1714,7 +1774,6 @@ async def get_audit_report(session_id: Annotated[str, Field(
         A signed URL valid for ~5 minutes. The session must be owned by the
         API key's user (MSDS_API_KEY).
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -1748,14 +1807,10 @@ async def get_audit_report(session_id: Annotated[str, Field(
                 "expires_in_seconds": 300,
             },
         )
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("get_audit_report", None, dur, success, error_msg,
-                        _json.dumps({"session_id": session_id}))
+        _log_intent("get_audit_report", None,
+                        _json.dumps({"session_id": session_id}),
+                    success=success, error_message=error_msg)
 
 
 def _unresolved_block(data: dict, *, trailing_newline: bool = False) -> list[str]:
@@ -1827,6 +1882,7 @@ def _rejected_products_block(data: dict) -> list[str]:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Search Chemical Database", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@_reported
 async def search_chemical_database(query: Annotated[str, Field(
     description='A single chemical name, synonym, or CAS number, e.g. "methanol", '
                 '"wood alcohol", "67-56-1". Not a natural-language question — use '
@@ -1846,7 +1902,6 @@ async def search_chemical_database(query: Annotated[str, Field(
         query: Chemical name, synonym, or CAS number, e.g.
                "methanol", "wood alcohol", "67-56-1"
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -1952,18 +2007,15 @@ async def search_chemical_database(query: Annotated[str, Field(
                     },
                 )
             return f"Chemical search failed (HTTP {res.status_code}). Try a different name or CAS number."
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("search_chemical_database", [query], dur, success, error_msg,
-                        _json.dumps({"query": query}))
+        _log_intent("search_chemical_database", [query],
+                        _json.dumps({"query": query}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Search MSDS Online (PubChem)", read_only_hint=True, destructive_hint=False, open_world_hint=True), structured_output=False)
 @_graceful_timeout
+@_reported
 async def search_msds_online(
     chemical_name: Annotated[str, Field(
         description='Chemical name to look up on PubChem, e.g. "acetonitrile". '
@@ -1986,7 +2038,6 @@ async def search_msds_online(
         chemical_name: Chemical name, e.g. "acetonitrile"
         cas_number:    CAS number, e.g. "75-05-8" (used first if provided)
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -2025,18 +2076,15 @@ async def search_msds_online(
                 "ghs": ghs,
             },
         )
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("search_msds_online", [chemical_name or cas_number], dur, success,
-                        error_msg, _json.dumps({"chemical_name": chemical_name, "cas_number": cas_number}))
+        _log_intent("search_msds_online", [chemical_name or cas_number],
+                    _json.dumps({"chemical_name": chemical_name, "cas_number": cas_number}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get SDS Section", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
+@_reported
 async def get_sds_section(
     chemical: Chemical,
     section: Annotated[int, Field(
@@ -2075,7 +2123,6 @@ async def get_sds_section(
         chemical: Chemical name or CAS number
         section:  SDS section number (1-16)
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -2146,17 +2193,14 @@ async def get_sds_section(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
         )
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("get_sds_section", [chemical], dur, success, error_msg,
-                        _json.dumps({"chemical": chemical, "section": section}))
+        _log_intent("get_sds_section", [chemical],
+                    _json.dumps({"chemical": chemical, "section": section}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Chemical Alternatives", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@_reported
 async def get_chemical_alternatives(
     chemical: Chemical,
     use_case: Annotated[str, Field(
@@ -2183,7 +2227,6 @@ async def get_chemical_alternatives(
                   "degreasing solvent", "extraction solvent for organic synthesis",
                   "cleaning agent for labware"
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -2201,17 +2244,14 @@ async def get_chemical_alternatives(
             success = False
             error_msg = "timeout"
         return _quick_result(data)
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("get_chemical_alternatives", [chemical], dur, success, error_msg,
-                        _json.dumps({"chemical": chemical, "use_case": use_case}))
+        _log_intent("get_chemical_alternatives", [chemical],
+                        _json.dumps({"chemical": chemical, "use_case": use_case}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Validate Protocol Chemicals", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@_reported
 async def validate_protocol_chemicals(
     protocol_text: Annotated[str, Field(
         description="Any text containing chemical names — a lab protocol, a reagent list, or "
@@ -2238,7 +2278,6 @@ async def validate_protocol_chemicals(
                        a natural language protocol description, or a reagent list.
                        Maximum ~4000 characters.
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -2260,17 +2299,14 @@ async def validate_protocol_chemicals(
             success = False
             error_msg = "timeout"
         return _quick_result(data)
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("validate_protocol_chemicals", None, dur, success, error_msg,
-                        _json.dumps({"protocol_text_length": len(protocol_text)}))
+        _log_intent("validate_protocol_chemicals", None,
+                        _json.dumps({"protocol_text_length": len(protocol_text)}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Check Mixing Order", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@_reported
 async def check_mixing_order(
     chemical_a: Annotated[str, Field(
         description='First chemical name or CAS number. Order of chemical_a/chemical_b is '
@@ -2304,7 +2340,6 @@ async def check_mixing_order(
         context:    Optional context about the procedure, e.g.
                     "diluting for titration" or "quenching a reaction"
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -2321,18 +2356,15 @@ async def check_mixing_order(
             success = False
             error_msg = "timeout"
         return _quick_result(data)
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("check_mixing_order", [chemical_a, chemical_b], dur, success, error_msg,
-                        _json.dumps({"chemical_a": chemical_a, "chemical_b": chemical_b, "context": context}))
+        _log_intent("check_mixing_order", [chemical_a, chemical_b],
+                        _json.dumps({"chemical_a": chemical_a, "chemical_b": chemical_b, "context": context}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Waste Disposal Guidance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
+@_reported
 async def get_waste_disposal(chemicals: ChemicalList) -> str:
     """
     Get waste classification and disposal guidance for chemicals.
@@ -2350,7 +2382,6 @@ async def get_waste_disposal(chemicals: ChemicalList) -> str:
         chemicals: List of chemical names or CAS numbers, e.g.
                    ["dichloromethane", "acetone", "sulfuric acid"]
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -2378,14 +2409,10 @@ async def get_waste_disposal(chemicals: ChemicalList) -> str:
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
         )
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("get_waste_disposal", chemicals, dur, success, error_msg,
-                        _json.dumps({"chemicals": chemicals}))
+        _log_intent("get_waste_disposal", chemicals,
+                        _json.dumps({"chemicals": chemicals}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(
@@ -2393,6 +2420,7 @@ async def get_waste_disposal(chemicals: ChemicalList) -> str:
     structured_output=False,
 )
 @_graceful_timeout
+@_reported
 async def compare_sds_versions(
     chemical: Chemical,
     supplier: Annotated[str, Field(
@@ -2419,7 +2447,6 @@ async def compare_sds_versions(
         supplier: Optional SDS supplier/manufacturer to disambiguate (e.g. "Sigma-Aldrich").
         region:   Optional region code to narrow the lookup (e.g. "US", "EU", "JP", "CN").
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -2453,14 +2480,10 @@ async def compare_sds_versions(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
         )
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("compare_sds_versions", [chemical], dur, success, error_msg,
-                        _json.dumps({"chemical": chemical, "supplier": supplier, "region": region}))
+        _log_intent("compare_sds_versions", [chemical],
+                        _json.dumps({"chemical": chemical, "supplier": supplier, "region": region}),
+                    success=success, error_message=error_msg)
 
 
 # ---------------------------------------------------------------------------
@@ -2619,6 +2642,7 @@ def _upload_local_path_message(pdf_source: str) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Upload & Parse MSDS PDF", read_only_hint=False, destructive_hint=False, open_world_hint=False), structured_output=False)
+@_reported
 async def upload_msds_pdf(
     pdf_source: Annotated[str, Field(
         description="The PDF itself, in one of three forms, tried in this order: "
@@ -2695,7 +2719,6 @@ async def upload_msds_pdf(
         If parsing partially failed, missing fields are listed so you can follow
         up with `ask_chemical_safety` for the gaps.
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -2864,12 +2887,7 @@ async def upload_msds_pdf(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=structured,
         )
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
         # Inline base64 IS the document's bytes — logging even a prefix of it
         # would put customer SDS content into mcp_call_logs.input_params (a table
         # other roles can read). Record only the shape, never the payload.
@@ -2879,12 +2897,14 @@ async def upload_msds_pdf(
             logged_source = f"<inline base64 or long source, {len(pdf_source)} chars>"
         else:
             logged_source = pdf_source
-        await _log_call("upload_msds_pdf", None, dur, success, error_msg,
-                        _json.dumps({"pdf_source": logged_source, "session_id": session_id}))
+        _log_intent("upload_msds_pdf", None,
+                    _json.dumps({"pdf_source": logged_source, "session_id": session_id}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Batch Safety Check", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
+@_reported
 async def batch_safety_check(
     chemicals: Annotated[list[str], Field(
     description='List of chemical names or CAS numbers to check together, e.g. '
@@ -2913,7 +2933,6 @@ async def batch_safety_check(
         chemicals: List of chemical names or CAS numbers (2-20 items), e.g.
                    ["acetone", "sulfuric acid", "sodium hydroxide", "methanol"]
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -3016,17 +3035,14 @@ async def batch_safety_check(
             content=[TextContent(type="text", text="\n".join(sections))],
             structured_content=structured,
         ), data)
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("batch_safety_check", chemicals, dur, success, error_msg,
-                        _json.dumps({"chemicals": chemicals}))
+        _log_intent("batch_safety_check", chemicals,
+                        _json.dumps({"chemicals": chemicals}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Lists", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@_reported
 async def check_regulatory_lists(chemical: Chemical, lang: Lang = None) -> str:
     """
     Check which international regulatory lists a chemical appears on.
@@ -3054,7 +3070,6 @@ async def check_regulatory_lists(chemical: Chemical, lang: Lang = None) -> str:
     Args:
         chemical: Chemical name or CAS number
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -3067,18 +3082,15 @@ async def check_regulatory_lists(chemical: Chemical, lang: Lang = None) -> str:
             success = False
             error_msg = "timeout"
         return _quick_result(data)
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("check_regulatory_lists", [chemical], dur, success, error_msg,
-                        _json.dumps({"chemical": chemical}))
+        _log_intent("check_regulatory_lists", [chemical],
+                        _json.dumps({"chemical": chemical}),
+                    success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get SDS Document", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
+@_reported
 async def get_sds_document(chemical: Chemical) -> CallToolResult:
     """
     Return a signed download URL for the original SDS/MSDS PDF of a chemical.
@@ -3096,7 +3108,6 @@ async def get_sds_document(chemical: Chemical) -> CallToolResult:
     Args:
         chemical: Chemical name or CAS number, e.g. "acetone" or "67-64-1"
     """
-    t0 = time.monotonic()
     error_msg = None
     success = True
     try:
@@ -3207,14 +3218,10 @@ async def get_sds_document(chemical: Chemical) -> CallToolResult:
                 content=[TextContent(type="text", text=f"**{display}**: {message}{hint}")],
                 structured_content=structured,
             )
-    except Exception as e:
-        success = False
-        error_msg = _error_text(e)
-        raise
     finally:
-        dur = int((time.monotonic() - t0) * 1000)
-        await _log_call("get_sds_document", [chemical], dur, success, error_msg,
-                        _json.dumps({"chemical": chemical}))
+        _log_intent("get_sds_document", [chemical],
+                        _json.dumps({"chemical": chemical}),
+                    success=success, error_message=error_msg)
 
 
 # ---------------------------------------------------------------------------
