@@ -170,7 +170,7 @@ def test_usage_line_charged_shows_cost_and_balance():
 
 
 def test_compat_surfaces_usage_in_result(monkeypatch):
-    async def fake(chemicals):
+    async def fake(chemicals, **_):
         return {
             "pairs": [{"chem1": "a", "chem2": "b", "level": "compatible",
                        "reason": "x", "source": "y"}],
@@ -186,7 +186,7 @@ def test_compat_surfaces_usage_in_result(monkeypatch):
 def test_lookup_tool_does_not_leak_usage_key(monkeypatch):
     """Lookup tools expose structuredContent=data directly; the internal _usage key
     that _billed_json attaches must be stripped (CI-39 leak fix)."""
-    async def fake_ppe(chemicals):
+    async def fake_ppe(chemicals, **_):
         return {"results": [{"chemical_name": "acetone", "ppe": {}}], "unresolved": [],
                 "_usage": {"cost": 0, "balance": 100, "reason": "free"}}
     monkeypatch.setattr(server, "_direct_ppe", fake_ppe)
@@ -463,7 +463,7 @@ def _timed_out_quick_chat(message):
 
 def _make_fake_quick_chat():
     """Async wrapper so it can be monkeypatched onto server._quick_chat."""
-    async def _fake(message):
+    async def _fake(message, **_):
         return _timed_out_quick_chat(message)
     return _fake
 
@@ -899,7 +899,7 @@ def test_format_sds_documents_url_verbatim():
 
 def test_compat_ci89_basis_rule_label(monkeypatch):
     """Pair lines now say 'Basis (rule)' for rule_based traceability."""
-    async def fake_compat(chemicals):
+    async def fake_compat(chemicals, **_):
         return {
             "pairs": [{
                 "chem1": "acetone", "chem2": "water",
@@ -927,7 +927,7 @@ def test_compat_ci89_basis_rule_label(monkeypatch):
 
 def test_compat_ci89_no_documents(monkeypatch):
     """When backend omits 'documents', section not rendered, structuredContent documents=[]."""
-    async def fake_compat(chemicals):
+    async def fake_compat(chemicals, **_):
         return {
             "pairs": [{"chem1": "a", "chem2": "b", "level": "compatible",
                        "reason": "ok", "source": "rule"}],
@@ -942,7 +942,7 @@ def test_compat_ci89_no_documents(monkeypatch):
 
 def test_compat_ci89_sds_source_label_when_sds_backed(monkeypatch):
     """When a pair has traceability='sds_backed', label shows 'Source (SDS)'."""
-    async def fake_compat(chemicals):
+    async def fake_compat(chemicals, **_):
         return {
             "pairs": [{
                 "chem1": "a", "chem2": "b",
@@ -961,7 +961,7 @@ def test_compat_ci89_sds_source_label_when_sds_backed(monkeypatch):
 
 def test_risk_ci89_sds_backed_label(monkeypatch):
     """Warning with traceability='sds_backed' gets [Source: SDS document] label."""
-    async def fake_risk(chemicals):
+    async def fake_risk(chemicals, **_):
         return {
             "warnings": [{
                 "chemical": "Acetone", "level": "low",
@@ -985,7 +985,7 @@ def test_risk_ci89_sds_backed_label(monkeypatch):
 
 def test_risk_ci89_rule_based_label(monkeypatch):
     """Warning with traceability='rule_based' gets [Basis: rule/standard] label."""
-    async def fake_risk(chemicals):
+    async def fake_risk(chemicals, **_):
         return {
             "warnings": [{
                 "chemical": "Methanol", "level": "high",
@@ -1001,7 +1001,7 @@ def test_risk_ci89_rule_based_label(monkeypatch):
 
 def test_risk_ci89_infers_label_from_documents(monkeypatch):
     """When traceability field absent but chemical is in documents, infer sds_backed."""
-    async def fake_risk(chemicals):
+    async def fake_risk(chemicals, **_):
         return {
             "warnings": [{
                 "chemical": "Acetone", "level": "low",
@@ -1019,7 +1019,7 @@ def test_risk_ci89_infers_label_from_documents(monkeypatch):
 
 def test_risk_ci89_no_documents(monkeypatch):
     """When backend omits 'documents', section not rendered, structuredContent documents=[]."""
-    async def fake_risk(chemicals):
+    async def fake_risk(chemicals, **_):
         return {
             "warnings": [{"chemical": "x", "level": "low", "description": "d", "mitigation": "m"}],
             "unresolved": [],
@@ -1034,7 +1034,7 @@ def test_risk_ci89_no_documents(monkeypatch):
 
 def test_ppe_ci89_sds_backed_label(monkeypatch):
     """PPE result with traceability='sds_backed' gets [Source: SDS document] in header."""
-    async def fake_ppe(chemicals):
+    async def fake_ppe(chemicals, **_):
         return {
             "results": [{
                 "chemical_name": "Acetone", "cas": "67-64-1",
@@ -1058,7 +1058,7 @@ def test_ppe_ci89_sds_backed_label(monkeypatch):
 
 def test_ppe_ci89_rule_based_label(monkeypatch):
     """PPE result with traceability='rule_based' gets [Basis: rule/standard] in header."""
-    async def fake_ppe(chemicals):
+    async def fake_ppe(chemicals, **_):
         return {
             "results": [{
                 "chemical_name": "Methanol", "cas": "67-56-1",
@@ -1075,7 +1075,7 @@ def test_ppe_ci89_rule_based_label(monkeypatch):
 
 def test_ppe_ci89_no_documents(monkeypatch):
     """When backend omits 'documents', section not rendered, structuredContent documents=[]."""
-    async def fake_ppe(chemicals):
+    async def fake_ppe(chemicals, **_):
         return {
             "results": [{"chemical_name": "X", "cas": "N/A", "signal_word": "W",
                          "minimum_ppe_level": "A", "ppe": {}}],
@@ -1089,7 +1089,7 @@ def test_ppe_ci89_no_documents(monkeypatch):
 
 def test_ppe_ci89_internal_usage_key_not_leaked(monkeypatch):
     """_usage internal key must not appear in structuredContent (existing CI-39 contract)."""
-    async def fake_ppe(chemicals):
+    async def fake_ppe(chemicals, **_):
         return {
             "results": [{"chemical_name": "A", "cas": "1", "signal_word": "W",
                          "minimum_ppe_level": "B", "ppe": {}}],
@@ -1133,7 +1133,7 @@ def test_ask_chemical_safety_ci89_documents_propagated(monkeypatch):
     from request_identity import set_caller_credential
     set_caller_credential("sk-msds-test")
 
-    async def fake_quick_chat(message):
+    async def fake_quick_chat(message, **_):
         return {
             "answer": "Use nitrile gloves.",
             "tool_results": [],
@@ -1154,7 +1154,7 @@ def test_ask_chemical_safety_ci89_documents_propagated(monkeypatch):
 
 def test_batch_ci89_compat_basis_label(monkeypatch):
     """Batch compat pairs get [Basis (rule)] label in text."""
-    async def fake_batch(chemicals):
+    async def fake_batch(chemicals, **_):
         return {
             "compatibility": {
                 "summary": {"total": 1, "compatible": 1, "caution": 0, "incompatible": 0},
@@ -1182,7 +1182,7 @@ def test_batch_ci89_compat_basis_label(monkeypatch):
 
 def test_batch_ci89_risk_sds_backed_label(monkeypatch):
     """Batch risk warnings with traceability='sds_backed' get [Source: SDS document]."""
-    async def fake_batch(chemicals):
+    async def fake_batch(chemicals, **_):
         return {
             "compatibility": {"summary": {}, "pairs": []},
             "risk_warnings": [{
@@ -1203,7 +1203,7 @@ def test_batch_ci89_risk_sds_backed_label(monkeypatch):
 
 def test_batch_ci89_no_documents(monkeypatch):
     """When backend omits 'documents', section not rendered, structuredContent documents=[]."""
-    async def fake_batch(chemicals):
+    async def fake_batch(chemicals, **_):
         return {
             "compatibility": {"summary": {}, "pairs": []},
             "risk_warnings": [],
