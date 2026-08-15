@@ -17,6 +17,11 @@ import asyncio
 import os
 import sys
 
+# 🔴 直接执行脚本时 sys.path[0] 是 `scripts/`，而 `server.py` 在仓根 ⇒ `import server`
+# 会 ModuleNotFoundError。pytest 从仓根跑，所以单测**永远发现不了**这个——2026-08-15
+# 就是这样把生产部署的 gate 弄红的（同族：测试替生产布置好了前提）。
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
@@ -24,7 +29,7 @@ URL = os.environ.get("MCP_SMOKE_URL", "https://mcp.lagentbot.com/mcp")
 KEY = os.environ.get("MCP_SMOKE_KEY", "")
 
 
-def _expected_tool_count() -> int:
+async def _expected_tool_count() -> int:
     """本次提交的 registry 里到底注册了几个工具——**精确值**，不是下限。
 
     🔴 CI-245：这里原本是 `MCP_SMOKE_MIN_TOOLS` 默认 **20**，而实际有 **23** ⇒
@@ -34,11 +39,14 @@ def _expected_tool_count() -> int:
     改成从 live registry 取精确值：部署的镜像与本次提交同源，所以「线上 tools/list
     的数量 == 本地 registry 的数量」是一个真判据。取不到就**硬失败**，不回退到
     某个猜的数字——一个猜的下限正是我们刚修掉的东西。
-    """
-    import asyncio as _a
 
+    🔴 **必须是 async**：它在 `_run()` 里被调用，而那时事件循环已经在跑——初版写成
+    `asyncio.run(...)` 直接抛 `cannot be called from a running event loop`，把生产
+    部署的 gate 弄红了（2026-08-15）。而单测在循环**外**调它，`asyncio.run` 正常，
+    于是测试全绿——测试又一次替生产布置了它没有的前提。
+    """
     import server  # 本仓自己的 registry
-    return len(_a.run(server.mcp.list_tools()))
+    return len(await server.mcp.list_tools())
 
 
 def _text(result) -> str:
@@ -59,7 +67,7 @@ async def _run() -> None:
 
             tools = await session.list_tools()
             names = sorted(t.name for t in tools.tools)
-            expected = _expected_tool_count()
+            expected = await _expected_tool_count()
             print(f"tools registered: {len(names)} (registry expects {expected})")
             assert len(names) == expected, (
                 f"线上暴露 {len(names)} 个工具，本次提交的 registry 有 {expected} 个——"
@@ -92,7 +100,14 @@ def main() -> int:
         asyncio.run(_run())
         return 0
     except Exception as e:  # noqa: BLE001 — smoke: any failure must fail the deploy
-        print(f"::error::MCP tool smoke FAILED: {type(e).__name__}: {e}", file=sys.stderr)
+        # 🔴 anyio 的 TaskGroup 把真实异常包进 ExceptionGroup，只打最外层等于
+        # **把失败原因藏起来**——CI 日志里只有 "1 sub-exception"，查不出所以然。
+        def _flatten(exc, depth=0):
+            yield f"{'  ' * depth}{type(exc).__name__}: {exc}"
+            for sub in getattr(exc, "exceptions", ()) or ():
+                yield from _flatten(sub, depth + 1)
+        for line in _flatten(e):
+            print(f"::error::MCP tool smoke FAILED: {line}", file=sys.stderr)
         return 1
 
 
