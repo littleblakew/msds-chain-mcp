@@ -35,6 +35,7 @@ from typing import Annotated, Literal
 
 import httpx
 from mcp.server import MCPServer
+from mcp.server.caching import CacheHint
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import Field
 from request_identity import caller_headers, get_caller_credential, set_caller_credential
@@ -116,12 +117,33 @@ TIMEOUT_LLM = 120.0   # quick-chat endpoints — multi-turn LLM reasoning
 # SDK falls back to reporting the `mcp` package version — a meaningless value.
 __version__ = "1.5.10"
 
+# ---------------------------------------------------------------------------
+# 缓存提示（CI-515，2026-07-28 spec / SEP-2549）
+# ---------------------------------------------------------------------------
+# `tools/list` 和 `server/discover` 的内容**每个镜像内是常量**：23 个工具在 import 时
+# 无条件注册（没有任何按用户/套餐的过滤），网关侧也不改工具表（只在 `tools/list` 上打一个
+# funnel 埋点，`gateway/proxy.py:92`）⇒ 同一次部署里，任何调用方拿到的都是同一份。
+# 不给 hint 的话 SDK 填的是 `ttlMs: 0`＝「立刻过期」，于是每个 agent 每轮对话都要重列一次。
+#
+# 🔴 scope 选 `private` 而不是 `public`，**明知内容是全用户一致的**：`public` 允许中间缓存
+# 跨授权上下文复用同一份结果。今天成立，但我们随时可能按 plan 把某些工具收起来（配额/套餐
+# 是既有机制），那一刻如果忘了改回来，共享缓存就会把 pro 的工具表发给 free 用户。
+# `private` 的最坏情况只是「少了一层共享缓存」，`public` 的最坏情况是串数据。
+# ⇒ **要改成 `public`，前提是先有一条守卫钉住「工具表不随调用方变化」。**
+#
+# TTL 取 5 分钟：部署换 revision 后，客户端最多晚 5 分钟看到新工具（我们一周部署数次，
+# 不是数秒级变更），而 agent 每轮重列的开销实打实省掉。SDK 客户端侧上限是 24h。
+_LIST_CACHE = CacheHint(ttl_ms=300_000, scope="private")
+
 # mcp 2.x: `host`/`port`/`transport_security` are no longer ctor args — they moved to
 # streamable_http_app()/sse_app() (see server_remote.py). host/port were already dead
 # weight here: server_remote.py feeds them straight to uvicorn.
 mcp = MCPServer(
     "MSDS Chain",
     version=__version__,
+    # 只列我们真正提供的两个：resources/prompts 一个都没注册（`CACHEABLE_METHODS` 里其余
+    # 四个方法在本服务上没有 handler），凭空给它们 hint 是写一份永远不执行的配置。
+    cache_hints={"tools/list": _LIST_CACHE, "server/discover": _LIST_CACHE},
     instructions=textwrap.dedent("""
         MSDS Chain provides chemical safety intelligence backed by traceable, sourced SDS data.
 

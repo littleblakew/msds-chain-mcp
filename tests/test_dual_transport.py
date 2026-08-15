@@ -19,18 +19,9 @@ import pytest
 from starlette.testclient import TestClient
 
 
-@pytest.fixture(scope="module")
-def live_client():
-    """A TestClient that runs the full app lifespan (streamable-http task group).
-
-    Module-scoped so the StreamableHTTPSessionManager instance is shared
-    across all tests that need it — the manager errors if .run() is called
-    twice on the same instance.
-    """
-    # Import lazily so the module is loaded fresh once per test session.
-    from server_remote import app
-    with TestClient(app, raise_server_exceptions=True) as client:
-        yield client
+# `live_client` fixture 在 tests/conftest.py（**session 级、全仓唯一**）——
+# 见那里的注释：每个文件各建一个会让 StreamableHTTPSessionManager 二次 run() 而炸，
+# 且这个坑只有全量一起跑才暴露。
 
 
 def test_health_served():
