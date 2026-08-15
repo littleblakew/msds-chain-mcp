@@ -75,7 +75,7 @@ def _search(payload):
     try:
         res = asyncio.run(server.search_chemical_database("anything"))
         if hasattr(res, "content"):
-            return res.content[0].text, res.structuredContent
+            return res.content[0].text, res.structured_content
         return res, None
     finally:
         (server.httpx.AsyncClient, server._require_api_key,

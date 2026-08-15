@@ -40,7 +40,7 @@ def test_write_tools_are_marked_as_writes():
     """
     tools = asyncio.run(server.mcp.list_tools())
     for t in tools:
-        ro = getattr(t.annotations, "readOnlyHint", None) if t.annotations else None
+        ro = getattr(t.annotations, "read_only_hint", None) if t.annotations else None
         if ro is False:
             assert lc.CASES[t.name].get("writes") is True, (
                 f"{t.name} 的 readOnlyHint=False（会写数据），但用例没标 writes=True"
@@ -52,7 +52,7 @@ def test_every_case_supplies_all_required_args():
     而「调用失败」会被读成「工具坏了」，把可用性层的信号污染掉。"""
     tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
     for name, case in lc.CASES.items():
-        required = (tools[name].inputSchema or {}).get("required", [])
+        required = (tools[name].input_schema or {}).get("required", [])
         given = set(case.get("args", {}))
         missing = set(required) - given
         assert not missing, f"{name} 用例缺必填参数 {sorted(missing)}"

@@ -32,8 +32,7 @@ import textwrap
 import time
 
 import httpx
-from mcp.server.fastmcp import FastMCP
-from mcp.server.transport_security import TransportSecuritySettings
+from mcp.server import MCPServer
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from request_identity import caller_headers, get_caller_credential, set_caller_credential
 
@@ -108,17 +107,18 @@ TIMEOUT_LLM = 120.0   # quick-chat endpoints — multi-turn LLM reasoning
 # Single source of truth = the repo-root VERSION file. This literal is kept in
 # sync by scripts/release.sh (which stamps VERSION into every manifest), and
 # tests/test_version.py fails CI if the two ever drift. Do NOT hand-edit — bump
-# VERSION and run scripts/release.sh. FastMCP.__init__ takes no `version` arg, so
-# we assign it on the underlying low-level server after construction; this is what
-# surfaces as serverInfo.version in the MCP `initialize` handshake (what ChatGPT,
-# claude.ai and any raw MCP client display).
+# VERSION and run scripts/release.sh. `version=` is a first-class MCPServer ctor arg
+# (mcp 2.x) and is what surfaces as serverInfo.version in the MCP `initialize`
+# handshake (what ChatGPT, claude.ai and any raw MCP client display). Without it the
+# SDK falls back to reporting the `mcp` package version — a meaningless value.
 __version__ = "1.5.10"
 
-mcp = FastMCP(
+# mcp 2.x: `host`/`port`/`transport_security` are no longer ctor args — they moved to
+# streamable_http_app()/sse_app() (see server_remote.py). host/port were already dead
+# weight here: server_remote.py feeds them straight to uvicorn.
+mcp = MCPServer(
     "MSDS Chain",
-    host="0.0.0.0",
-    port=8080,
-    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    version=__version__,
     instructions=textwrap.dedent("""
         MSDS Chain provides chemical safety intelligence backed by traceable, sourced SDS data.
 
@@ -154,11 +154,6 @@ mcp = FastMCP(
         compliance in a lab/experimental context.
     """).strip(),
 )
-
-# Surface our product version in the MCP `initialize` handshake. Without this,
-# the SDK falls back to reporting the `mcp` package version — a meaningless value
-# that clients (ChatGPT, claude.ai) display as our server version.
-mcp._mcp_server.version = __version__
 
 
 _API_KEY_REQUIRED_MSG = (
@@ -553,7 +548,7 @@ def _with_usage(result: "CallToolResult", data: dict) -> "CallToolResult":
     line = _usage_line(usage)
     if content and isinstance(content[0], TextContent):
         content = [TextContent(type="text", text=content[0].text + line)] + content[1:]
-    sc = result.structuredContent
+    sc = result.structured_content
     if sc is not None:
         sc = {**sc, "usage": usage}
     return CallToolResult(content=content, structuredContent=sc)

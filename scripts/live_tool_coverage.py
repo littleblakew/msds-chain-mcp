@@ -38,9 +38,13 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import httpx2  # noqa: E402
+
 import live_coverage_cases as lc  # noqa: E402
 from mcp.client.session import ClientSession  # noqa: E402
-from mcp.client.streamable_http import streamablehttp_client  # noqa: E402
+# mcp 2.x: renamed from `streamablehttp_client`, no more headers=/timeout= kwargs
+# (pass a configured httpx2 client instead), and yields 2 values instead of 3.
+from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
 # 🔴 **今天没有 Dev 的 MCP 部署**（2026-08-15 `az containerapp list` 核实：`rg-msds-chain-prod`
 # 下只有 msds-chain-mcp-core + msds-chain-mcp-gateway 一套，没有 -dev 对应物）。
@@ -86,7 +90,12 @@ async def _run(url: str, key: str, include_writes: bool) -> int:
     quality_notes: list[str] = []
     skipped: list[str] = []
 
-    async with streamablehttp_client(url, headers=headers, timeout=180) as (r, w, _):
+    # 180s 是给 batch_safety_check / check_regulatory_compliance 这类 O(n) LLM 工具留的；
+    # httpx2.Timeout 的 read 腿才是长响应真正卡的那条。
+    http_client = httpx2.AsyncClient(
+        headers=headers, timeout=httpx2.Timeout(30.0, read=180.0), follow_redirects=True
+    )
+    async with http_client, streamable_http_client(url, http_client=http_client) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
             registered = {t.name for t in (await session.list_tools()).tools}
@@ -113,7 +122,7 @@ async def _run(url: str, key: str, include_writes: bool) -> int:
                     text = _text(res)
                     ms = int((time.time() - t0) * 1000)
 
-                    if res.isError and not case.get("expect_error_ok"):
+                    if res.is_error and not case.get("expect_error_ok"):
                         avail_fail.append(name)
                         print(f"❌ {name:32} isError  {ms:>6}ms  {text[:120]}")
                         continue

@@ -33,7 +33,7 @@ def test_compare_sds_versions_has_newer(monkeypatch):
     res = asyncio.run(server.compare_sds_versions("hydrogen peroxide"))
 
     assert isinstance(res, CallToolResult)
-    sc = res.structuredContent
+    sc = res.structured_content
     assert sc["has_newer"] is True
     assert sc["cas"] == "7722-84-1"
     assert sc["verdict_relevant"] is True
@@ -61,7 +61,7 @@ def test_compare_sds_versions_no_newer(monkeypatch):
     res = asyncio.run(server.compare_sds_versions("hydrogen peroxide", supplier="Sigma"))
 
     assert isinstance(res, CallToolResult)
-    sc = res.structuredContent
+    sc = res.structured_content
     assert sc["has_newer"] is False
     text = res.content[0].text
     assert "latest" in text.lower() or "no newer" in text.lower()
@@ -80,7 +80,7 @@ def test_compare_sds_versions_unresolved(monkeypatch):
     res = asyncio.run(server.compare_sds_versions("xyzchemical123"))
 
     assert isinstance(res, CallToolResult)
-    sc = res.structuredContent
+    sc = res.structured_content
     assert sc["cas"] == ""
     text = res.content[0].text
     assert "xyzchemical123" in text or "resolve" in text.lower() or "not" in text.lower()
@@ -179,7 +179,7 @@ def test_compat_surfaces_usage_in_result(monkeypatch):
         }
     monkeypatch.setattr(server, "_direct_compat", fake)
     res = asyncio.run(server.check_chemical_compatibility(["a", "b"]))
-    assert res.structuredContent["usage"]["balance"] == 197
+    assert res.structured_content["usage"]["balance"] == 197
     assert "197" in res.content[0].text and "Balance" in res.content[0].text
 
 
@@ -191,8 +191,8 @@ def test_lookup_tool_does_not_leak_usage_key(monkeypatch):
                 "_usage": {"cost": 0, "balance": 100, "reason": "free"}}
     monkeypatch.setattr(server, "_direct_ppe", fake_ppe)
     res = asyncio.run(server.get_ppe_recommendation(["acetone"]))
-    assert "_usage" not in res.structuredContent
-    assert "results" in res.structuredContent  # real data still there
+    assert "_usage" not in res.structured_content
+    assert "results" in res.structured_content  # real data still there
 
 
 def test_strip_usage_helper():
@@ -360,16 +360,16 @@ def test_regulatory_default_regions_are_disclosed(monkeypatch):
     text = res.content[0].text.lower()
     assert "no regions specified" in text and "default" in text
     assert "cn" in text and "jp" in text  # tells the user others are available
-    assert res.structuredContent["regions_defaulted"] is True
-    assert res.structuredContent["regions"] == ["EU", "US"]
+    assert res.structured_content["regions_defaulted"] is True
+    assert res.structured_content["regions"] == ["EU", "US"]
 
 
 def test_regulatory_explicit_regions_no_disclosure(monkeypatch):
     monkeypatch.setattr(server, "_direct_compliance", _fake_compliance())
     res = asyncio.run(server.check_regulatory_compliance(["formaldehyde"], regions=["EU"]))
     assert "no regions specified" not in res.content[0].text.lower()
-    assert res.structuredContent["regions_defaulted"] is False
-    assert res.structuredContent["regions"] == ["EU"]
+    assert res.structured_content["regions_defaulted"] is False
+    assert res.structured_content["regions"] == ["EU"]
 
 
 # ---------------------------------------------------------------------------
@@ -632,7 +632,7 @@ def test_get_sds_document_available_returns_absolute_url(monkeypatch):
     res = asyncio.run(server.get_sds_document("acetone"))
 
     assert isinstance(res, CallToolResult)
-    sc = res.structuredContent
+    sc = res.structured_content
     assert sc["available"] is True
     assert sc["cas"] == "67-64-1"
     assert sc["supplier"] == "Sigma-Aldrich"
@@ -669,7 +669,7 @@ def test_get_sds_document_parsed_only_no_pdf(monkeypatch):
     res = asyncio.run(server.get_sds_document("acetone"))
 
     assert isinstance(res, CallToolResult)
-    sc = res.structuredContent
+    sc = res.structured_content
     assert sc["available"] is False
     text = res.content[0].text
     assert "get_sds_section" in text
@@ -692,7 +692,7 @@ def test_get_sds_document_unknown_chemical(monkeypatch):
     res = asyncio.run(server.get_sds_document("XYZ-99"))
 
     assert isinstance(res, CallToolResult)
-    sc = res.structuredContent
+    sc = res.structured_content
     assert sc["available"] is False
     text = res.content[0].text
     # Should mention upload path
@@ -740,7 +740,7 @@ def test_get_sds_document_includes_pdf_hash_when_backend_provides_it(monkeypatch
 
     res = asyncio.run(server.get_sds_document("acetone"))
 
-    assert res.structuredContent["pdf_hash"] == "deadbeef" * 8
+    assert res.structured_content["pdf_hash"] == "deadbeef" * 8
 
 
 def test_get_sds_document_pdf_hash_absent_on_old_backend(monkeypatch):
@@ -765,7 +765,7 @@ def test_get_sds_document_pdf_hash_absent_on_old_backend(monkeypatch):
 
     res = asyncio.run(server.get_sds_document("acetone"))
 
-    assert res.structuredContent["pdf_hash"] is None
+    assert res.structured_content["pdf_hash"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -919,7 +919,7 @@ def test_compat_ci89_basis_rule_label(monkeypatch):
     assert "📄" in text
     assert "https://mcp.lagentbot.com/msds/token/tok123" in text
     # structuredContent carries documents
-    sc = res.structuredContent
+    sc = res.structured_content
     assert sc["documents"] == _SAMPLE_DOCUMENTS
     # pairs carry traceability
     assert sc["pairs"][0]["traceability"] == "rule_based"
@@ -937,7 +937,7 @@ def test_compat_ci89_no_documents(monkeypatch):
     monkeypatch.setattr(server, "_direct_compat", fake_compat)
     res = asyncio.run(server.check_chemical_compatibility(["a", "b"]))
     assert "📄" not in res.content[0].text
-    assert res.structuredContent["documents"] == []
+    assert res.structured_content["documents"] == []
 
 
 def test_compat_ci89_sds_source_label_when_sds_backed(monkeypatch):
@@ -978,7 +978,7 @@ def test_risk_ci89_sds_backed_label(monkeypatch):
     assert "[Source: SDS document]" in text
     assert "📄" in text
     assert "https://mcp.lagentbot.com/msds/token/tok123" in text
-    sc = res.structuredContent
+    sc = res.structured_content
     assert sc["documents"] == _SAMPLE_DOCUMENTS
     assert sc["warnings"][0]["traceability"] == "sds_backed"
 
@@ -1027,7 +1027,7 @@ def test_risk_ci89_no_documents(monkeypatch):
     monkeypatch.setattr(server, "_direct_risk", fake_risk)
     res = asyncio.run(server.get_chemical_risk_warnings(["x"]))
     assert "📄" not in res.content[0].text
-    assert res.structuredContent["documents"] == []
+    assert res.structured_content["documents"] == []
 
 
 # --- get_ppe_recommendation + CI-89 ---
@@ -1052,7 +1052,7 @@ def test_ppe_ci89_sds_backed_label(monkeypatch):
     assert "[Source: SDS document]" in text
     assert "📄" in text
     assert "https://mcp.lagentbot.com/msds/token/tok123" in text
-    sc = res.structuredContent
+    sc = res.structured_content
     assert sc["documents"] == _SAMPLE_DOCUMENTS
 
 
@@ -1084,7 +1084,7 @@ def test_ppe_ci89_no_documents(monkeypatch):
     monkeypatch.setattr(server, "_direct_ppe", fake_ppe)
     res = asyncio.run(server.get_ppe_recommendation(["x"]))
     assert "📄" not in res.content[0].text
-    assert res.structuredContent["documents"] == []
+    assert res.structured_content["documents"] == []
 
 
 def test_ppe_ci89_internal_usage_key_not_leaked(monkeypatch):
@@ -1098,7 +1098,7 @@ def test_ppe_ci89_internal_usage_key_not_leaked(monkeypatch):
         }
     monkeypatch.setattr(server, "_direct_ppe", fake_ppe)
     res = asyncio.run(server.get_ppe_recommendation(["a"]))
-    assert "_usage" not in res.structuredContent
+    assert "_usage" not in res.structured_content
 
 
 # --- ask_chemical_safety / _quick_result + CI-89 ---
@@ -1116,7 +1116,7 @@ def test_quick_result_ci89_documents_in_text_and_structured():
     assert "Acetone is flammable." in text
     assert "📄" in text
     assert "https://mcp.lagentbot.com/msds/token/tok123" in text
-    sc = res.structuredContent
+    sc = res.structured_content
     assert sc["documents"] == _SAMPLE_DOCUMENTS
 
 
@@ -1125,7 +1125,7 @@ def test_quick_result_ci89_no_documents():
     data = {"answer": "Safe.", "tool_results": []}
     res = server._quick_result(data)
     assert "📄" not in res.content[0].text
-    assert res.structuredContent["documents"] == []
+    assert res.structured_content["documents"] == []
 
 
 def test_ask_chemical_safety_ci89_documents_propagated(monkeypatch):
@@ -1147,7 +1147,7 @@ def test_ask_chemical_safety_ci89_documents_propagated(monkeypatch):
     text = res.content[0].text
     assert "📄" in text
     assert "https://mcp.lagentbot.com/msds/token/tok123" in text
-    assert res.structuredContent["documents"] == _SAMPLE_DOCUMENTS
+    assert res.structured_content["documents"] == _SAMPLE_DOCUMENTS
 
 
 # --- batch_safety_check + CI-89 ---
@@ -1175,7 +1175,7 @@ def test_batch_ci89_compat_basis_label(monkeypatch):
     assert "Basis (rule)" in text
     assert "📄" in text
     assert "https://mcp.lagentbot.com/msds/token/tok123" in text
-    sc = res.structuredContent
+    sc = res.structured_content
     assert sc["documents"] == _SAMPLE_DOCUMENTS
     assert sc["compatibility"]["pairs"][0]["traceability"] == "rule_based"
 
@@ -1197,7 +1197,7 @@ def test_batch_ci89_risk_sds_backed_label(monkeypatch):
     res = asyncio.run(server.batch_safety_check(["acetone", "water"]))
     text = res.content[0].text
     assert "[Source: SDS document]" in text
-    sc = res.structuredContent
+    sc = res.structured_content
     assert sc["risk_warnings"][0]["traceability"] == "sds_backed"
 
 
@@ -1212,7 +1212,7 @@ def test_batch_ci89_no_documents(monkeypatch):
     monkeypatch.setattr(server, "_direct_batch", fake_batch)
     res = asyncio.run(server.batch_safety_check(["acetone", "water"]))
     assert "📄" not in res.content[0].text
-    assert res.structuredContent["documents"] == []
+    assert res.structured_content["documents"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -1263,7 +1263,7 @@ def test_get_audit_report_absolute_url_not_double_prefixed(monkeypatch):
     res = asyncio.run(server.get_audit_report("DEMO-ABC123"))
 
     assert isinstance(res, CallToolResult)
-    sc = res.structuredContent
+    sc = res.structured_content
     assert sc["report_url"] == absolute_url, (
         f"Absolute URL must be passed through unchanged, got: {sc['report_url']!r}"
     )
@@ -1284,7 +1284,7 @@ def test_get_audit_report_relative_url_prefixed_with_api_url(monkeypatch):
     res = asyncio.run(server.get_audit_report("DEMO-ABC456"))
 
     assert isinstance(res, CallToolResult)
-    sc = res.structuredContent
+    sc = res.structured_content
     assert sc["report_url"].startswith("http"), (
         f"Relative URL must be prefixed with API_URL, got: {sc['report_url']!r}"
     )
@@ -1316,8 +1316,8 @@ def test_search_msds_online_found(monkeypatch):
     res = asyncio.run(server.search_msds_online(chemical_name="acetonitrile"))
 
     assert isinstance(res, CallToolResult)
-    assert res.structuredContent["source"] == "pubchem"
-    assert res.structuredContent["cas_number"] == "75-05-8"
+    assert res.structured_content["source"] == "pubchem"
+    assert res.structured_content["cas_number"] == "75-05-8"
     text = res.content[0].text
     assert "75-05-8" in text and "H225" in text
     assert "not a" in text.lower() and "sds" in text.lower()  # labelled unverified
@@ -1522,7 +1522,7 @@ def test_upload_https_url_still_works(monkeypatch):
     res = asyncio.run(server.upload_msds_pdf("https://supplier.example.com/acetone_sds.pdf"))
 
     assert isinstance(res, CallToolResult)
-    assert res.structuredContent["session_id"] == "SESS-1"
+    assert res.structured_content["session_id"] == "SESS-1"
     assert len(fake.upload_calls) == 1
     sent_filename, sent_bytes, sent_ctype = fake.upload_calls[0]["files"]["file"]
     assert sent_filename == "acetone_sds.pdf"
