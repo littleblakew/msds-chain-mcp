@@ -615,6 +615,44 @@ def _strip_usage(data: dict) -> dict:
     return {k: v for k, v in data.items() if k != "_usage"}
 
 
+# ---------------------------------------------------------------------------
+# CI-342：structuredContent 从「白名单」翻成「透传 + 显式挡掉的键」
+# ---------------------------------------------------------------------------
+# 旧写法是逐字段手抄的 dict：后端往响应里加字段，我们**不会带上，也不会报错**，
+# 客户端侧就是「这个字段不存在」。实测丢掉的（2026-08-15，真调后端 + 真调工具做的差集）：
+#   顶层 `unresolved_detail`（compat / risk / batch）——`unresolved` 只给了名字，
+#     而**为什么没解析出来**的机器可读 `code` 全在这个键里
+#   `compat.pairs[]` / `batch.compatibility.pairs[]` 丢 `cas_a`/`cas_b`/`citation`/
+#     `source_detail`/`verdict`（batch 还多丢 `source`）——11 个字段只透出 5 个
+#   `risk.warnings[]` 丢 `additional_hazards`（带 supplier + revision_date）
+#   `get_sds_document` 丢 `physical_form`/`physical_form_disclosure`
+#   `search_msds_online` 丢 `status`/`completeness`/`chemical_name`
+#
+# 🔴 票里担心「白名单也承担着不外泄内部字段的职责，别一把梭透传」——**对实测到的这批
+# 不成立**，逐个看过值：`citation` 是 `CAMEO:1x10-acid-strong-base-strong`（公开引用）、
+# `source_detail` 引的是 CAMEO 的分类规则、`additional_hazards` 带 supplier 与修订日期
+# ——全是可追溯性数据，正是我们要给出去的东西，没有一个泄露内部机制。
+# 但「今天这批没问题」不等于「以后都没问题」⇒ 不做裸透传，走这个 helper：**默认全透，
+# 要挡的键必须写进 `drop`**，于是「决定不给」这件事永远是显式的、可 grep 的。
+_INTERNAL_KEYS = frozenset({"_usage"})
+
+
+def _expose(data: dict, *, rename: dict[str, str] | None = None,
+            drop: frozenset[str] = _INTERNAL_KEYS, override: dict | None = None) -> dict:
+    """把后端的一层 dict 透给客户端：默认全给，只挡 `drop` 里的键。
+
+    `rename` 处理**有意的**对外命名（如 `chem1` → `chemical_a`：MCP 面的命名是对外契约，
+    改它会打断现有客户端）。`override` 覆盖我们自己算过的值（如归一化后的 traceability）。
+    """
+    if not isinstance(data, dict):
+        return data
+    rename = rename or {}
+    out = {rename.get(k, k): v for k, v in data.items() if k not in drop}
+    if override:
+        out.update(override)
+    return out
+
+
 async def _direct_compat(chemicals: list[str]) -> dict:
     """POST /api/v2/compatibility/check — direct service layer, bounded LLM fallback."""
     async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
@@ -861,14 +899,11 @@ async def check_chemical_compatibility(chemicals: ChemicalList) -> CallToolResul
             lvl = (pair.get("level") or "unknown").lower()
             if lvl in counts:
                 counts[lvl] += 1
-            struct_pairs.append({
-                "chemical_a": pair.get("chem1"),
-                "chemical_b": pair.get("chem2"),
-                "level": pair.get("level"),
-                "reason": pair.get("reason"),
-                "source": pair.get("source"),
-                "traceability": traceability,
-            })
+            struct_pairs.append(_expose(
+                pair,
+                rename={"chem1": "chemical_a", "chem2": "chemical_b"},
+                override={"traceability": traceability},   # 我们归一化过，用自己的
+            ))
 
         if not data.get("pairs"):
             lines.append("No compatibility pairs to check (need at least 2 resolved chemicals).")
@@ -878,10 +913,13 @@ async def check_chemical_compatibility(chemicals: ChemicalList) -> CallToolResul
         if documents:
             lines.append(_format_sds_documents(documents))
 
+        # 顶层也走透传：后端的 `unresolved` / `unresolved_detail`（为什么没解析出来的
+        # 机器可读 `code`，文本里早由 `_unresolved_block` 渲染，structuredContent 此前读不到）
+        # / `rejected_products` 及**将来新增的任何键**都自动带上；后面那几个是我们自己
+        # 算出来或重塑过的，覆盖同名。
         structured = {
+            **_expose(data),
             "chemicals": chemicals,
-            "unresolved": data.get("unresolved", []),
-            "rejected_products": data.get("rejected_products", []),
             "pairs": struct_pairs,
             "summary": {"total_pairs": len(struct_pairs), **counts},
             "documents": documents,
@@ -961,20 +999,10 @@ async def get_chemical_risk_warnings(chemicals: ChemicalList) -> str:
             lines.append(_format_sds_documents(documents))
 
         structured = {
+            **_expose(data),
             "chemicals": chemicals,
-            "unresolved": data.get("unresolved", []),
-            "rejected_products": data.get("rejected_products", []),
-            "warnings": [
-                {
-                    "chemical": w.get("chemical"),
-                    "level": w.get("level"),
-                    "description": w.get("description"),
-                    "mitigation": w.get("mitigation"),
-                    "reference": w.get("reference"),
-                    "traceability": w.get("traceability"),
-                }
-                for w in data.get("warnings", [])
-            ],
+            # 逐条也透传：此前手抄字段，把 `additional_hazards`（带 supplier + revision_date）丢了
+            "warnings": [_expose(w) for w in data.get("warnings", [])],
             "documents": documents,
         }
         return _with_usage(CallToolResult(
@@ -1945,8 +1973,13 @@ async def search_msds_online(
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content={
+                # `query` 是**调用方问的那个词**，`chemical_name` 是 PubChem 解析出的名字，
+                # 两者可以不同 ⇒ 都给，别用一个盖掉另一个（此前只有 query）。
                 "query": chemical_name or cas_number,
+                "chemical_name": data.get("chemical_name") or "",
                 "cas_number": data.get("cas_number") or "",
+                "status": data.get("status"),          # found / not_found，机器可判
+                "completeness": data.get("completeness"),
                 "source": "pubchem",
                 "ghs": ghs,
             },
@@ -2914,32 +2947,20 @@ async def batch_safety_check(chemicals: Annotated[list[str], Field(
         )
 
         structured = {
+            **_expose(data),
             "chemicals": chemicals,
-            "unresolved": data.get("unresolved", []),
-            "rejected_products": data.get("rejected_products", []),
             "compatibility": {
                 "summary": compat.get("summary", {}),
+                # 透传：此前 11 个字段只透出 5 个，丢的是 cas_a/cas_b/citation/source/
+                # source_detail/verdict —— 全是可追溯性字段
                 "pairs": [
-                    {
-                        "chemical_a": p.get("chem1"),
-                        "chemical_b": p.get("chem2"),
-                        "level": p.get("level"),
-                        "reason": p.get("reason"),
-                        "traceability": p.get("traceability", "rule_based"),
-                    }
+                    _expose(p, rename={"chem1": "chemical_a", "chem2": "chemical_b"},
+                            override={"traceability": p.get("traceability", "rule_based")})
                     for p in compat.get("pairs", [])
                 ],
             },
-            "risk_warnings": [
-                {
-                    "chemical": w.get("chemical"),
-                    "level": w.get("level"),
-                    "description": w.get("description"),
-                    "mitigation": w.get("mitigation"),
-                    "traceability": w.get("traceability"),
-                }
-                for w in data.get("risk_warnings", [])
-            ],
+            # 同 get_chemical_risk_warnings：逐条透传，别再手抄字段
+            "risk_warnings": [_expose(w) for w in data.get("risk_warnings", [])],
             "documents": documents,
         }
         return _with_usage(CallToolResult(
@@ -3087,6 +3108,9 @@ async def get_sds_document(chemical: Chemical) -> CallToolResult:
                     # "is this the same physical file as get_sds_section returned",
                     # since record_id comes from a different table on each path.
                     "pdf_hash": data.get("pdf_hash"),
+                    # CI-347 的形态披露：文本里早就渲染了，structuredContent 此前读不到
+                    "physical_form": data.get("physical_form"),
+                    "physical_form_disclosure": data.get("physical_form_disclosure"),
                     "pdf_url": full_url,
                     "expires_in_seconds": 300,
                 },
