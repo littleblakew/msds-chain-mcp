@@ -91,7 +91,22 @@ async def health(request: Request) -> JSONResponse:
 # Auth is at the gateway, not here.
 _no_dns_rebinding = TransportSecuritySettings(enable_dns_rebinding_protection=False)
 
-_streamable_app = mcp.streamable_http_app(transport_security=_no_dns_rebinding)   # registers /mcp
+# 🔴 请求体上限必须显式给，不能吃 SDK 默认的 4 MiB。
+# `upload_msds_pdf` 的 schema、描述和 `_MAX_INLINE_PDF_BYTES` 都对外承诺**内联 base64
+# 最大 10 MB（解码后）**，而 10 MB 的 base64 是 ~13.4 MB，早就撞穿 4 MiB ⇒ 超过 ~3 MB 的
+# PDF 在传输层就被 `RequestBodyLimitMiddleware` 以裸 413 拒掉，MCP 层根本不会执行，
+# 用户看到的是一句没有上下文的错误（经网关还会变成 500）。
+# ⚠️ 这**不是 mcp 2.x 带来的**：`DEFAULT_MAX_REQUEST_BODY_SIZE = 4 MiB` 在 1.29 里就有
+# （1.x 只是没把这个参数暴露到 `streamable_http_app()`，所以想改也改不了），实测当前
+# Prod 打 5 MiB 同样失败。2.x 把它变成了可传参数，所以这次顺手把承诺兑现。
+# 上限从 `_MAX_INLINE_PDF_BYTES` 推导，避免和应用层的限制各说各话；应用层那道
+# `_reject_oversize_encoded` 仍在，越过传输层之后照样按 10 MB 拒。
+_MAX_BODY_BYTES = (_srv._MAX_INLINE_PDF_BYTES * 4) // 3 + 262_144  # base64 膨胀 + JSON-RPC 信封
+
+_streamable_app = mcp.streamable_http_app(
+    transport_security=_no_dns_rebinding,
+    max_request_body_size=_MAX_BODY_BYTES,
+)   # registers /mcp
 _sse_app = mcp.sse_app(transport_security=_no_dns_rebinding)   # registers /sse + /messages
 
 _routes: list = [

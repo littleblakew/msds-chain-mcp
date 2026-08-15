@@ -36,15 +36,25 @@ def test_write_tools_are_marked_as_writes():
     """写工具必须被标出来：它们会往 Prod 落数据，而按 [[decision-no-auto-cleanup-user-data]]
     写进去就留着。标错 ⇒ 默认跑 Prod 时会静默产生用户数据。
 
-    判据取自 registry 的 `readOnlyHint`，不靠人记——annotations 是工具自己声明的。
+    判据取自 registry 的 `read_only_hint`，不靠人记——annotations 是工具自己声明的。
+
+    🔴 **别写成 `getattr(t.annotations, "read_only_hint", None)`**：属性一旦改名
+    （CI-242 把 mcp 1.x 的 camelCase 改成 2.x 的 snake_case，改的正是这个属性），
+    `getattr` 会对每个工具返回 `None`，下面的 `assert` 一次都不执行，守卫**静默变成空跑**
+    而测试照样绿。所以①直接取属性，改名就 AttributeError；②再断言写工具集合非空，
+    保证这个循环确实判过东西。
     """
     tools = asyncio.run(server.mcp.list_tools())
-    for t in tools:
-        ro = getattr(t.annotations, "read_only_hint", None) if t.annotations else None
-        if ro is False:
-            assert lc.CASES[t.name].get("writes") is True, (
-                f"{t.name} 的 readOnlyHint=False（会写数据），但用例没标 writes=True"
-            )
+    write_tools = [t.name for t in tools
+                   if t.annotations is not None and t.annotations.read_only_hint is False]
+    assert write_tools, (
+        "registry 里一个 read_only_hint=False 的工具都没有——本守卫此刻什么都没判。"
+        "要么 annotations 的字段名又变了，要么写工具真的没了；两种都得先查清"
+    )
+    for name in write_tools:
+        assert lc.CASES[name].get("writes") is True, (
+            f"{name} 的 read_only_hint=False（会写数据），但用例没标 writes=True"
+        )
 
 
 def test_every_case_supplies_all_required_args():

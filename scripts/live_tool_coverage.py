@@ -90,10 +90,14 @@ async def _run(url: str, key: str, include_writes: bool) -> int:
     quality_notes: list[str] = []
     skipped: list[str] = []
 
-    # 180s 是给 batch_safety_check / check_regulatory_compliance 这类 O(n) LLM 工具留的；
-    # httpx2.Timeout 的 read 腿才是长响应真正卡的那条。
+    # 🔴 read 腿必须显式给 300s，别只写一个总 timeout。旧代码 `streamablehttp_client(
+    # url, timeout=180)` 在 1.x 内部映射成 `httpx.Timeout(180, read=sse_read_timeout)`，
+    # 而 `sse_read_timeout` 默认 300 ⇒ **实际的读超时一直是 300 秒**。2.x 改成由调用方
+    # 建 client 后，如果照着 `180` 写成 `Timeout(30, read=180)`，等于把长响应的预算从
+    # 300 砍到 180——而 read 腿正是 batch_safety_check 这类 O(n) LLM 工具真正等的那条。
+    # 一个跑 200s 的工具会变成 ReadTimeout → 落进 avail_fail → 把好工具报成坏的。
     http_client = httpx2.AsyncClient(
-        headers=headers, timeout=httpx2.Timeout(30.0, read=180.0), follow_redirects=True
+        headers=headers, timeout=httpx2.Timeout(180.0, read=300.0), follow_redirects=True
     )
     async with http_client, streamable_http_client(url, http_client=http_client) as (r, w):
         async with ClientSession(r, w) as session:

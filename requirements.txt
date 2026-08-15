@@ -8,4 +8,8 @@
 mcp>=2.0.0,<3
 httpx>=0.27.0
 uvicorn>=0.30.0
-starlette>=0.38.0
+# 🔴 starlette 要上界，理由和上面 mcp 的一样，但触发点更隐蔽：`server_remote.py` 伸手进
+# `_streamable_app.router.routes` 和 `router.lifespan_context`——**不是稳定公开 API**。
+# mcp 只要求 `starlette>=0.27`，所以干净解析器现在就会装到 **1.6.0**（不是这次改的，
+# main 上同样如此，已实测），下一个大版本随时可能把这两处挪走而没人 review 过。
+starlette>=0.38.0,<2
