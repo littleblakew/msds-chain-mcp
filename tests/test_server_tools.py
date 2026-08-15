@@ -472,7 +472,7 @@ def _capture_log_call():
     """Return (patched coroutine, captured-args list)."""
     captured = []
 
-    async def _fake_log(tool_name, chemicals, duration_ms, success, error_message=None, input_params=None):
+    async def _fake_log(tool_name, chemicals, duration_ms, success, error_message=None, input_params=None, *_a, **_kw):
         captured.append({
             "tool_name": tool_name,
             "success": success,
@@ -1825,7 +1825,7 @@ def test_upload_log_never_contains_inline_payload(monkeypatch):
     import asyncio, base64 as _b64, server as _s
     logged = {}
 
-    async def _fake_log(tool, sid, dur, success, err, params):
+    async def _fake_log(tool, sid, dur, success, err, params, *_a, **_kw):
         logged["params"] = params
 
     monkeypatch.setattr(_s, "_log_call", _fake_log)
