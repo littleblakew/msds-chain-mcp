@@ -46,7 +46,11 @@ def test_server_version_matches_version_file():
 
 def test_serverinfo_reports_our_version():
     """The value clients (ChatGPT, claude.ai, raw MCP) actually display."""
-    opts = server.mcp._mcp_server.create_initialization_options()
+    # mcp 2.x renamed the underlying low-level server attribute (`_mcp_server` →
+    # `_lowlevel_server`). Still read it through create_initialization_options() rather
+    # than `server.mcp.version`: this is the object the `initialize` handshake is built
+    # from, so it fails if the ctor arg ever stops reaching the wire.
+    opts = server.mcp._lowlevel_server.create_initialization_options()
     assert opts.server_version == _version_file()
 
 

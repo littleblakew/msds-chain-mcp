@@ -67,7 +67,7 @@ def test_fields_the_invariants_read_survive_the_wrapper():
     carrying the evidence — the CI-342 shape, one layer over.
     """
     res = _run(server.get_ppe_recommendation, "_direct_ppe", PPE_PAYLOAD, ["acetone"])
-    sc = res.structuredContent
+    sc = res.structured_content
     assert "unresolved" in sc, "invariant ① loses its left-hand side"
     assert sc["documents"] and "chemical" in sc["documents"][0], "invariant ① loses documents"
     assert sc["documents"][0].get("cas"), "invariant ③ loses the document CAS"

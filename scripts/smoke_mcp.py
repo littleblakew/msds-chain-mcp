@@ -22,8 +22,13 @@ import sys
 # 就是这样把生产部署的 gate 弄红的（同族：测试替生产布置好了前提）。
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# mcp 2.x renamed the transport helper (`streamablehttp_client` → `streamable_http_client`),
+# dropped its `headers=`/`timeout=` kwargs in favour of a caller-supplied HTTP client, and
+# now yields a 2-tuple instead of 3 (the session-id getter is gone). `httpx2` is mcp 2.x's
+# own HTTP dependency — distinct from the `httpx` server.py uses to call our backend.
+import httpx2
 from mcp.client.session import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 
 URL = os.environ.get("MCP_SMOKE_URL", "https://mcp.lagentbot.com/mcp")
 KEY = os.environ.get("MCP_SMOKE_KEY", "")
@@ -61,7 +66,10 @@ def _text(result) -> str:
 
 async def _run() -> None:
     headers = {"Authorization": f"Bearer {KEY}"}
-    async with streamablehttp_client(URL, headers=headers, timeout=30) as (read, write, _):
+    http_client = httpx2.AsyncClient(
+        headers=headers, timeout=httpx2.Timeout(30.0, read=300.0), follow_redirects=True
+    )
+    async with http_client, streamable_http_client(URL, http_client=http_client) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
 
@@ -78,7 +86,7 @@ async def _run() -> None:
             # shared.canonical_sections. acetone §4 (first aid) is a stable canary.
             r1 = await session.call_tool("get_sds_section", {"chemical": "acetone", "section": 4})
             t1 = _text(r1)
-            assert not r1.isError, f"get_sds_section errored: {t1[:300]}"
+            assert not r1.is_error, f"get_sds_section errored: {t1[:300]}"
             assert t1.strip() and "No data available" not in t1, \
                 f"get_sds_section(acetone,4) returned no content: {t1[:300]}"
             print("✅ get_sds_section(acetone, 4) — non-empty first-aid content")
@@ -86,7 +94,7 @@ async def _run() -> None:
             # 2) search_chemical_database — fast lookup; confirms DB path is live.
             r2 = await session.call_tool("search_chemical_database", {"query": "acetone"})
             t2 = _text(r2)
-            assert not r2.isError and t2.strip(), f"search_chemical_database returned nothing: {t2[:300]}"
+            assert not r2.is_error and t2.strip(), f"search_chemical_database returned nothing: {t2[:300]}"
             print("✅ search_chemical_database(acetone) — non-empty")
 
     print("MCP tool smoke PASSED")

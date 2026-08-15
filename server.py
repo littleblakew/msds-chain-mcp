@@ -31,10 +31,12 @@ import re
 import textwrap
 import time
 
+from typing import Annotated, Literal
+
 import httpx
-from mcp.server.fastmcp import FastMCP
-from mcp.server.transport_security import TransportSecuritySettings
+from mcp.server import MCPServer
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from pydantic import Field
 from request_identity import caller_headers, get_caller_credential, set_caller_credential
 
 # Writes to stderr only (never stdout — stdout is the JSON-RPC channel for the
@@ -108,17 +110,18 @@ TIMEOUT_LLM = 120.0   # quick-chat endpoints — multi-turn LLM reasoning
 # Single source of truth = the repo-root VERSION file. This literal is kept in
 # sync by scripts/release.sh (which stamps VERSION into every manifest), and
 # tests/test_version.py fails CI if the two ever drift. Do NOT hand-edit — bump
-# VERSION and run scripts/release.sh. FastMCP.__init__ takes no `version` arg, so
-# we assign it on the underlying low-level server after construction; this is what
-# surfaces as serverInfo.version in the MCP `initialize` handshake (what ChatGPT,
-# claude.ai and any raw MCP client display).
+# VERSION and run scripts/release.sh. `version=` is a first-class MCPServer ctor arg
+# (mcp 2.x) and is what surfaces as serverInfo.version in the MCP `initialize`
+# handshake (what ChatGPT, claude.ai and any raw MCP client display). Without it the
+# SDK falls back to reporting the `mcp` package version — a meaningless value.
 __version__ = "1.5.10"
 
-mcp = FastMCP(
+# mcp 2.x: `host`/`port`/`transport_security` are no longer ctor args — they moved to
+# streamable_http_app()/sse_app() (see server_remote.py). host/port were already dead
+# weight here: server_remote.py feeds them straight to uvicorn.
+mcp = MCPServer(
     "MSDS Chain",
-    host="0.0.0.0",
-    port=8080,
-    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    version=__version__,
     instructions=textwrap.dedent("""
         MSDS Chain provides chemical safety intelligence backed by traceable, sourced SDS data.
 
@@ -155,10 +158,32 @@ mcp = FastMCP(
     """).strip(),
 )
 
-# Surface our product version in the MCP `initialize` handshake. Without this,
-# the SDK falls back to reporting the `mcp` package version — a meaningless value
-# that clients (ChatGPT, claude.ai) display as our server version.
-mcp._mcp_server.version = __version__
+
+# ---------------------------------------------------------------------------
+# Parameter types (CI-521)
+# ---------------------------------------------------------------------------
+# 🔴 An MCP client is an LLM agent, and the ONLY thing it reads when deciding what
+# to put in an argument is that argument's JSON Schema entry. Prose that lives in
+# the Python docstring reaches `Tool.description` — it does NOT reach
+# `inputSchema.properties.<arg>.description`. Before CI-521 all 37 parameters had
+# `description: null`, and `scenario` was the proof that this is not cosmetic: the
+# backend hard-rejects anything outside spill/fire/exposure, the schema advertised
+# a bare `"type": "string"`, and an agent writing a first-aid call naturally sent
+# `"skin contact"` and got an error string back. Microsoft's own M365 connector
+# guidance says the same thing — the per-parameter description is what the agent
+# reads — and that same schema is what we ship in the connector package.
+#
+# So: every parameter goes through an Annotated alias or an inline Field below.
+# Constrained values are expressed in the TYPE (Literal / ge / le) so the enum and
+# the bounds land in the schema, rather than only being described in prose that a
+# client is free to ignore.
+ChemicalList = Annotated[list[str], Field(
+    description='List of chemical names or CAS numbers, e.g. ["acetone", "sulfuric acid"] '
+                'or ["67-64-1", "67-56-1"]. Names and CAS numbers can be mixed.',
+)]
+Chemical = Annotated[str, Field(
+    description='Chemical name or CAS number, e.g. "acetone" or "67-64-1".',
+)]
 
 
 _API_KEY_REQUIRED_MSG = (
@@ -206,7 +231,7 @@ def _quick_result(data: dict) -> CallToolResult:
     text = answer + _format_sds_documents(documents) + _format_tool_results(tool_results)
     return CallToolResult(
         content=[TextContent(type="text", text=text)],
-        structuredContent={"answer": answer, "tool_results": tool_results,
+        structured_content={"answer": answer, "tool_results": tool_results,
                            "documents": documents},
     )
 
@@ -553,15 +578,15 @@ def _with_usage(result: "CallToolResult", data: dict) -> "CallToolResult":
     line = _usage_line(usage)
     if content and isinstance(content[0], TextContent):
         content = [TextContent(type="text", text=content[0].text + line)] + content[1:]
-    sc = result.structuredContent
+    sc = result.structured_content
     if sc is not None:
         sc = {**sc, "usage": usage}
-    return CallToolResult(content=content, structuredContent=sc)
+    return CallToolResult(content=content, structured_content=sc)
 
 
 def _strip_usage(data: dict) -> dict:
     """Drop the internal `_usage` key that _billed_json attaches, so lookup tools
-    that expose `structuredContent=data` don't leak it into the client output.
+    that expose `structured_content=data` don't leak it into the client output.
     (Value tools build their own structuredContent + surface a clean `usage` block.)"""
     if not isinstance(data, dict) or "_usage" not in data:
         return data
@@ -755,11 +780,11 @@ def _insufficient_lines(item: dict, what: str) -> list[str]:
 
 
 @mcp.tool(
-    annotations=ToolAnnotations(title="Check Chemical Compatibility", readOnlyHint=True, destructiveHint=False, openWorldHint=False),
+    annotations=ToolAnnotations(title="Check Chemical Compatibility", read_only_hint=True, destructive_hint=False, open_world_hint=False),
     structured_output=False,
 )
 @_graceful_timeout
-async def check_chemical_compatibility(chemicals: list[str]) -> CallToolResult:
+async def check_chemical_compatibility(chemicals: ChemicalList) -> CallToolResult:
     """
     Check pairwise compatibility between a list of chemicals.
 
@@ -841,7 +866,7 @@ async def check_chemical_compatibility(chemicals: list[str]) -> CallToolResult:
         }
         return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=structured,
+            structured_content=structured,
         ), data)
     except Exception as e:
         success = False
@@ -853,9 +878,9 @@ async def check_chemical_compatibility(chemicals: list[str]) -> CallToolResult:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Chemical Risk Warnings", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get Chemical Risk Warnings", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
-async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
+async def get_chemical_risk_warnings(chemicals: ChemicalList) -> str:
     """
     Get hazard and risk warnings for one or more chemicals.
 
@@ -932,7 +957,7 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
         }
         return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=structured,
+            structured_content=structured,
         ), data)
     except Exception as e:
         success = False
@@ -944,11 +969,15 @@ async def get_chemical_risk_warnings(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Compliance", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Compliance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 async def check_regulatory_compliance(
-    chemicals: list[str],
-    regions: list[str] | None = None,
+    chemicals: ChemicalList,
+    regions: Annotated[list[str] | None, Field(
+        description='Region codes to check. Valid codes: "EU", "US", "CN", "JP", "KR", '
+                    '"CA", "AU", "TW". Omit to check EU + US (the default pair) — the '
+                    'response says explicitly which regions were used.',
+    )] = None,
 ) -> str:
     """
     Check multi-region regulatory compliance status for chemicals.
@@ -1010,7 +1039,7 @@ async def check_regulatory_compliance(
                   if _usage_bal is not None else None)
         return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent={
+            structured_content={
                 "chemicals": chemicals,
                 "regions": effective_regions,
                 "regions_defaulted": not regions,
@@ -1027,8 +1056,12 @@ async def check_regulatory_compliance(
                         _json.dumps({"chemicals": chemicals, "regions": regions}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Ask Chemical Safety Question", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
-async def ask_chemical_safety(question: str) -> str:
+@mcp.tool(annotations=ToolAnnotations(title="Ask Chemical Safety Question", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+async def ask_chemical_safety(question: Annotated[str, Field(
+    description='A chemical safety question in natural language, e.g. "What are the main '
+                'hazards and PPE for TMAH?", "How should I store acetone and methanol in '
+                'the same cabinet?", "A worker got hydrofluoric acid on their skin — first aid?"',
+)]) -> str:
     """
     PREFERRED first tool for any general chemical-safety question — hazards, PPE,
     first aid, spill/exposure response, storage, disposal, "is X safe", "what do I
@@ -1071,9 +1104,9 @@ async def ask_chemical_safety(question: str) -> str:
                         _json.dumps({"question": question}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get PPE Recommendation", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get PPE Recommendation", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
-async def get_ppe_recommendation(chemicals: list[str]) -> str:
+async def get_ppe_recommendation(chemicals: ChemicalList) -> str:
     """
     Get PPE (Personal Protective Equipment) recommendations for chemicals.
 
@@ -1152,7 +1185,7 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
         sc["documents"] = documents
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=sc,
+            structured_content=sc,
         )
     except Exception as e:
         success = False
@@ -1164,9 +1197,9 @@ async def get_ppe_recommendation(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Storage Guidance", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get Storage Guidance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
-async def get_storage_guidance(chemicals: list[str]) -> str:
+async def get_storage_guidance(chemicals: ChemicalList) -> str:
     """
     Get storage and isolation guidance for chemicals.
 
@@ -1214,7 +1247,7 @@ async def get_storage_guidance(chemicals: list[str]) -> str:
             lines.append("No storage data found for the given chemicals.")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=_strip_usage(data),
+            structured_content=_strip_usage(data),
         )
     except Exception as e:
         success = False
@@ -1226,9 +1259,17 @@ async def get_storage_guidance(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Emergency Response", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get Emergency Response", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
-async def get_emergency_response(chemical: str, scenario: str = "spill") -> str:
+async def get_emergency_response(
+    chemical: Chemical,
+    scenario: Annotated[Literal["spill", "fire", "exposure"], Field(
+        description='Type of emergency: "spill" (leak/release), "fire", or "exposure" '
+                    '(skin/eye/inhalation first aid). These three are the only accepted '
+                    'values — the backend rejects anything else, so map the incident to '
+                    'the closest one (e.g. skin contact / splash / inhalation → "exposure").',
+    )] = "spill",
+) -> str:
     """
     Get emergency response guidance for a chemical incident.
 
@@ -1291,7 +1332,7 @@ async def get_emergency_response(chemical: str, scenario: str = "spill") -> str:
             lines.append("\n**Note:** Chemical not found in database — showing general guidance only.")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=_strip_usage(data),
+            structured_content=_strip_usage(data),
         )
     except Exception as e:
         success = False
@@ -1303,9 +1344,16 @@ async def get_emergency_response(chemical: str, scenario: str = "spill") -> str:
                         _json.dumps({"chemical": chemical, "scenario": scenario}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Exposure Limits", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get Exposure Limits", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
-async def get_exposure_limits(chemicals: list[str], region: str | None = None) -> str:
+async def get_exposure_limits(
+    chemicals: ChemicalList,
+    region: Annotated[str | None, Field(
+        description='Optional filter for which standards to return: "US" (OSHA PEL), '
+                    '"EU" (IOELV), "JP", "CN" (GBZ 2.1), or "INT" (ACGIH TLV). '
+                    'Omit to return every standard on file.',
+    )] = None,
+) -> str:
     """Get occupational exposure limits (OEL/TLV/PEL/MAC) for chemicals.
 
     Returns TWA, STEL, and Ceiling values from multiple standards:
@@ -1350,7 +1398,7 @@ async def get_exposure_limits(chemicals: list[str], region: str | None = None) -
             lines.append("No exposure-limit data found for the given chemicals.")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=_strip_usage(data),
+            structured_content=_strip_usage(data),
         )
     except Exception as e:
         success = False
@@ -1362,9 +1410,9 @@ async def get_exposure_limits(chemicals: list[str], region: str | None = None) -
                         _json.dumps({"chemicals": chemicals, "region": region}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Transport Classification", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get Transport Classification", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
-async def get_transport_classification(chemicals: list[str]) -> str:
+async def get_transport_classification(chemicals: ChemicalList) -> str:
     """Get UN transport classification for chemicals (dangerous goods shipping).
     Returns UN number, proper shipping name, hazard class, packing group,
     and transport mode details (ADR road, IATA air, IMDG sea).
@@ -1394,7 +1442,7 @@ async def get_transport_classification(chemicals: list[str]) -> str:
             lines.append("No transport-classification data found for the given chemicals.")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=_strip_usage(data),
+            structured_content=_strip_usage(data),
         )
     except Exception as e:
         success = False
@@ -1406,10 +1454,13 @@ async def get_transport_classification(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Create Audit Session", readOnlyHint=False, destructiveHint=False, openWorldHint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Create Audit Session", read_only_hint=False, destructive_hint=False, open_world_hint=False), structured_output=False)
 async def create_audit_session(
-    experiment_name: str,
-    chemicals: list[str],
+    experiment_name: Annotated[str, Field(
+        description='Short human-readable label for the audit, shown on the report, e.g. '
+                    '"Grignard prep — 2026-04-16" or "Solvent screening #3".',
+    )],
+    chemicals: ChemicalList,
 ) -> str:
     """
     Run a full MSDS safety audit for a list of chemicals and return a session id.
@@ -1541,7 +1592,7 @@ async def create_audit_session(
         }
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=structured,
+            structured_content=structured,
         )
     except Exception as e:
         success = False
@@ -1553,8 +1604,10 @@ async def create_audit_session(
                         _json.dumps({"experiment_name": experiment_name, "chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Audit Report", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
-async def get_audit_report(session_id: str) -> str:
+@mcp.tool(annotations=ToolAnnotations(title="Get Audit Report", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+async def get_audit_report(session_id: Annotated[str, Field(
+    description='The session id returned by `create_audit_session`, e.g. "DEMO-A1B2C3D4".',
+)]) -> str:
     """
     Get a short-lived signed URL to download the audit report PDF.
 
@@ -1598,7 +1651,7 @@ async def get_audit_report(session_id: str) -> str:
                 f"**Signed report URL** (valid ~5 min):\n{full_url}\n\n"
                 f"Open in a browser or `curl -O` to download the PDF."
             ))],
-            structuredContent={
+            structured_content={
                 "session_id": session_id,
                 "report_url": full_url,
                 "expires_in_seconds": 300,
@@ -1682,8 +1735,12 @@ def _rejected_products_block(data: dict) -> list[str]:
     return lines
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Search Chemical Database", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
-async def search_chemical_database(query: str) -> str:
+@mcp.tool(annotations=ToolAnnotations(title="Search Chemical Database", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+async def search_chemical_database(query: Annotated[str, Field(
+    description='A single chemical name, synonym, or CAS number, e.g. "methanol", '
+                '"wood alcohol", "67-56-1". Not a natural-language question — use '
+                'ask_chemical_safety for those.',
+)]) -> str:
     """
     Search the MSDS Chain database for a specific chemical.
 
@@ -1797,7 +1854,7 @@ async def search_chemical_database(query: str) -> str:
                     )
                 return CallToolResult(
                     content=[TextContent(type="text", text="\n".join(lines))],
-                    structuredContent={
+                    structured_content={
                         "query": query,
                         "result_count": len(chemicals),
                         "results": struct_results,
@@ -1814,9 +1871,18 @@ async def search_chemical_database(query: str) -> str:
                         _json.dumps({"query": query}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Search MSDS Online (PubChem)", readOnlyHint=True, destructiveHint=False, openWorldHint=True), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Search MSDS Online (PubChem)", read_only_hint=True, destructive_hint=False, open_world_hint=True), structured_output=False)
 @_graceful_timeout
-async def search_msds_online(chemical_name: str = "", cas_number: str = "") -> "CallToolResult | str":
+async def search_msds_online(
+    chemical_name: Annotated[str, Field(
+        description='Chemical name to look up on PubChem, e.g. "acetonitrile". '
+                    'Supply this or cas_number (or both).',
+    )] = "",
+    cas_number: Annotated[str, Field(
+        description='CAS number, e.g. "75-05-8". Used in preference to chemical_name '
+                    'when both are given, because it identifies the substance exactly.',
+    )] = "",
+) -> "CallToolResult | str":
     """
     Look up GHS hazard data for a chemical NOT in the MSDS Chain database, via PubChem.
 
@@ -1856,7 +1922,7 @@ async def search_msds_online(chemical_name: str = "", cas_number: str = "") -> "
                      "Upload the actual SDS for an authoritative safety check.")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent={
+            structured_content={
                 "query": chemical_name or cas_number,
                 "cas_number": data.get("cas_number") or "",
                 "source": "pubchem",
@@ -1873,9 +1939,18 @@ async def search_msds_online(chemical_name: str = "", cas_number: str = "") -> "
                         error_msg, _json.dumps({"chemical_name": chemical_name, "cas_number": cas_number}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get SDS Section", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get SDS Section", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
-async def get_sds_section(chemical: str, section: int) -> str:
+async def get_sds_section(
+    chemical: Chemical,
+    section: Annotated[int, Field(
+        ge=1, le=16,
+        description="GHS-SDS section number, 1-16. Common ones: 2 hazards, 4 first aid, "
+                    "5 fire-fighting, 6 accidental release, 7 handling & storage, "
+                    "8 exposure controls & PPE, 9 physical properties, "
+                    "13 disposal, 14 transport.",
+    )],
+) -> str:
     """
     Retrieve a specific SDS (Safety Data Sheet) section for a chemical.
 
@@ -1973,7 +2048,7 @@ async def get_sds_section(chemical: str, section: int) -> str:
         lines.append(f"\n*Data source: {data.get('data_source', 'unknown')}*")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=_strip_usage(data),
+            structured_content=_strip_usage(data),
         )
     except Exception as e:
         success = False
@@ -1985,8 +2060,15 @@ async def get_sds_section(chemical: str, section: int) -> str:
                         _json.dumps({"chemical": chemical, "section": section}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Chemical Alternatives", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
-async def get_chemical_alternatives(chemical: str, use_case: str = "") -> str:
+@mcp.tool(annotations=ToolAnnotations(title="Get Chemical Alternatives", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+async def get_chemical_alternatives(
+    chemical: Chemical,
+    use_case: Annotated[str, Field(
+        description='Optional context for how the chemical is used, which changes what '
+                    'counts as a viable substitute, e.g. "degreasing solvent", '
+                    '"extraction solvent for organic synthesis", "cleaning agent for labware".',
+    )] = "",
+) -> str:
     """
     Suggest safer alternatives for a chemical, considering its intended use.
 
@@ -2032,8 +2114,12 @@ async def get_chemical_alternatives(chemical: str, use_case: str = "") -> str:
                         _json.dumps({"chemical": chemical, "use_case": use_case}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Validate Protocol Chemicals", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
-async def validate_protocol_chemicals(protocol_text: str) -> str:
+@mcp.tool(annotations=ToolAnnotations(title="Validate Protocol Chemicals", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+async def validate_protocol_chemicals(protocol_text: Annotated[str, Field(
+    description="Any text containing chemical names — a lab protocol, a reagent list, or "
+                "code such as an Opentrons Python protocol. Chemical names are extracted "
+                "from it automatically. Maximum ~4000 characters.",
+)]) -> str:
     """
     Extract and validate chemical names from a protocol or experiment description.
 
@@ -2084,8 +2170,20 @@ async def validate_protocol_chemicals(protocol_text: str) -> str:
                         _json.dumps({"protocol_text_length": len(protocol_text)}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Check Mixing Order", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
-async def check_mixing_order(chemical_a: str, chemical_b: str, context: str = "") -> str:
+@mcp.tool(annotations=ToolAnnotations(title="Check Mixing Order", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+async def check_mixing_order(
+    chemical_a: Annotated[str, Field(
+        description='First chemical name or CAS number. Order of chemical_a/chemical_b is '
+                    'irrelevant — the tool returns which one to add to which.',
+    )],
+    chemical_b: Annotated[str, Field(
+        description="Second chemical name or CAS number.",
+    )],
+    context: Annotated[str, Field(
+        description='Optional context about the procedure, e.g. "diluting for titration" '
+                    'or "quenching a reaction".',
+    )] = "",
+) -> str:
     """
     Determine the safe order for mixing/adding two chemicals.
 
@@ -2132,9 +2230,9 @@ async def check_mixing_order(chemical_a: str, chemical_b: str, context: str = ""
                         _json.dumps({"chemical_a": chemical_a, "chemical_b": chemical_b, "context": context}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Waste Disposal Guidance", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get Waste Disposal Guidance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
-async def get_waste_disposal(chemicals: list[str]) -> str:
+async def get_waste_disposal(chemicals: ChemicalList) -> str:
     """
     Get waste classification and disposal guidance for chemicals.
 
@@ -2177,7 +2275,7 @@ async def get_waste_disposal(chemicals: list[str]) -> str:
             lines.append("No waste-disposal data found for the given chemicals.")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=_strip_usage(data),
+            structured_content=_strip_usage(data),
         )
     except Exception as e:
         success = False
@@ -2190,14 +2288,19 @@ async def get_waste_disposal(chemicals: list[str]) -> str:
 
 
 @mcp.tool(
-    annotations=ToolAnnotations(title="Compare SDS Versions", readOnlyHint=True, destructiveHint=False, openWorldHint=False),
+    annotations=ToolAnnotations(title="Compare SDS Versions", read_only_hint=True, destructive_hint=False, open_world_hint=False),
     structured_output=False,
 )
 @_graceful_timeout
 async def compare_sds_versions(
-    chemical: str,
-    supplier: str = "",
-    region: str = "",
+    chemical: Chemical,
+    supplier: Annotated[str, Field(
+        description='Optional SDS supplier/manufacturer, to disambiguate when several '
+                    'suppliers\' sheets exist for the same chemical, e.g. "Sigma-Aldrich".',
+    )] = "",
+    region: Annotated[str, Field(
+        description='Optional region code to narrow the lookup, e.g. "US", "EU", "JP", "CN".',
+    )] = "",
 ) -> CallToolResult:
     """
     Compare a chemical's two most recent SDS versions and report whether its
@@ -2230,7 +2333,7 @@ async def compare_sds_versions(
                 text = f"Could not resolve **{chemical}** to a known chemical."
             return CallToolResult(
                 content=[TextContent(type="text", text=text)],
-                structuredContent=_strip_usage(data),
+                structured_content=_strip_usage(data),
             )
         lines = [
             f"**SDS Version Comparison — {chemical}** (CAS {data.get('cas', '?')})",
@@ -2247,7 +2350,7 @@ async def compare_sds_versions(
         )
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=_strip_usage(data),
+            structured_content=_strip_usage(data),
         )
     except Exception as e:
         success = False
@@ -2414,12 +2517,31 @@ def _upload_local_path_message(pdf_source: str) -> str:
     )
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Upload & Parse MSDS PDF", readOnlyHint=False, destructiveHint=False, openWorldHint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Upload & Parse MSDS PDF", read_only_hint=False, destructive_hint=False, open_world_hint=False), structured_output=False)
 async def upload_msds_pdf(
-    pdf_source: str,
-    session_id: str | None = None,
-    experiment_name: str = "MCP Upload",
-    filename: str | None = None,
+    pdf_source: Annotated[str, Field(
+        description="The PDF itself, in one of three forms, tried in this order: "
+                    "(1) a publicly reachable HTTPS URL, fetched server-side; "
+                    "(2) inline base64 of the raw PDF bytes — either a data URI "
+                    "(`data:application/pdf;base64,<...>`) or a bare base64 string, max "
+                    "10 MB decoded — use this whenever you already hold the file's bytes, "
+                    "which is the normal case for hosted clients like ChatGPT/claude.ai; "
+                    "(3) a local file path, which works ONLY for a self-hosted stdio "
+                    "server on the same machine as the file. Never pass a path from the "
+                    "user's machine or your own sandbox to the hosted server — it does "
+                    "not exist there.",
+    )],
+    session_id: Annotated[str | None, Field(
+        description="Existing audit session id to attach this upload to. Omit to create "
+                    "a new session automatically.",
+    )] = None,
+    experiment_name: Annotated[str, Field(
+        description="Label for the auto-created session. Ignored when session_id is given.",
+    )] = "MCP Upload",
+    filename: Annotated[str | None, Field(
+        description="Display filename, used when pdf_source is inline base64 (which "
+                    'carries no filename of its own). Defaults to "upload.pdf".',
+    )] = None,
 ) -> str:
     """
     Upload an MSDS/SDS PDF file to MSDS Chain and get AI-parsed safety data.
@@ -2639,7 +2761,7 @@ async def upload_msds_pdf(
         }
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structuredContent=structured,
+            structured_content=structured,
         )
     except Exception as e:
         success = False
@@ -2660,9 +2782,14 @@ async def upload_msds_pdf(
                         _json.dumps({"pdf_source": logged_source, "session_id": session_id}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Batch Safety Check", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Batch Safety Check", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
-async def batch_safety_check(chemicals: list[str]) -> str:
+async def batch_safety_check(chemicals: Annotated[list[str], Field(
+    description='List of chemical names or CAS numbers to check together, e.g. '
+                '["acetone", "sulfuric acid", "sodium hydroxide", "methanol"]. '
+                'Intended for 2-20 items; this runs compatibility, hazards and PPE in '
+                'one call, so cost and latency grow with the list length.',
+)]) -> str:
     """
     Run a comprehensive safety check on a list of chemicals in one call.
 
@@ -2795,7 +2922,7 @@ async def batch_safety_check(chemicals: list[str]) -> str:
         }
         return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(sections))],
-            structuredContent=structured,
+            structured_content=structured,
         ), data)
     except Exception as e:
         success = False
@@ -2807,8 +2934,8 @@ async def batch_safety_check(chemicals: list[str]) -> str:
                         _json.dumps({"chemicals": chemicals}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Lists", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
-async def check_regulatory_lists(chemical: str) -> str:
+@mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Lists", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+async def check_regulatory_lists(chemical: Chemical) -> str:
     """
     Check which international regulatory lists a chemical appears on.
 
@@ -2858,9 +2985,9 @@ async def check_regulatory_lists(chemical: str) -> str:
                         _json.dumps({"chemical": chemical}))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get SDS Document", readOnlyHint=True, destructiveHint=False, openWorldHint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get SDS Document", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
-async def get_sds_document(chemical: str) -> CallToolResult:
+async def get_sds_document(chemical: Chemical) -> CallToolResult:
     """
     Return a signed download URL for the original SDS/MSDS PDF of a chemical.
 
@@ -2925,7 +3052,7 @@ async def get_sds_document(chemical: str) -> CallToolResult:
                 ))
             return CallToolResult(
                 content=[TextContent(type="text", text="\n".join(lines))],
-                structuredContent={
+                structured_content={
                     "available": True,
                     "record_kind": kind,
                     "chemical_name": chem_name,
@@ -2983,7 +3110,7 @@ async def get_sds_document(chemical: str) -> CallToolResult:
                 structured["component_of_products"] = component_of
             return CallToolResult(
                 content=[TextContent(type="text", text=f"**{display}**: {message}{hint}")],
-                structuredContent=structured,
+                structured_content=structured,
             )
     except Exception as e:
         success = False

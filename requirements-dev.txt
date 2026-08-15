@@ -1,2 +1,7 @@
 -r requirements.txt
 pytest>=8.0.0
+# `scripts/smoke_mcp.py`（deploy 的硬 gate）和 `scripts/live_tool_coverage.py` 直接
+# `import httpx2` —— 它今天只是 `mcp 2.x` 的传递依赖。不声明的话，某个 mcp 补丁版本换掉
+# 这个依赖时，部署 gate 会在 import 处变红，而失败原因跟这次部署毫无关系。
+# 只放 dev：运行时镜像（server.py）用的是 `httpx`，不需要它。
+httpx2>=2.5.0

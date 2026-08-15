@@ -111,7 +111,7 @@ def test_structured_content_still_carries_the_raw_contract():
         res = asyncio.run(server.get_waste_disposal(["hydrochloric acid"]))
     finally:
         server._direct_waste = orig
-    item = res.structuredContent["results"][0]
+    item = res.structured_content["results"][0]
     assert item["insufficient_hazard_data"] is True
     assert item["waste_classification"] == "general_chemical_waste", (
         "structuredContent 是原始契约，不该被展示层的取舍改写"
