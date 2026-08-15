@@ -74,8 +74,8 @@ def test_smoke_gate_uses_exact_registry_count_not_a_loose_floor():
     这条守住两件事：①判据来自 live registry 的精确值 ②那个下限没被谁改回来。
     """
     import asyncio
-    import importlib.util
     import os
+    import sys
 
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     path = os.path.join(root, "scripts", "smoke_mcp.py")
@@ -90,10 +90,21 @@ def test_smoke_gate_uses_exact_registry_count_not_a_loose_floor():
     assert ">=" not in src.split("assert len(names)")[1].split("\n")[0], (
         "工具数断言又变成了下限比较（>=），必须是 ==")
 
-    spec = importlib.util.spec_from_file_location("smoke_mcp", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    assert mod._expected_tool_count() == len(asyncio.run(server.mcp.list_tools()))
+    # 🔴 必须按**CI 实际执行脚本的方式**验：`python3 scripts/smoke_mcp.py` 时
+    # sys.path[0] 是 `scripts/`，仓根不在 path 上。用 importlib 从测试进程里加载
+    # 会带上仓根的 path，于是 `import server` 能过、`asyncio.run` 也能用——
+    # **两个真 bug 都被这种加载方式掩盖过**（2026-08-15 把生产 gate 弄红）。
+    import subprocess
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import asyncio, smoke_mcp; print(asyncio.run(smoke_mcp._expected_tool_count()))"],
+        cwd=os.path.join(root, "scripts"), capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": ""},
+    )
+    assert out.returncode == 0, (
+        f"按 CI 的方式（scripts/ 为 cwd）加载脚本就炸——这正是 gate 会红的原因：\n{out.stderr[-600:]}"
+    )
+    assert int(out.stdout.strip()) == len(asyncio.run(server.mcp.list_tools()))
 
 
 def test_non_error_cases_carry_a_real_assertion():
