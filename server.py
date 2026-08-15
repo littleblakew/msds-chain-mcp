@@ -53,7 +53,7 @@ API_URL = os.environ.get(
     "MSDS_API_URL",
     "https://msds-chain-backend-prod.orangepond-4b408d49.southeastasia.azurecontainerapps.io",
 ).rstrip("/")
-LANG = os.environ.get("MSDS_LANG", "en")  # en | zh | ja | de | id
+LANG = os.environ.get("MSDS_LANG", "en")  # 实测后端只认 en / zh，见下 _BACKEND_LANGS
 TIMEOUT = 15.0        # single-chemical / pure-lookup v2 endpoints — fast, no LLM
 # ---------------------------------------------------------------------------
 # TIMEOUT_MULTI — the budget for every v2 endpoint that takes `chemicals: list`.
@@ -199,6 +199,41 @@ mcp = MCPServer(
 # Constrained values are expressed in the TYPE (Literal / ge / le) so the enum and
 # the bounds land in the schema, rather than only being described in prose that a
 # client is free to ignore.
+# ---------------------------------------------------------------------------
+# CI-356：让调用方的 AI 按对话语言点答复语言
+# ---------------------------------------------------------------------------
+# `LANG` 是**服务端环境变量**，托管网关上恒为 `en`，而且不是工具参数 ⇒ 中文用户在
+# ChatGPT/Claude 里用中文问，拿到的安全答复是英文的。不是检测错了，是根本没有检测，
+# AI 也没有地方可以表达。它正在用那个语言对话，它最清楚要什么语言。
+#
+# 🔴 **后端今天只真的支持 en 和 zh**（2026-08-15 逐语言实测，别信下面 `LANG` 那行注释
+# 曾经写的 `en|zh|ja|de|id`——那是愿望不是事实）。v2 端点的行为是**二元**的：
+# `lang == "en"` → 英文，**其他任何值**（`ja`/`de`/`id`/`fr`/`zh-CN`/空串）→ **中文**；
+# quick-chat 同样（`lang=ja` 实测返回 343 个汉字、零假名）。
+#
+# ⇒ 所以**归一化必须放在我们这一层**：不归一的话，一个日语用户会拿到**中文**——
+# 比现在的英文更糟（看不懂 + 误以为系统支持日语）。归一之后，参数描述里那句
+# 「其他值回退英文」才是真的，而不是一句照抄自 CI-258 却没人验过的承诺。
+#
+# 🔴 **要加语言，判据是「实测那个语言真的出来了」**，不是「后端文档说支持」，
+# 也不是「往这个元组里加一行」。
+_BACKEND_LANGS = ("en", "zh")
+
+
+def _normalize_lang(lang: str | None) -> str:
+    """把调用方给的语言码收敛成后端**真的**会照做的那几个；其余一律英文。"""
+    if lang and lang.strip().lower() in _BACKEND_LANGS:
+        return lang.strip().lower()
+    return "en"
+
+
+Lang = Annotated[str | None, Field(
+    description='Answer language — pass the language THIS conversation is in, not the '
+                'user\'s country. Currently supported: "en", "zh". Anything else, or '
+                'omitted, is answered in English.',
+)]
+
+
 ChemicalList = Annotated[list[str], Field(
     description='List of chemical names or CAS numbers, e.g. ["acetone", "sulfuric acid"] '
                 'or ["67-64-1", "67-56-1"]. Names and CAS numbers can be mixed.',
@@ -393,7 +428,9 @@ def _graceful_timeout(fn):
         try:
             return await fn(*args, **kwargs)
         except httpx.TimeoutException:
-            return _DIRECT_TIMEOUT_MSG.get(LANG, _DIRECT_TIMEOUT_MSG["en"])
+            # 超时话术也跟调用方的语言走（`lang` 是关键字参数时才取得到；取不到就用服务端默认）
+            lg = kwargs.get("lang") or LANG
+            return _DIRECT_TIMEOUT_MSG.get(lg, _DIRECT_TIMEOUT_MSG["en"])
     return wrapper
 
 
@@ -418,7 +455,7 @@ _TIMEOUT_ANSWER = {
 }
 
 
-async def _quick_chat(message: str) -> dict:
+async def _quick_chat(message: str, lang: str | None = None) -> dict:
     """POST /quick-chat and return the parsed response.
 
     On client read-timeout (a slow-but-valid backend turn that overran TIMEOUT_LLM)
@@ -430,12 +467,12 @@ async def _quick_chat(message: str) -> dict:
         async with httpx.AsyncClient(timeout=TIMEOUT_LLM) as client:
             res = await client.post(
                 f"{API_URL}/quick-chat",
-                json={"message": message, "lang": LANG},
+                json={"message": message, "lang": _normalize_lang(lang or LANG)},
                 headers=_headers(),
             )
             return _billed_json(res)
     except httpx.TimeoutException:
-        return {"answer": _TIMEOUT_ANSWER.get(LANG, _TIMEOUT_ANSWER["en"]),
+        return {"answer": _TIMEOUT_ANSWER.get(lang or LANG, _TIMEOUT_ANSWER["en"]),
                 "tool_results": [],
                 "_timed_out": True}
 
@@ -653,34 +690,34 @@ def _expose(data: dict, *, rename: dict[str, str] | None = None,
     return out
 
 
-async def _direct_compat(chemicals: list[str]) -> dict:
+async def _direct_compat(chemicals: list[str], lang: str | None = None) -> dict:
     """POST /api/v2/compatibility/check — direct service layer, bounded LLM fallback."""
     async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/compatibility/check",
-            json={"chemicals": chemicals, "lang": LANG},
+            json={"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
             headers=_headers(),
         )
         return _billed_json(res)
 
 
-async def _direct_risk(chemicals: list[str]) -> dict:
+async def _direct_risk(chemicals: list[str], lang: str | None = None) -> dict:
     """POST /api/v2/risk-warnings — direct service layer, no LLM."""
     async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/risk-warnings",
-            json={"chemicals": chemicals, "lang": LANG},
+            json={"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
             headers=_headers(),
         )
         return _billed_json(res)
 
 
-async def _direct_batch(chemicals: list[str]) -> dict:
+async def _direct_batch(chemicals: list[str], lang: str | None = None) -> dict:
     """POST /api/v2/batch-safety — combined compat + risk, bounded LLM fallback."""
     async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/batch-safety",
-            json={"chemicals": chemicals, "lang": LANG},
+            json={"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
             headers=_headers(),
         )
         return _billed_json(res)
@@ -697,23 +734,23 @@ async def _direct_ppe(chemicals: list[str]) -> dict:
         return _billed_json(res)
 
 
-async def _direct_storage(chemicals: list[str]) -> dict:
+async def _direct_storage(chemicals: list[str], lang: str | None = None) -> dict:
     """POST /api/v2/storage-guidance — direct, no LLM."""
     async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/storage-guidance",
-            json={"chemicals": chemicals, "lang": LANG},
+            json={"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
             headers=_headers(),
         )
         return _billed_json(res)
 
 
-async def _direct_emergency(chemical: str, scenario: str) -> dict:
+async def _direct_emergency(chemical: str, scenario: str, lang: str | None = None) -> dict:
     """POST /api/v2/emergency-response — direct, no LLM."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         res = await client.post(
             f"{API_URL}/api/v2/emergency-response",
-            json={"chemical": chemical, "scenario": scenario, "lang": LANG},
+            json={"chemical": chemical, "scenario": scenario, "lang": _normalize_lang(lang or LANG)},
             headers=_headers(),
         )
         return _billed_json(res)
@@ -844,7 +881,7 @@ def _insufficient_lines(item: dict, what: str) -> list[str]:
     structured_output=False,
 )
 @_graceful_timeout
-async def check_chemical_compatibility(chemicals: ChemicalList) -> CallToolResult:
+async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = None) -> CallToolResult:
     """
     Check pairwise compatibility between a list of chemicals.
 
@@ -865,7 +902,7 @@ async def check_chemical_compatibility(chemicals: ChemicalList) -> CallToolResul
         if len(chemicals) < 2:
             return _text_result("Please provide at least 2 chemicals to check compatibility.")
 
-        data = await _direct_compat(chemicals)
+        data = await _direct_compat(chemicals, lang=lang)
         lines = [f"**Compatibility Check** ({len(chemicals)} chemicals)\n"]
 
         if data.get("unresolved"):
@@ -940,7 +977,7 @@ async def check_chemical_compatibility(chemicals: ChemicalList) -> CallToolResul
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Chemical Risk Warnings", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
-async def get_chemical_risk_warnings(chemicals: ChemicalList) -> str:
+async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None) -> str:
     """
     Get hazard and risk warnings for one or more chemicals.
 
@@ -960,7 +997,7 @@ async def get_chemical_risk_warnings(chemicals: ChemicalList) -> str:
     error_msg = None
     success = True
     try:
-        data = await _direct_risk(chemicals)
+        data = await _direct_risk(chemicals, lang=lang)
         lines = [f"**Risk Warnings** ({len(chemicals)} chemicals)\n"]
 
         if data.get("unresolved"):
@@ -1107,11 +1144,14 @@ async def check_regulatory_compliance(
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Ask Chemical Safety Question", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
-async def ask_chemical_safety(question: Annotated[str, Field(
+async def ask_chemical_safety(
+    question: Annotated[str, Field(
     description='A chemical safety question in natural language, e.g. "What are the main '
                 'hazards and PPE for TMAH?", "How should I store acetone and methanol in '
                 'the same cabinet?", "A worker got hydrofluoric acid on their skin — first aid?"',
-)]) -> str:
+    )],
+    lang: Lang = None,
+) -> str:
     """
     PREFERRED first tool for any general chemical-safety question — hazards, PPE,
     first aid, spill/exposure response, storage, disposal, "is X safe", "what do I
@@ -1139,7 +1179,7 @@ async def ask_chemical_safety(question: Annotated[str, Field(
     error_msg = None
     success = True
     try:
-        data = await _quick_chat(question)
+        data = await _quick_chat(question, lang=lang)
         if data.get("_timed_out"):
             success = False
             error_msg = "timeout"
@@ -1249,7 +1289,7 @@ async def get_ppe_recommendation(chemicals: ChemicalList) -> str:
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Storage Guidance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
-async def get_storage_guidance(chemicals: ChemicalList) -> str:
+async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None) -> str:
     """
     Get storage and isolation guidance for chemicals.
 
@@ -1266,7 +1306,7 @@ async def get_storage_guidance(chemicals: ChemicalList) -> str:
     error_msg = None
     success = True
     try:
-        data = await _direct_storage(chemicals)
+        data = await _direct_storage(chemicals, lang=lang)
         lines = ["**Storage Guidance**\n"]
         for item in data.get("results", []):
             lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
@@ -1319,6 +1359,7 @@ async def get_emergency_response(
                     'values — the backend rejects anything else, so map the incident to '
                     'the closest one (e.g. skin contact / splash / inhalation → "exposure").',
     )] = "spill",
+    lang: Lang = None,
 ) -> str:
     """
     Get emergency response guidance for a chemical incident.
@@ -1335,7 +1376,7 @@ async def get_emergency_response(
     error_msg = None
     success = True
     try:
-        data = await _direct_emergency(chemical, scenario)
+        data = await _direct_emergency(chemical, scenario, lang=lang)
         if data.get("error"):
             return _text_result(f"Emergency response error: {data['error']}")
         chem_display = data.get("chemical", chemical)
@@ -2123,6 +2164,7 @@ async def get_chemical_alternatives(
                     'counts as a viable substitute, e.g. "degreasing solvent", '
                     '"extraction solvent for organic synthesis", "cleaning agent for labware".',
     )] = "",
+    lang: Lang = None,
 ) -> str:
     """
     Suggest safer alternatives for a chemical, considering its intended use.
@@ -2154,7 +2196,7 @@ async def get_chemical_alternatives(
             "restricted under any regulation (REACH SVHC, TSCA, etc.). "
             "Focus on drop-in replacements that serve the same function."
         )
-        data = await _quick_chat(message)
+        data = await _quick_chat(message, lang=lang)
         if data.get("_timed_out"):
             success = False
             error_msg = "timeout"
@@ -2170,11 +2212,14 @@ async def get_chemical_alternatives(
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Validate Protocol Chemicals", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
-async def validate_protocol_chemicals(protocol_text: Annotated[str, Field(
-    description="Any text containing chemical names — a lab protocol, a reagent list, or "
-                "code such as an Opentrons Python protocol. Chemical names are extracted "
-                "from it automatically. Maximum ~4000 characters.",
-)]) -> str:
+async def validate_protocol_chemicals(
+    protocol_text: Annotated[str, Field(
+        description="Any text containing chemical names — a lab protocol, a reagent list, or "
+                    "code such as an Opentrons Python protocol. Chemical names are extracted "
+                    "from it automatically. Maximum ~4000 characters.",
+    )],
+    lang: Lang = None,
+) -> str:
     """
     Extract and validate chemical names from a protocol or experiment description.
 
@@ -2210,7 +2255,7 @@ async def validate_protocol_chemicals(protocol_text: Annotated[str, Field(
             "If a name is ambiguous, note the ambiguity.\n\n"
             f"Text to analyze:\n```\n{protocol_text}\n```"
         )
-        data = await _quick_chat(message)
+        data = await _quick_chat(message, lang=lang)
         if data.get("_timed_out"):
             success = False
             error_msg = "timeout"
@@ -2238,6 +2283,7 @@ async def check_mixing_order(
         description='Optional context about the procedure, e.g. "diluting for titration" '
                     'or "quenching a reaction".',
     )] = "",
+    lang: Lang = None,
 ) -> str:
     """
     Determine the safe order for mixing/adding two chemicals.
@@ -2270,7 +2316,7 @@ async def check_mixing_order(
             "(3) required precautions (cooling, addition rate, stirring, inert atmosphere). "
             "If order doesn't matter for this pair, say so explicitly."
         )
-        data = await _quick_chat(message)
+        data = await _quick_chat(message, lang=lang)
         if data.get("_timed_out"):
             success = False
             error_msg = "timeout"
@@ -2839,12 +2885,15 @@ async def upload_msds_pdf(
 
 @mcp.tool(annotations=ToolAnnotations(title="Batch Safety Check", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
-async def batch_safety_check(chemicals: Annotated[list[str], Field(
+async def batch_safety_check(
+    chemicals: Annotated[list[str], Field(
     description='List of chemical names or CAS numbers to check together, e.g. '
                 '["acetone", "sulfuric acid", "sodium hydroxide", "methanol"]. '
                 'Intended for 2-20 items; this runs compatibility, hazards and PPE in '
                 'one call, so cost and latency grow with the list length.',
-)]) -> str:
+    )],
+    lang: Lang = None,
+) -> str:
     """
     Run a comprehensive safety check on a list of chemicals in one call.
 
@@ -2873,7 +2922,7 @@ async def batch_safety_check(chemicals: Annotated[list[str], Field(
         if len(chemicals) > 20:
             return "Maximum 20 chemicals per batch check. Please split into smaller groups."
 
-        data = await _direct_batch(chemicals)
+        data = await _direct_batch(chemicals, lang=lang)
         sections = []
 
         sections.append("# Batch Safety Report")
@@ -2978,7 +3027,7 @@ async def batch_safety_check(chemicals: Annotated[list[str], Field(
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Lists", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
-async def check_regulatory_lists(chemical: Chemical) -> str:
+async def check_regulatory_lists(chemical: Chemical, lang: Lang = None) -> str:
     """
     Check which international regulatory lists a chemical appears on.
 
@@ -3013,7 +3062,7 @@ async def check_regulatory_lists(chemical: Chemical) -> str:
             f"Check which regulatory lists {chemical} appears on. "
             "Use the check_regulatory_lists tool and report all matching lists."
         )
-        data = await _quick_chat(message)
+        data = await _quick_chat(message, lang=lang)
         if data.get("_timed_out"):
             success = False
             error_msg = "timeout"
