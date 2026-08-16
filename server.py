@@ -774,6 +774,42 @@ def _parse_usage(res: "httpx.Response") -> dict | None:
         return None
 
 
+def _detail_text(res: "httpx.Response", limit: int = 400) -> str:
+    """把后端 4xx 的 `detail` 压成一句可行动的话。
+
+    FastAPI/pydantic 的 422 是 `{"detail": [{"loc": [...], "msg": "...", ...}, ...]}`，
+    HTTPException 则是 `{"detail": "一句话"}`——两种都要认。
+
+    🔴 解析失败时**不把原始响应打出来**（memory: `ps-leaks-credentials-from-command-lines`
+    的同族——响应体可能带凭证或客户文档字节），只说「后端没给出原因」并附状态码。
+    🔴 截断到 400（不是复用 `_cap` 的 20000——那是**日志**的预算）：这句话会进工具返回值，
+    调用方读的是它，塞进去一整个响应体只会把真正的原因埋掉。
+    """
+    def _short(text: str) -> str:
+        text = " ".join(text.split())
+        return text if len(text) <= limit else text[:limit] + "…"
+
+    try:
+        detail = res.json().get("detail")
+    except Exception:  # noqa: BLE001 — 见上：不打印原始响应
+        return f"backend gave no machine-readable reason (HTTP {res.status_code})"
+    if isinstance(detail, str) and detail.strip():
+        return _short(detail.strip())
+    if isinstance(detail, list):
+        parts = []
+        for item in detail:
+            if not isinstance(item, dict):
+                continue
+            # loc 形如 ["body", "chemicals"] ⇒ 只留字段名那截，"body" 对调用方没信息量
+            loc = ".".join(str(x) for x in (item.get("loc") or []) if x != "body")
+            msg = str(item.get("msg") or "").strip()
+            parts.append(f"{loc}: {msg}" if loc and msg else (msg or loc))
+        joined = "; ".join(p for p in parts if p)
+        if joined:
+            return _short(joined)
+    return f"backend gave no machine-readable reason (HTTP {res.status_code})"
+
+
 def _billed_json(res: "httpx.Response") -> dict:
     """raise_for_status with a caller-friendly 402 (balance exhausted) message, then
     return the JSON body with any credit usage attached under `_usage`."""
@@ -790,6 +826,13 @@ def _billed_json(res: "httpx.Response") -> dict:
             except (TypeError, ValueError):
                 pass
         raise RuntimeError(msg + " Top up at msdschain.lagentbot.com to continue.")
+    if res.status_code == 422:
+        # CI-410：pydantic 把「为什么不合法」放在响应体的 `detail` 里，而这条错误路径
+        # 从不读它 ⇒ 调用方只拿到 `Client error '422 Unprocessable Entity' for url …`。
+        # 那不是哑失败（调用确实可见地失败了），但**不可行动**：模型看不出是"化学品超过
+        # 24 个"还是"参数名写错了"，于是要么原样重试、要么放弃。同 CI-523 一族——
+        # 信息在，只是没到达读它的人。
+        raise RuntimeError(f"Request rejected (422): {_detail_text(res)}")
     res.raise_for_status()
     data = res.json()
     usage = _parse_usage(res)
