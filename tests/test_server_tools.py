@@ -286,6 +286,7 @@ _DIRECT_TIMEOUT_EXPECTATIONS = {
     # single-chemical / pure lookup: stay on the fast budget
     "_direct_emergency": (("acetone", "spill"), False),
     "_direct_compliance": (("acetone", ["EU"]), False),
+    "_direct_regulatory_lists": (("acetone",), False),
     "_direct_online_search": (("acetone",), False),
     "_direct_sds_section": (("acetone", 2), False),
     "_direct_compare_sds": (("acetone",), False),
@@ -543,16 +544,27 @@ def test_check_mixing_order_timeout_logs_failure(monkeypatch):
 
 
 def test_check_regulatory_lists_timeout_logs_failure(monkeypatch):
-    """check_regulatory_lists: timed-out _quick_chat → _log_call(success=False)."""
-    monkeypatch.setattr(server, "_quick_chat", _make_fake_quick_chat())
+    """check_regulatory_lists: a timed-out backend call → _log_call(success=False).
+
+    CI-523 changed the mechanism, not the requirement: this tool no longer goes
+    through `_quick_chat` (which returned a degraded dict), it calls
+    `/api/v2/regulatory-lists` directly, so a timeout now arrives as a raised
+    `httpx.TimeoutException` that `@_graceful_timeout` turns into a readable
+    message. The failure must still reach the call log — `@_reported` sits INSIDE
+    `@_graceful_timeout` precisely so it sees the raw exception first.
+    """
+    async def _timing_out(*a, **kw):
+        raise httpx.ReadTimeout("")
+
+    monkeypatch.setattr(server, "_direct_regulatory_lists", _timing_out)
     log_fn, captured = _capture_log_call()
     monkeypatch.setattr(server, "_log_call", log_fn)
 
     res = asyncio.run(server.check_regulatory_lists("formaldehyde"))
 
-    assert isinstance(res, CallToolResult)
+    assert isinstance(res, str)  # the graceful retry message, not an opaque error
     assert captured[0]["success"] is False
-    assert captured[0]["error_message"] == "timeout"
+    assert captured[0]["error_message"], "超时被记成了无原因的失败（CI-250 的形状）"
 
 
 def test_quick_chat_timeout_user_answer_unchanged(monkeypatch):
