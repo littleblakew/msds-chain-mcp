@@ -5,6 +5,25 @@ import sys
 # from the repo root regardless of where pytest is invoked.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# ---------------------------------------------------------------------------
+# 🔴 测试跑起来**默认打的是 Prod**，必须在 import server 之前掐掉
+# ---------------------------------------------------------------------------
+# `server.API_URL` 的默认值就是 Prod 后端（`MSDS_API_URL` 没设时），而不是每个测试都
+# stub 了 httpx / `_log_call`：`test_upload_missing_local_file_message_is_actionable`
+# 这类「只断言返回文案」的测试会让 `_log_call` 真的发出去，fire-and-forget 又把失败
+# 吞成一条日志 ⇒ **没有任何人会注意到**。
+#
+# 2026-08-16 在 Prod 上量到的后果：`platform.mcp_call_logs` + `contribution_funnel_events`
+# 里 2026-07-29 以来 82 条 `upload_msds_pdf` 失败记录，**79 条是我们自己的测试**
+# （CI 每次 Deploy 约 2 条，本地跑一次也各来一条；`input_params` 里留着
+# `/tmp/pytest-of-runner/...` 这种一眼假的路径）。真实外部用户只有 1 条。
+# 而这两张表正是 [[CI-174]]/[[CI-136]] 判断「用户还卡不卡得住」的依据 ——
+# 不掐掉它，读这个漏斗的人会把自己的测试当成用户需求。
+#
+# 指向一个必然拒连的地址（丢弃端口），而不是 stub：**任何**没 stub 干净的真实请求
+# 都会立刻失败并留在测试输出里，而不是安静地写进生产。
+os.environ.setdefault("MSDS_API_URL", "http://127.0.0.1:9")
+
 
 # ---------------------------------------------------------------------------
 # 🔴 `live_client` 必须是 **session 级**，且只能有这一份

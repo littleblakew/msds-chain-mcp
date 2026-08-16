@@ -1376,9 +1376,15 @@ def test_upload_missing_local_file_logs_failure(monkeypatch, tmp_path):
     assert captured[0]["error_message"]
 
 
-def test_upload_missing_local_file_message_is_actionable(tmp_path):
+def test_upload_missing_local_file_message_is_actionable(monkeypatch, tmp_path):
     from request_identity import set_caller_credential
     set_caller_credential("sk-msds-test")
+    # 🔴 这个测试只断言返回文案，但工具尾部照样上报调用日志——不 stub 就会真的
+    # POST 出去（`_log_call` 是 fire-and-forget，失败被吞成日志，没人看得见）。
+    # 2026-08-16 量到：Prod 的 `mcp_call_logs` 里 79 条假的 upload 失败就是这么来的，
+    # 而那张表是判断「用户还卡不卡得住」的依据。conftest 已把 API_URL 指向丢弃端口，
+    # 这里再 stub 一道：**别让「不写生产」只依赖一个环境变量**。
+    monkeypatch.setattr(server, "_log_call", _capture_log_call()[0])
 
     res = asyncio.run(server.upload_msds_pdf(str(tmp_path / "nope.pdf")))
     low = res.lower()
