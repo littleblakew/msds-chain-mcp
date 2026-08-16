@@ -268,6 +268,54 @@ def _text_result(text: str) -> CallToolResult:
     return CallToolResult(content=[TextContent(type="text", text=text)])
 
 
+def _chemicals_from_response(data: dict | None) -> list[str] | None:
+    """CI-529：从**后端已经解析好的结构化字段**里取化学品名，回填调用日志。
+
+    🔴 只读结构化字段，**绝不从 `answer` 正文里抽**。从自由文本反解析化学品名是
+    [[CI-527]] 的地盘，而且是已经判定错误的路：正文里出现的名字既可能是用户问的、
+    也可能是模型顺带提到的另一种物质，抽出来会让「按化学品聚合」得出比现在**更假**
+    的结论——现在是缺，那样是错，而错的看不出来。
+
+    取三处，全是后端算出来的：
+      - `documents[]` 的 `chemical_name` / `chemical`（CI-89 的 SDS 描述符）
+      - `tool_results[].result` 里的 `chemical` / `chemicals`（后端工具自己解析的入参）
+      - `tool_results[].result.pairs[]` 的 `chemical_a` / `chemical_b`（相容性对）
+
+    取不到就返回 None（不是空列表）：**「没记」和「记了但是空的」在下游是两件事**，
+    空列表会让「这次调用没有化学品」看起来像个结论。
+    """
+    if not isinstance(data, dict):
+        return None
+    names: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value) -> None:
+        if isinstance(value, str) and value.strip():
+            key = value.strip().lower()
+            if key not in seen:
+                seen.add(key)
+                names.append(value.strip())
+        elif isinstance(value, list):
+            for item in value:
+                _add(item)
+
+    for doc in data.get("documents") or []:
+        if isinstance(doc, dict):
+            _add(doc.get("chemical_name") or doc.get("chemical"))
+    for entry in data.get("tool_results") or []:
+        result = entry.get("result") if isinstance(entry, dict) else None
+        if not isinstance(result, dict):
+            continue
+        _add(result.get("chemical"))
+        _add(result.get("chemicals"))
+        for pair in result.get("pairs") or []:
+            if isinstance(pair, dict):
+                _add(pair.get("chemical_a") or pair.get("chem1"))
+                _add(pair.get("chemical_b") or pair.get("chem2"))
+    # 上限跟别处一致（`ChemicalsRequest.max_length`），这一列只是聚合维度不是内容
+    return names[:24] or None
+
+
 def _quick_result(data: dict) -> CallToolResult:
     """Build a CallToolResult for quick_chat-backed tools.
 
@@ -1399,6 +1447,7 @@ async def ask_chemical_safety(
     """
     error_msg = None
     success = True
+    data: dict = {}
     try:
         data = await _quick_chat(question, lang=lang)
         if data.get("_timed_out"):
@@ -1406,7 +1455,7 @@ async def ask_chemical_safety(
             error_msg = "timeout"
         return _quick_result(data)
     finally:
-        _log_intent("ask_chemical_safety", None,
+        _log_intent("ask_chemical_safety", _chemicals_from_response(data),
                         _json.dumps({"question": question}),
                     success=success, error_message=error_msg)
 
@@ -2473,6 +2522,7 @@ async def validate_protocol_chemicals(
     """
     error_msg = None
     success = True
+    data: dict = {}
     try:
         if len(protocol_text) > 4000:
             protocol_text = protocol_text[:4000] + "\n[...truncated]"
@@ -2493,7 +2543,7 @@ async def validate_protocol_chemicals(
             error_msg = "timeout"
         return _quick_result(data)
     finally:
-        _log_intent("validate_protocol_chemicals", None,
+        _log_intent("validate_protocol_chemicals", _chemicals_from_response(data),
                         _json.dumps({"protocol_text_length": len(protocol_text)}),
                     success=success, error_message=error_msg)
 
@@ -2920,6 +2970,7 @@ async def upload_msds_pdf(
     """
     error_msg = None
     success = True
+    parsed_chemicals: list[str] = []
     try:
         # Every early return below is a FAILED upload: nothing is parsed and nothing
         # is stored. They must be logged success=False — otherwise they inflate the
@@ -3010,6 +3061,10 @@ async def upload_msds_pdf(
             upload_data = res.json()
 
         results = upload_data.get("results", [])
+        # CI-529：后端解析出来的化学品名回填进调用日志。🔴 取的是解析结果 `chemical_name`，
+        # 不是文件名、也不是正文——那是 CI-527 的地盘且是错的路。
+        parsed_chemicals = [r["chemical_name"] for r in results
+                            if isinstance(r, dict) and (r.get("chemical_name") or "").strip()][:24]
         summary = upload_data.get("summary", {})
 
         if not results:
@@ -3096,7 +3151,7 @@ async def upload_msds_pdf(
             logged_source = f"<inline base64 or long source, {len(pdf_source)} chars>"
         else:
             logged_source = pdf_source
-        _log_intent("upload_msds_pdf", None,
+        _log_intent("upload_msds_pdf", parsed_chemicals or None,
                     _json.dumps({"pdf_source": logged_source, "session_id": session_id}),
                     success=success, error_message=error_msg)
 
