@@ -1390,9 +1390,16 @@ def test_upload_missing_local_file_message_is_actionable(monkeypatch, tmp_path):
     low = res.lower()
     # names the constraint (server-side filesystem, not the caller's)
     assert "server" in low and ("your machine" in low or "your computer" in low)
-    # offers both routes a remote caller can actually take
+    # offers the routes a remote caller can actually take
     assert "https" in low and "msdschain.lagentbot.com" in low
     assert "url" in low
+    # 🔴 CI-174：**必须先给 base64 这条路**。它是 CI-169 专为这个场景做的能力，也是唯一
+    # 不用离开对话、不用求用户配合的路；而在 2026-08-16 之前这条消息只说「去找个 URL」和
+    # 「去网页传」——把已经做好的能力藏在了工具描述里，而模型在失败那一刻读的是这段文字。
+    # Prod 实测：唯一那个外部用户三次尝试**全部**是本地路径，三次都撞这条消息。
+    assert "base64" in low, f"失败消息没给出 base64 这条路：{res!r}"
+    assert low.index("base64") < low.index("msdschain.lagentbot.com"), \
+        "base64 排在了「去网页传」后面——最可执行的那条要放最前"
     # says what they get out of it
     assert "credit" in low
     # and is not the old bare error
