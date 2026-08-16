@@ -271,48 +271,84 @@ def _text_result(text: str) -> CallToolResult:
 def _chemicals_from_response(data: dict | None) -> list[str] | None:
     """CI-529：从**后端已经解析好的结构化字段**里取化学品名，回填调用日志。
 
-    🔴 只读结构化字段，**绝不从 `answer` 正文里抽**。从自由文本反解析化学品名是
-    [[CI-527]] 的地盘，而且是已经判定错误的路：正文里出现的名字既可能是用户问的、
-    也可能是模型顺带提到的另一种物质，抽出来会让「按化学品聚合」得出比现在**更假**
-    的结论——现在是缺，那样是错，而错的看不出来。
+    🔴 只读结构化字段，**绝不从 `answer` 正文里抽**。从自由文本反解析是 [[CI-527]] 的地盘
+    且是已判定错误的路：正文里的名字可能是模型顺带提到的另一种物质，抽出来会让「按化学品
+    聚合」从**缺**变成**错**，而错的看不出来。
 
-    取三处，全是后端算出来的：
-      - `documents[]` 的 `chemical_name` / `chemical`（CI-89 的 SDS 描述符）
-      - `tool_results[].result` 里的 `chemical` / `chemicals`（后端工具自己解析的入参）
-      - `tool_results[].result.pairs[]` 的 `chemical_a` / `chemical_b`（相容性对）
+    🔴 **键名照抄后端 `routers/quick_chat.py` 里那段同款提取**（它为 `build_sds_documents`
+    做的是同一件事），不要自己发明：初版按想当然写了 `result["chemicals"]` 是字符串列表、
+    相容性在 `result["pairs"]` 里——两个键后端**都不产出**（真实是 `chemicals` 为**匹配记录
+    的 dict 列表** + `query` 是用户原词；相容性是**顶层** `chemical_a`/`chemical_b` 与
+    `matrix[]`）。于是提取器在最常见的两条路径上恒空，而手写 fixture 的测试全绿——
+    [[narrow-hand-rolled-fixtures-and-engine-specific-branches]] 的标准形状，review 抓到的。
 
-    取不到就返回 None（不是空列表）：**「没记」和「记了但是空的」在下游是两件事**，
-    空列表会让「这次调用没有化学品」看起来像个结论。
+    取不到返回 None（不是空列表）：**「没记」和「记了但是空的」在下游是两件事**。
     """
     if not isinstance(data, dict):
         return None
+    # 🔴 这个函数在 `finally` 里跑：从这里抛出去会**同时**毁掉工具的返回值和整条调用日志
+    # （异常发生在 `_log_intent` 之前 ⇒ slot 还是空的 ⇒ `_reported` 什么都不记，
+    # 而调用方拿到的是 TypeError 而不是答案）。日志是尽力而为的东西，绝不许有这种代价。
+    try:
+        return _extract_chemicals(data)
+    except Exception:  # noqa: BLE001 —— 见上：宁可少记一列，也不能吃掉答案
+        logger.warning("CI-529 chemicals extraction failed", exc_info=True)
+        return None
+
+
+def _extract_chemicals(data: dict) -> list[str] | None:
     names: list[str] = []
     seen: set[str] = set()
 
     def _add(value) -> None:
-        if isinstance(value, str) and value.strip():
-            key = value.strip().lower()
-            if key not in seen:
-                seen.add(key)
-                names.append(value.strip())
-        elif isinstance(value, list):
-            for item in value:
-                _add(item)
+        if not isinstance(value, str):
+            return
+        value = value.strip()
+        key = value.lower()
+        if value and key not in seen:
+            seen.add(key)
+            names.append(value)
 
-    for doc in data.get("documents") or []:
+    def _as_list(value):
+        return value if isinstance(value, list) else []
+
+    for doc in _as_list(data.get("documents")):
         if isinstance(doc, dict):
-            _add(doc.get("chemical_name") or doc.get("chemical"))
-    for entry in data.get("tool_results") or []:
+            # 🔴 `chemical`（调用方问的词）优先于 `chemical_name`（供应商 SDS 的产品标题，
+            # 形如 "Acetone, ACS reagent, ≥99.5%"）——后者拿去 resolve_cas 可能解析成
+            # 别的东西或解析不出来，而这一列的下游正是 CI-174 的报告范围。
+            _add(doc.get("chemical") or doc.get("chemical_name"))
+
+    for entry in _as_list(data.get("tool_results")):
         result = entry.get("result") if isinstance(entry, dict) else None
         if not isinstance(result, dict):
             continue
+        # search_chemical：`query` 是用户原词，`chemicals` 是**匹配记录**（dict）
+        _add(result.get("query"))
+        for hit in _as_list(result.get("chemicals")):
+            if isinstance(hit, dict):
+                _add(hit.get("name") or hit.get("chemical_name"))
+        # risk / compliance / exposure / regulatory 等：顶层 chemical / chemical_name
         _add(result.get("chemical"))
-        _add(result.get("chemicals"))
-        for pair in result.get("pairs") or []:
+        _add(result.get("chemical_name"))
+        # check_compatibility：顶层 chemical_a / chemical_b
+        _add(result.get("chemical_a"))
+        _add(result.get("chemical_b"))
+        # check_all_compatibility：matrix[]（不是 pairs）
+        for pair in _as_list(result.get("matrix")):
             if isinstance(pair, dict):
                 _add(pair.get("chemical_a") or pair.get("chem1"))
                 _add(pair.get("chemical_b") or pair.get("chem2"))
-    # 上限跟别处一致（`ChemicalsRequest.max_length`），这一列只是聚合维度不是内容
+        # generate_risk_warnings：warnings[].chemical
+        for w in _as_list(result.get("warnings")):
+            if isinstance(w, dict):
+                _add(w.get("chemical") or w.get("chemical_name"))
+
+    # 🔴 名字里带逗号的丢掉：这一列在后端是 `",".join(names)` 存的（`mcp_log.py`），
+    # 读回来按逗号切 ⇒ `N,N-dimethylformamide` 会变成 `N` + `N-dimethylformamide` 两条，
+    # 而 CI-174 的报告范围正是从这里取的。丢掉比劈开好：缺一条是缺，劈开是**编造**。
+    # （存储格式本身该修，那是 CI-344 那条线的事，不在本票范围。）
+    names = [n for n in names if "," not in n]
     return names[:24] or None
 
 
@@ -3063,8 +3099,10 @@ async def upload_msds_pdf(
         results = upload_data.get("results", [])
         # CI-529：后端解析出来的化学品名回填进调用日志。🔴 取的是解析结果 `chemical_name`，
         # 不是文件名、也不是正文——那是 CI-527 的地盘且是错的路。
-        parsed_chemicals = [r["chemical_name"] for r in results
-                            if isinstance(r, dict) and (r.get("chemical_name") or "").strip()][:24]
+        parsed_chemicals = _chemicals_from_response({"tool_results": [
+            {"result": {"chemical_name": r.get("chemical_name")}}
+            for r in results if isinstance(r, dict)
+        ]}) or []
         summary = upload_data.get("summary", {})
 
         if not results:
