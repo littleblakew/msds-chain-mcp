@@ -866,7 +866,35 @@ async def _direct_compliance(chemical: str, regions: list[str]) -> dict:
         return _billed_json(res)
 
 
-def _format_regulatory_lists(data: dict, chemical: str) -> str:
+# CI-523: the coverage caveat is part of the ANSWER, not decoration — it is what
+# stops "we found EU entries" from being read as "cleared everywhere else". It must
+# therefore appear on BOTH result branches (hits and no hits), and it must follow the
+# caller's language: quick-chat used to answer zh callers in Chinese, so rendering it
+# in English only would be a regression this ticket introduced. en/zh only — that is
+# what `_normalize_lang` clamps to and what the backend actually supports (CI-356).
+_REG_LIST_COVERAGE_NOTE = {
+    "en": ("Coverage note: this is our curated copy of the 23 lists, not a live "
+           "regulatory feed, and it holds no Taiwan and no IARC data. An absent list "
+           'means "not found in our copy", never "not regulated".'),
+    "zh": "覆盖范围说明：这是我们整理的 23 份清单副本，不是实时监管数据源，"
+          "且不含台湾与 IARC 数据。某份清单没命中只代表「我们这份副本里没有」，"
+          "绝不等于「不受监管」。",
+}
+_REG_LIST_STRINGS = {
+    "en": {"title": "Regulatory Lists", "not_checked": "⚠️ **Not checked.**",
+           "status": "Status", "not_found": "Not found in the database.",
+           "near": "Near matches in the database", "cas": "CAS",
+           "count": "Matching lists", "unknown": "Unknown list",
+           "none": "No match in our copy of the 23 lists."},
+    "zh": {"title": "监管清单", "not_checked": "⚠️ **未核查。**",
+           "status": "状态", "not_found": "库中未收录。",
+           "near": "库中的近似命中", "cas": "CAS",
+           "count": "命中清单数", "unknown": "未知清单",
+           "none": "在我们那份 23 清单副本中没有命中。"},
+}
+
+
+def _format_regulatory_lists(data: dict, chemical: str, lang: str | None = None) -> str:
     """Render `/api/v2/regulatory-lists` (CI-523). Pure function so the three
     branches below are testable without a backend.
 
@@ -880,33 +908,32 @@ def _format_regulatory_lists(data: dict, chemical: str) -> str:
         dead-ending.
       - resolved with zero hits → "not found in our copy", never "not regulated".
     """
+    lg = _normalize_lang(lang or LANG)
+    s = _REG_LIST_STRINGS.get(lg, _REG_LIST_STRINGS["en"])
     lists = data.get("lists") or []
-    lines = [f"**Regulatory Lists — {data.get('chemical') or chemical}**\n"]
+    lines = [f"**{s['title']} — {data.get('chemical') or chemical}**\n"]
 
     if data.get("lists_unavailable"):
-        lines.append(f"⚠️ **Not checked.** {data.get('error') or ''}".rstrip())
+        lines.append(f"{s['not_checked']} {data.get('error') or ''}".rstrip())
         return "\n".join(lines)
 
     if not data.get("cas"):
-        lines.append(f"**Status:** {data.get('error') or 'Not found in the database.'}")
+        lines.append(f"**{s['status']}:** {data.get('error') or s['not_found']}")
         near = data.get("near_matches") or []
         if near:
-            lines.append(f"**Near matches in the database:** {', '.join(near)}")
+            lines.append(f"**{s['near']}:** {', '.join(near)}")
         return "\n".join(lines)
 
-    lines.append(f"**CAS:** {data.get('cas')}")
-    lines.append(f"**Matching lists:** {data.get('count', len(lists))}\n")
+    lines.append(f"**{s['cas']}:** {data.get('cas')}")
+    lines.append(f"**{s['count']}:** {data.get('count', len(lists))}\n")
     if lists:
         lines.extend(
-            f"- **{entry.get('list') or 'Unknown list'}** ({entry.get('region') or '—'})"
+            f"- **{entry.get('list') or s['unknown']}** ({entry.get('region') or '—'})"
             for entry in lists
         )
     else:
-        lines.append(
-            "No match in our copy of the 23 lists. That means **not found in our "
-            'copy of those lists**, never "not regulated" — and there is no Taiwan '
-            "and no IARC coverage here to read either way."
-        )
+        lines.append(s["none"])
+    lines.append(f"\n> {_REG_LIST_COVERAGE_NOTE.get(lg, _REG_LIST_COVERAGE_NOTE['en'])}")
     return "\n".join(lines)
 
 
@@ -3142,6 +3169,19 @@ async def check_regulatory_lists(chemical: Chemical, lang: Lang = None) -> str:
         #      174/722/2588/2592/2599 characters.
         # Now it calls the deterministic endpoint and renders it. Same decision as
         # the 2026-04-22 Direct Service Layer switch; this tool was simply missed.
+        # 🔴 Keep the credential requirement the old path had. `_quick_chat` calls
+        # `_require_api_key()`; the `_direct_*` helpers do not, so switching endpoints
+        # would silently turn this into an anonymous, unattributed lookup — and per
+        # the CI-506 note in `get_regulatory_coverage` the anonymous tenant path does
+        # not even return the same list set. An access change is not a rendering fix.
+        if err := _require_api_key():
+            success, error_msg = False, "no_credential"
+            return _text_result(
+                f"Authentication required: {err}\n\n"
+                "Get a free API key at https://msdschain.lagentbot.com (API Keys tab) "
+                "and set it via MSDS_API_KEY or gateway authentication."
+            )
+
         data = await _direct_regulatory_lists(chemical, lang=lang)
         if data.get("lists_unavailable"):
             success = False
@@ -3149,7 +3189,8 @@ async def check_regulatory_lists(chemical: Chemical, lang: Lang = None) -> str:
         # Free lookup tool (LOOKUP_TOOLS) — same shape as the other direct lookup
         # tools: no credits line, `_usage` stripped out of structuredContent.
         return CallToolResult(
-            content=[TextContent(type="text", text=_format_regulatory_lists(data, chemical))],
+            content=[TextContent(type="text",
+                                 text=_format_regulatory_lists(data, chemical, lang))],
             structured_content=_strip_usage(data),
         )
     finally:
