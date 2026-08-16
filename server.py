@@ -866,6 +866,61 @@ async def _direct_compliance(chemical: str, regions: list[str]) -> dict:
         return _billed_json(res)
 
 
+def _format_regulatory_lists(data: dict, chemical: str) -> str:
+    """Render `/api/v2/regulatory-lists` (CI-523). Pure function so the three
+    branches below are testable without a backend.
+
+    🔴 Three branches, and the two failure ones are the reason this tool stopped
+    going through an LLM at all:
+      - `lists_unavailable` → say we did NOT check. An empty list rendered without
+        this is read as "on no watch list", which is the opposite of what happened
+        (CI-507).
+      - unresolved → say which kind of "we don't have it" this is (CI-375),
+        including near matches, so the caller can retry with a CAS instead of
+        dead-ending.
+      - resolved with zero hits → "not found in our copy", never "not regulated".
+    """
+    lists = data.get("lists") or []
+    lines = [f"**Regulatory Lists — {data.get('chemical') or chemical}**\n"]
+
+    if data.get("lists_unavailable"):
+        lines.append(f"⚠️ **Not checked.** {data.get('error') or ''}".rstrip())
+        return "\n".join(lines)
+
+    if not data.get("cas"):
+        lines.append(f"**Status:** {data.get('error') or 'Not found in the database.'}")
+        near = data.get("near_matches") or []
+        if near:
+            lines.append(f"**Near matches in the database:** {', '.join(near)}")
+        return "\n".join(lines)
+
+    lines.append(f"**CAS:** {data.get('cas')}")
+    lines.append(f"**Matching lists:** {data.get('count', len(lists))}\n")
+    if lists:
+        lines.extend(
+            f"- **{entry.get('list') or 'Unknown list'}** ({entry.get('region') or '—'})"
+            for entry in lists
+        )
+    else:
+        lines.append(
+            "No match in our copy of the 23 lists. That means **not found in our "
+            'copy of those lists**, never "not regulated" — and there is no Taiwan '
+            "and no IARC coverage here to read either way."
+        )
+    return "\n".join(lines)
+
+
+async def _direct_regulatory_lists(chemical: str, lang: str | None = None) -> dict:
+    """POST /api/v2/regulatory-lists — direct list lookup, no LLM (CI-523)."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.post(
+            f"{API_URL}/api/v2/regulatory-lists",
+            json={"chemical": chemical, "lang": _normalize_lang(lang or LANG)},
+            headers=_headers(),
+        )
+        return _billed_json(res)
+
+
 async def _direct_online_search(chemical_name: str = "", cas_number: str = "") -> dict:
     """POST /api/v2/online-search — stateless PubChem GHS fallback (SE-19), unmetered."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -3042,6 +3097,7 @@ async def batch_safety_check(
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Lists", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@_graceful_timeout
 @_reported
 async def check_regulatory_lists(chemical: Chemical, lang: Lang = None) -> str:
     """
@@ -3073,15 +3129,29 @@ async def check_regulatory_lists(chemical: Chemical, lang: Lang = None) -> str:
     error_msg = None
     success = True
     try:
-        message = (
-            f"Check which regulatory lists {chemical} appears on. "
-            "Use the check_regulatory_lists tool and report all matching lists."
-        )
-        data = await _quick_chat(message, lang=lang)
-        if data.get("_timed_out"):
+        # CI-523: this used to hand an English sentence to `_quick_chat`
+        # (RAI → intent → summary, three LLM round-trips) for what is a table
+        # lookup. Two things came out of that, both observed on Prod:
+        #   ① the RAI classifier could reject it outright — "which lists is benzene
+        #      on" was answered with "MSDS Chain is designed for chemical safety
+        #      inquiries only";
+        #   ② the answer was a summariser's retelling, so the two explicit
+        #      disclosures the backend had already built — CI-507's "could not
+        #      check ≠ not on any list" and CI-375's unresolved wording — were
+        #      paraphrased away or dropped. Five identical calls returned
+        #      174/722/2588/2592/2599 characters.
+        # Now it calls the deterministic endpoint and renders it. Same decision as
+        # the 2026-04-22 Direct Service Layer switch; this tool was simply missed.
+        data = await _direct_regulatory_lists(chemical, lang=lang)
+        if data.get("lists_unavailable"):
             success = False
-            error_msg = "timeout"
-        return _quick_result(data)
+            error_msg = "lists_unavailable"
+        # Free lookup tool (LOOKUP_TOOLS) — same shape as the other direct lookup
+        # tools: no credits line, `_usage` stripped out of structuredContent.
+        return CallToolResult(
+            content=[TextContent(type="text", text=_format_regulatory_lists(data, chemical))],
+            structured_content=_strip_usage(data),
+        )
     finally:
         _log_intent("check_regulatory_lists", [chemical],
                         _json.dumps({"chemical": chemical}),
