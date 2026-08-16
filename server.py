@@ -268,6 +268,90 @@ def _text_result(text: str) -> CallToolResult:
     return CallToolResult(content=[TextContent(type="text", text=text)])
 
 
+def _chemicals_from_response(data: dict | None) -> list[str] | None:
+    """CI-529：从**后端已经解析好的结构化字段**里取化学品名，回填调用日志。
+
+    🔴 只读结构化字段，**绝不从 `answer` 正文里抽**。从自由文本反解析是 [[CI-527]] 的地盘
+    且是已判定错误的路：正文里的名字可能是模型顺带提到的另一种物质，抽出来会让「按化学品
+    聚合」从**缺**变成**错**，而错的看不出来。
+
+    🔴 **键名照抄后端 `routers/quick_chat.py` 里那段同款提取**（它为 `build_sds_documents`
+    做的是同一件事），不要自己发明：初版按想当然写了 `result["chemicals"]` 是字符串列表、
+    相容性在 `result["pairs"]` 里——两个键后端**都不产出**（真实是 `chemicals` 为**匹配记录
+    的 dict 列表** + `query` 是用户原词；相容性是**顶层** `chemical_a`/`chemical_b` 与
+    `matrix[]`）。于是提取器在最常见的两条路径上恒空，而手写 fixture 的测试全绿——
+    [[narrow-hand-rolled-fixtures-and-engine-specific-branches]] 的标准形状，review 抓到的。
+
+    取不到返回 None（不是空列表）：**「没记」和「记了但是空的」在下游是两件事**。
+    """
+    if not isinstance(data, dict):
+        return None
+    # 🔴 这个函数在 `finally` 里跑：从这里抛出去会**同时**毁掉工具的返回值和整条调用日志
+    # （异常发生在 `_log_intent` 之前 ⇒ slot 还是空的 ⇒ `_reported` 什么都不记，
+    # 而调用方拿到的是 TypeError 而不是答案）。日志是尽力而为的东西，绝不许有这种代价。
+    try:
+        return _extract_chemicals(data)
+    except Exception:  # noqa: BLE001 —— 见上：宁可少记一列，也不能吃掉答案
+        logger.warning("CI-529 chemicals extraction failed", exc_info=True)
+        return None
+
+
+def _extract_chemicals(data: dict) -> list[str] | None:
+    names: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value) -> None:
+        if not isinstance(value, str):
+            return
+        value = value.strip()
+        key = value.lower()
+        if value and key not in seen:
+            seen.add(key)
+            names.append(value)
+
+    def _as_list(value):
+        return value if isinstance(value, list) else []
+
+    for doc in _as_list(data.get("documents")):
+        if isinstance(doc, dict):
+            # 🔴 `chemical`（调用方问的词）优先于 `chemical_name`（供应商 SDS 的产品标题，
+            # 形如 "Acetone, ACS reagent, ≥99.5%"）——后者拿去 resolve_cas 可能解析成
+            # 别的东西或解析不出来，而这一列的下游正是 CI-174 的报告范围。
+            _add(doc.get("chemical") or doc.get("chemical_name"))
+
+    for entry in _as_list(data.get("tool_results")):
+        result = entry.get("result") if isinstance(entry, dict) else None
+        if not isinstance(result, dict):
+            continue
+        # search_chemical：`query` 是用户原词，`chemicals` 是**匹配记录**（dict）
+        _add(result.get("query"))
+        for hit in _as_list(result.get("chemicals")):
+            if isinstance(hit, dict):
+                _add(hit.get("name") or hit.get("chemical_name"))
+        # risk / compliance / exposure / regulatory 等：顶层 chemical / chemical_name
+        _add(result.get("chemical"))
+        _add(result.get("chemical_name"))
+        # check_compatibility：顶层 chemical_a / chemical_b
+        _add(result.get("chemical_a"))
+        _add(result.get("chemical_b"))
+        # check_all_compatibility：matrix[]（不是 pairs）
+        for pair in _as_list(result.get("matrix")):
+            if isinstance(pair, dict):
+                _add(pair.get("chemical_a") or pair.get("chem1"))
+                _add(pair.get("chemical_b") or pair.get("chem2"))
+        # generate_risk_warnings：warnings[].chemical
+        for w in _as_list(result.get("warnings")):
+            if isinstance(w, dict):
+                _add(w.get("chemical") or w.get("chemical_name"))
+
+    # 🔴 名字里带逗号的丢掉：这一列在后端是 `",".join(names)` 存的（`mcp_log.py`），
+    # 读回来按逗号切 ⇒ `N,N-dimethylformamide` 会变成 `N` + `N-dimethylformamide` 两条，
+    # 而 CI-174 的报告范围正是从这里取的。丢掉比劈开好：缺一条是缺，劈开是**编造**。
+    # （存储格式本身该修，那是 CI-344 那条线的事，不在本票范围。）
+    names = [n for n in names if "," not in n]
+    return names[:24] or None
+
+
 def _quick_result(data: dict) -> CallToolResult:
     """Build a CallToolResult for quick_chat-backed tools.
 
@@ -1399,6 +1483,7 @@ async def ask_chemical_safety(
     """
     error_msg = None
     success = True
+    data: dict = {}
     try:
         data = await _quick_chat(question, lang=lang)
         if data.get("_timed_out"):
@@ -1406,7 +1491,7 @@ async def ask_chemical_safety(
             error_msg = "timeout"
         return _quick_result(data)
     finally:
-        _log_intent("ask_chemical_safety", None,
+        _log_intent("ask_chemical_safety", _chemicals_from_response(data),
                         _json.dumps({"question": question}),
                     success=success, error_message=error_msg)
 
@@ -2473,6 +2558,7 @@ async def validate_protocol_chemicals(
     """
     error_msg = None
     success = True
+    data: dict = {}
     try:
         if len(protocol_text) > 4000:
             protocol_text = protocol_text[:4000] + "\n[...truncated]"
@@ -2493,7 +2579,7 @@ async def validate_protocol_chemicals(
             error_msg = "timeout"
         return _quick_result(data)
     finally:
-        _log_intent("validate_protocol_chemicals", None,
+        _log_intent("validate_protocol_chemicals", _chemicals_from_response(data),
                         _json.dumps({"protocol_text_length": len(protocol_text)}),
                     success=success, error_message=error_msg)
 
@@ -2920,6 +3006,7 @@ async def upload_msds_pdf(
     """
     error_msg = None
     success = True
+    parsed_chemicals: list[str] = []
     try:
         # Every early return below is a FAILED upload: nothing is parsed and nothing
         # is stored. They must be logged success=False — otherwise they inflate the
@@ -3010,6 +3097,12 @@ async def upload_msds_pdf(
             upload_data = res.json()
 
         results = upload_data.get("results", [])
+        # CI-529：后端解析出来的化学品名回填进调用日志。🔴 取的是解析结果 `chemical_name`，
+        # 不是文件名、也不是正文——那是 CI-527 的地盘且是错的路。
+        parsed_chemicals = _chemicals_from_response({"tool_results": [
+            {"result": {"chemical_name": r.get("chemical_name")}}
+            for r in results if isinstance(r, dict)
+        ]}) or []
         summary = upload_data.get("summary", {})
 
         if not results:
@@ -3096,7 +3189,7 @@ async def upload_msds_pdf(
             logged_source = f"<inline base64 or long source, {len(pdf_source)} chars>"
         else:
             logged_source = pdf_source
-        _log_intent("upload_msds_pdf", None,
+        _log_intent("upload_msds_pdf", parsed_chemicals or None,
                     _json.dumps({"pdf_source": logged_source, "session_id": session_id}),
                     success=success, error_message=error_msg)
 
