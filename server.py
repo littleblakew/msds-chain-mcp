@@ -810,6 +810,18 @@ def _detail_text(res: "httpx.Response", limit: int = 400) -> str:
     return f"backend gave no machine-readable reason (HTTP {res.status_code})"
 
 
+def _raise_for_status_with_reason(res: "httpx.Response") -> None:
+    """`raise_for_status()` 的替身：422 带上后端说的原因（CI-410）。
+
+    🔴 存在的理由是**别的路径不走 `_billed_json`**：`_build_audit_session` 的三步与
+    `upload_msds_pdf` 直接打 `/sessions*`，此前它们的 422 仍是裸状态行 —— 同一张票要修的
+    同一种缺陷，只是在两个不路由到计费包装的工具上。review 抓到的完整性缺口。
+    """
+    if res.status_code == 422:
+        raise RuntimeError(f"Request rejected (422): {_detail_text(res)}")
+    res.raise_for_status()
+
+
 def _billed_json(res: "httpx.Response") -> dict:
     """raise_for_status with a caller-friendly 402 (balance exhausted) message, then
     return the JSON body with any credit usage attached under `_usage`."""
@@ -826,14 +838,11 @@ def _billed_json(res: "httpx.Response") -> dict:
             except (TypeError, ValueError):
                 pass
         raise RuntimeError(msg + " Top up at msdschain.lagentbot.com to continue.")
-    if res.status_code == 422:
-        # CI-410：pydantic 把「为什么不合法」放在响应体的 `detail` 里，而这条错误路径
-        # 从不读它 ⇒ 调用方只拿到 `Client error '422 Unprocessable Entity' for url …`。
-        # 那不是哑失败（调用确实可见地失败了），但**不可行动**：模型看不出是"化学品超过
-        # 24 个"还是"参数名写错了"，于是要么原样重试、要么放弃。同 CI-523 一族——
-        # 信息在，只是没到达读它的人。
-        raise RuntimeError(f"Request rejected (422): {_detail_text(res)}")
-    res.raise_for_status()
+    # CI-410：pydantic 把「为什么不合法」放在响应体的 `detail` 里，而这条错误路径此前
+    # 从不读它 ⇒ 调用方只拿到 `Client error '422 Unprocessable Entity' for url …`。
+    # 不是哑失败（调用可见地失败了），但**不可行动**：模型看不出是"化学品超过 24 个"
+    # 还是"参数名写错了"。同 CI-523 一族——信息在，只是没到达读它的人。
+    _raise_for_status_with_reason(res)
     data = res.json()
     usage = _parse_usage(res)
     if usage and isinstance(data, dict):
@@ -1161,7 +1170,7 @@ async def _build_audit_session(experiment_name: str, chemicals: list[str]) -> di
             json={"experiment_name": experiment_name, "source": "mcp"},
             headers=_headers(),
         )
-        res.raise_for_status()
+        _raise_for_status_with_reason(res)
         session_id = res.json()["session_id"]
 
         # 2. Persist chemicals as MsdsRecord (so the report PDF has data)
@@ -1170,7 +1179,7 @@ async def _build_audit_session(experiment_name: str, chemicals: list[str]) -> di
             json={"chemicals": chemicals},
             headers=_headers(),
         )
-        res.raise_for_status()
+        _raise_for_status_with_reason(res)
         chem_result = res.json()
 
         # 3. Run compatibility + risk analysis (reads CAS from MsdsRecord)
@@ -1179,7 +1188,7 @@ async def _build_audit_session(experiment_name: str, chemicals: list[str]) -> di
             json={},
             headers={**_headers(), "Accept-Language": LANG},
         )
-        res.raise_for_status()
+        _raise_for_status_with_reason(res)
         compat = res.json()
 
     return {"session_id": session_id, "chemicals": chem_result, "compatibility": compat}
@@ -2090,7 +2099,7 @@ async def get_audit_report(session_id: Annotated[str | None, Field(
                 )
             if res.status_code == 404:
                 return f"Session `{session_id}` not found."
-            res.raise_for_status()
+            _raise_for_status_with_reason(res)
             relative = res.json()["url"]
 
         full_url = relative if str(relative).startswith("http") else f"{API_URL}{relative}"
@@ -3073,7 +3082,7 @@ async def upload_msds_pdf(
         if pdf_source.startswith("http://") or pdf_source.startswith("https://"):
             async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as dl:
                 resp = await dl.get(pdf_source)
-                resp.raise_for_status()
+                _raise_for_status_with_reason(resp)
                 pdf_bytes = resp.content
                 # Derive filename from URL path
                 url_path = pdf_source.rstrip("/").split("?")[0]
@@ -3125,7 +3134,7 @@ async def upload_msds_pdf(
                     json={"experiment_name": experiment_name, "source": "mcp"},
                     headers=_headers(),
                 )
-                res.raise_for_status()
+                _raise_for_status_with_reason(res)
                 sid = res.json()["session_id"]
 
             # 3. Upload PDF (multipart)
@@ -3136,7 +3145,7 @@ async def upload_msds_pdf(
                 headers=upload_headers,
                 timeout=60.0,
             )
-            res.raise_for_status()
+            _raise_for_status_with_reason(res)
             upload_data = res.json()
 
         results = upload_data.get("results", [])

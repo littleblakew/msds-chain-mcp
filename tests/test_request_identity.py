@@ -39,8 +39,13 @@ def test_server_headers_use_caller_credential():
 # --- global MSDS_API_KEY env (which is empty under the remote gateway model). --
 
 class _FakeResp:
-    def __init__(self, data):
+    # 🔴 `status_code` 不是可选的：真的 `httpx.Response` 必然有它，而 CI-410 之后
+    # 错误路径要按状态码分岔（422 带上后端给的原因）。假响应缺这个字段＝**fixture 比
+    # 生产窄**，会在与本测试无关的地方炸出 AttributeError。
+    def __init__(self, data, status_code=200):
         self._data = data
+        self.status_code = status_code
+        self.headers: dict = {}
 
     def raise_for_status(self):
         pass

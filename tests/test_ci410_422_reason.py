@@ -93,6 +93,22 @@ def test_the_message_is_bounded(monkeypatch):
     assert "…" in text, "没截断"
 
 
+def test_paths_that_skip_billed_json_also_carry_the_reason(monkeypatch):
+    """🔴 review 抓到的完整性缺口：`create_audit_session` / `upload_msds_pdf` 直接打
+    `/sessions*`，**不经过 `_billed_json`** ⇒ 补之前它们的 422 仍是裸状态行。
+
+    同一张票的同一种缺陷，只是发生在两个不路由到计费包装的工具上。
+    反向变异：把 `_build_audit_session` 里的 `_raise_for_status_with_reason` 换回
+    `res.raise_for_status()`，本条必红。
+    """
+    monkeypatch.setattr(server.httpx, "AsyncClient", _client_returning(
+        _Resp({"detail": [{"loc": ["body", "experiment_name"], "msg": "field required"}]})))
+    with pytest.raises(Exception) as exc:
+        asyncio.run(server.create_audit_session(experiment_name="x", chemicals=["acetone"]))
+    text = str(exc.value)
+    assert "422" in text and "field required" in text, text
+
+
 def test_402_special_case_still_wins(monkeypatch):
     """阳性对照：402（余额耗尽）有自己的话术，别被新分支抢走。"""
     monkeypatch.setattr(server.httpx, "AsyncClient",
