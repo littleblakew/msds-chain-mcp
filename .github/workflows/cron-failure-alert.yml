@@ -1,0 +1,47 @@
+name: Cron Failure Alert
+
+# Emails devops@lagentbot.com whenever a scheduled workflow in THIS repo concludes
+# `failure`. Ported from msds-chain 2026-08-16 (design:
+# msds-chain `docs/superpowers/specs/archive/2026-07-06-cron-failure-alert-design.md`).
+#
+# 🔴 为什么这个仓也需要一份：`Live Probes Weekly`（周一 05:00 UTC）跑的是**真扣 credits
+# 的 live 覆盖**，而在此之前这个仓**没有任何 cron 失败告警** —— 它挂了只体现在 Actions
+# 页面，没人会去看。那正是 2026-07-06「静默死掉的 cron」事故的同一类：所有 admin-token
+# cron 自上线起每次都失败，无人发现。
+#
+# ⚠️ 新增 scheduled workflow 时，把它的 `name:` 加进下面的 `workflows:` 清单，
+# 否则它的失败是静默的（就是本 workflow 要防的那类「忘了配」）。核法：
+#   grep -l 'cron:' .github/workflows/*.yml   ⇒ 每个 name: 都应出现在下面
+#
+# 本 workflow **故意不在自己的清单里**：告警发送失败不能自触发成告警循环。
+
+on:
+  workflow_run:
+    workflows:
+      - "Live Probes Weekly"
+    types:
+      - completed
+  workflow_dispatch:   # manual self-test: sends a sample alert email
+
+jobs:
+  alert:
+    # ⚠️ 与 msds-chain 那份的唯一实质差异：那边跑 [self-hosted, azure-sea]，本仓三个
+    # workflow 全是 ubuntu-latest（没有自托管 runner）⇒ 照抄会永远排队等一个不存在的
+    # runner，而"告警器自己不动"是最坏的一种失败。
+    runs-on: ubuntu-latest
+    # Fire on real failures, or always on manual dispatch (self-test).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Send failure alert email
+        env:
+          MAILER_CLIENT_ID: ${{ secrets.MAILER_CLIENT_ID }}
+          MAILER_TENANT_ID: ${{ secrets.MAILER_TENANT_ID }}
+          MAILER_CLIENT_SECRET: ${{ secrets.MAILER_CLIENT_SECRET }}
+          ALERT_WORKFLOW: ${{ github.event.workflow_run.name || 'Manual self-test (cron-failure-alert)' }}
+          ALERT_CONCLUSION: ${{ github.event.workflow_run.conclusion || 'test' }}
+          ALERT_RUN_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/workflows/cron-failure-alert.yml', github.server_url, github.repository) }}
+          ALERT_RUN_NUMBER: ${{ github.event.workflow_run.run_number || github.run_number }}
+          ALERT_TIME: ${{ github.event.workflow_run.updated_at || github.event.repository.updated_at }}
+          ALERT_REPO: ${{ github.repository }}
+        run: python3 scripts/ci/send_alert_email.py
