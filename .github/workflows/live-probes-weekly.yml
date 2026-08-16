@@ -1,0 +1,95 @@
+name: Live Probes Weekly
+
+# 给两个「写好了但没有任何执行通道」的 live 探针一条通道。
+#
+# 2026-08-16 排查 devops@ 邮件时核实的现状：`scripts/live_tool_coverage.py` 与
+# `scripts/structured_content_drift.py` 的 docstring 都写「别挂 deploy，走定时
+# （cron/Hermes）或手动」，但全仓 + docs/ 查不到任何注册（已注册的 Hermes cron
+# 只有 version-update-scan-weekly / integrity-weekly）⇒ 实际是**纯手动、从没定时跑过**。
+# 后果：MCP 工具层的常态覆盖只剩 deploy gate 的 smoke_mcp.py（2 个快工具）。
+#
+# 🔴 为什么这里**不**能靠 e2e 顶替（最容易踩的误判）：
+#   msds-chain/e2e/tests/mcp-tools.spec.ts 名字叫 "MCP Tool Smoke Tests"、每晚
+#   出 23 条绿灯，但它的断言几乎全打后端 `/api/v2/*` + `/quick-chat`，**只有 2 条
+#   /sse 鉴权测试真的碰 MCP server**。schema / 渲染 / structuredContent 透传 /
+#   网关注入 per-user 凭证，它一条都不覆盖。实证：CI-523（check_regulatory_lists
+#   走 quick-chat 三轮 LLM，Prod 实测被 RAI 判「非化学品请求」整个拒答）——那 23 条
+#   e2e 全绿，一条都没碰到它。**别因为「nightly 已经测了 23 个工具」删掉本 workflow。**
+#
+# ── 成本（这是它排周频而不是日频的唯一理由）──────────────────────────────
+# 两个脚本都**真打生产、真扣 credits**（今天没有 Dev 的 MCP 部署，见脚本内注释）。
+# live_tool_coverage 上次手工 sweep ~11 credits。Blake 2026-08-16 拍板：**跑，
+# credits 记在 lagentbot 内部账号上**（@lagentbot.com 会被增长口径自动排除，
+# 不污染外部用量指标）。
+# 🔴 **不带 --include-writes**：默认只跑只读用例。写用例会在 Prod 留数据，而按
+#    decision-no-auto-cleanup-user-data 我们不清理它 —— 定时任务不该每周攒垃圾。
+
+on:
+  schedule:
+    # 周一 05:00 UTC。错开 msds-chain 那边的周一批次（integrity 01:00 /
+    # cold-build-canary + roster 02:00 / sessions-purge 02:30）与每日计费 cron
+    # （promo-expire 03:00 / enforce-cancellations 03:30 / expiry-reminders 04:00）。
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+  push:
+    # 自测钩子：改本文件时立刻在当前分支跑一次。没有它，本 workflow 只能在合进
+    # main 之后才第一次真正执行（workflow_dispatch 按 GitHub 规则只在默认分支可见）
+    # ⇒ 改动无法在合并前验证。
+    paths:
+      - ".github/workflows/live-probes-weekly.yml"
+
+concurrency:
+  # 两个探针都打同一套 Prod。重叠跑会互相干扰，也会白烧 credits。
+  group: live-probes
+  cancel-in-progress: false
+
+jobs:
+  live-probes:
+    runs-on: ubuntu-latest
+    # 两个脚本都是网络往返密集型（23 工具 × 真实链路），给足余量。
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        # 🔴 **必须是 -dev 那份**，和 deploy.yml 跑 smoke_mcp.py 前的做法一致：
+        # 两个脚本都 `import httpx2`，而 httpx2 只声明在 requirements-dev.txt
+        # （运行时镜像用的是 httpx，不需要它）。装 requirements.txt 会在 import
+        # 处直接炸，而且报错跟探针要查的东西毫无关系。
+        run: pip install --no-cache-dir -r requirements-dev.txt
+
+      # 🔴 与 deploy.yml 的 smoke 同一个约定：secret 没配时**跳过而不是红**。
+      # 理由是本 workflow 先于凭证落地合并 —— 若未配就红，第一次定时触发就会发出
+      # 一条无人能修的告警，而那正是训练人忽略红灯的做法。配上之后它就是硬判据。
+      - name: Live tool coverage (23 tools, read-only)
+        env:
+          MCP_COVERAGE_KEY: ${{ secrets.MCP_COVERAGE_KEY }}
+        run: |
+          if [ -z "$MCP_COVERAGE_KEY" ]; then
+            echo "::warning::MCP_COVERAGE_KEY 未配置 —— 跳过 live 工具覆盖。去 lagentbot 内部账号（test@lagentbot.com）签一个 per-user key 并加成本仓 secret 即可启用。"
+            exit 0
+          fi
+          python scripts/live_tool_coverage.py
+
+      # 独立于上一步：即便覆盖探针红了，字段差集这一路仍有信息量（它们查的是
+      # 不同的东西——一个是「工具还能不能用」，一个是「后端给了、我们透没透出去」）。
+      - name: structuredContent drift (backend vs tool output)
+        if: always()
+        env:
+          MCP_COVERAGE_KEY: ${{ secrets.MCP_COVERAGE_KEY }}
+        run: |
+          if [ -z "$MCP_COVERAGE_KEY" ]; then
+            echo "::warning::MCP_COVERAGE_KEY 未配置 —— 跳过 structuredContent 差集。"
+            exit 0
+          fi
+          python scripts/structured_content_drift.py
+
+# ⚠️ 已知缺口，别当它不存在：本仓**没有** msds-chain 那套 cron-failure-alert
+# （它依赖 MAILER_* 三个 secret + scripts/ci/send_alert_email.py，都只在 msds-chain）。
+# ⇒ 本 workflow 失败目前**不会发邮件给 devops@**，只体现在 Actions 页面。
+# 要补齐，最小改动是把那三个 mailer secret 加到本仓、再移植告警 workflow。
+# 在补齐之前，把本 workflow 当「需要人主动去看」的探针，不是「会来找你」的告警。
