@@ -58,7 +58,12 @@ class _FakeClient:
         if url.endswith("/sessions"):
             return _Resp({"session_id": "DEMO-CI174TST"})
         if url.endswith("/chemicals"):
-            return _Resp({"added": [{"name": "acetone", "status": "added"}], "not_found": []})
+            requested = (json or {}).get("chemicals", [])
+            known = {"acetone", "methanol"}
+            return _Resp({
+                "added": [{"name": c, "status": "added"} for c in requested if c in known],
+                "not_found": [c for c in requested if c not in known],
+            })
         if url.endswith("/compatibility"):
             return _Resp({"matrix": [], "warnings": []})
         return _Resp({})
@@ -93,6 +98,25 @@ def test_no_argument_call_builds_the_report_from_recent_analyses(wired):
     # 🔴 报告必须自报覆盖范围：用户没说过范围，文档就得自己说清楚它涵盖了什么
     assert "acetone" in text and "methanol" in text, text
     assert res.structured_content["built_from_recent_analyses"] is True
+
+
+def test_chemicals_the_backend_could_not_add_are_disclosed(wired):
+    """🔴 覆盖范围只能报**后端真的收进去的**那些。
+
+    请求 3 个、库里只认得 1 个时说「涵盖 3 个」，等于让用户把一份不含另外两个的签名文件
+    当成含了。反向变异：把 `built_from_recent` 改回请求的 `chemicals`，本条必红。
+    """
+    sent = wired({"chemicals": ["acetone", "unobtainium", "phlogiston"], "days": 7})
+
+    res = asyncio.run(server.get_audit_report())
+    text = res.content[0].text
+
+    covered, _, missing = text.partition("Not in this report")
+    assert "acetone" in covered, text
+    assert "unobtainium" not in covered, f"没收进报告的化学品被说成覆盖了：{covered!r}"
+    assert "unobtainium" in missing and "phlogiston" in missing, text
+    assert res.structured_content["chemicals"] == ["acetone"], res.structured_content
+    assert set(res.structured_content["chemicals_not_in_report"]) == {"unobtainium", "phlogiston"}
 
 
 def test_no_recent_analyses_does_not_create_an_empty_session(wired):

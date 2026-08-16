@@ -1024,7 +1024,10 @@ async def _build_audit_session(experiment_name: str, chemicals: list[str]) -> di
     exact same way `create_audit_session` does. 🔴 Two implementations of a
     three-call sequence is how the two paths start producing different reports.
     """
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    # 🔴 TIMEOUT_MULTI 而不是 TIMEOUT：第 3 步是 pairwise 兼容性分析（O(n²) 且带 LLM 兜底），
+    # 本来就属于「多组分」预算。此前挂在 15s 上是 `create_audit_session` 一直带着的隐患，
+    # 而 CI-174 的零参路径会自动喂进最多 12 个化学品，把它变成常态。
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         # 1. Create the session (bound to the API key owner)
         res = await client.post(
             f"{API_URL}/sessions",
@@ -1055,7 +1058,7 @@ async def _build_audit_session(experiment_name: str, chemicals: list[str]) -> di
     return {"session_id": session_id, "chemicals": chem_result, "compatibility": compat}
 
 
-async def _direct_recent_chemicals(days: int = 7, limit: int = 24) -> dict:
+async def _direct_recent_chemicals(days: int = 7, limit: int = 12) -> dict:
     """GET /api/v2/recent-chemicals — what this caller analysed recently (CI-174)."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         res = await client.get(
@@ -1861,7 +1864,10 @@ async def create_audit_session(
                     success=success, error_message=error_msg)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Audit Report", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+# 🔴 `read_only_hint=False`：零参路径会建 session、跑分析、落库（CI-174）。宿主会**自动放行**
+# 标为只读的工具，而这个工具已经不是只读的了，也不是幂等的（问两次＝两个 session、两次分析）。
+@mcp.tool(annotations=ToolAnnotations(title="Get Audit Report", read_only_hint=False, destructive_hint=False, open_world_hint=False), structured_output=False)
+@_graceful_timeout
 @_reported
 async def get_audit_report(session_id: Annotated[str | None, Field(
     description='The session id returned by `create_audit_session`, e.g. "DEMO-A1B2C3D4". '
@@ -1894,6 +1900,7 @@ async def get_audit_report(session_id: Annotated[str | None, Field(
     error_msg = None
     success = True
     built_from_recent: list[str] = []
+    not_in_report: list[str] = []
     try:
         if not get_caller_credential():
             return "get_audit_report requires an authenticated API key (MSDS_API_KEY for stdio, or gateway auth for remote)."
@@ -1906,11 +1913,26 @@ async def get_audit_report(session_id: Annotated[str | None, Field(
             # 6 external users, ZERO sessions created. So the missing piece was not
             # another hint, it was this step. Build the session from what they have
             # already analysed instead of asking them to say it again.
-            recent = await _direct_recent_chemicals()
+            # 🔴 12 而不是后端上限 24：兼容性分析是 pairwise，24 个＝276 对，串行跑 + LLM
+            # 兜底会稳稳超时；12 个＝66 对。用户没指定范围时，宁可少覆盖也别给他一个超时。
+            try:
+                recent = await _direct_recent_chemicals(limit=12)
+            except httpx.HTTPStatusError as e:
+                # 两个仓独立部署 ⇒ MCP 先上时后端还没有这个端点。别把 404 抛成裸异常：
+                # 那正好发生在我们刚把所有模型都指向零参调用之后。
+                if e.response is not None and e.response.status_code == 404:
+                    success, error_msg = False, "recent-chemicals endpoint unavailable"
+                    return (
+                        "Reporting on recent analyses is not available on this server yet. "
+                        "Call `create_audit_session(name, chemicals)` and then "
+                        "`get_audit_report(session_id)`."
+                    )
+                raise
             chemicals = recent.get("chemicals") or []
             if not chemicals:
-                success = False
-                error_msg = "no recent analyses"
+                # 🔴 不标 success=False：这是一句正常的答案（新用户必然先撞它），
+                # 标成失败会让 `get_audit_report` 的错误率被新用户淹掉——刚清理过
+                # 79 条自造失败的那张表，别马上又往里灌。
                 return (
                     "No analyses found in the last 7 days to report on.\n\n"
                     "Run a safety check first (e.g. `batch_safety_check` or "
@@ -1921,7 +1943,12 @@ async def get_audit_report(session_id: Annotated[str | None, Field(
             built = await _build_audit_session(
                 f"Recent MCP analyses ({len(chemicals)} chemicals)", chemicals)
             session_id = built["session_id"]
-            built_from_recent = chemicals
+            # 🔴 覆盖范围只能报**后端真的收进去的**那些。请求了 5 个、库里认得 3 个时，
+            # 说「涵盖 5 个」＝让用户把一份不含另外两个的签名文件当成含了。
+            added = built.get("chemicals", {}).get("added") or []
+            built_from_recent = [c["name"] for c in added
+                                 if c.get("status") in ("added", "already_added")]
+            not_in_report = built.get("chemicals", {}).get("not_found") or []
 
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             res = await client.get(
@@ -1946,8 +1973,17 @@ async def get_audit_report(session_id: Annotated[str | None, Field(
             # believing it covers work it does not.
             lines.append(
                 f"Built from your last 7 days of analyses — covers "
-                f"{', '.join(built_from_recent)}. Want a different set? Call "
-                f"`create_audit_session(name, chemicals)` and report on that session."
+                f"{', '.join(built_from_recent)}."
+            )
+            if not_in_report:
+                lines.append(
+                    f"⚠️ **Not in this report:** {', '.join(not_in_report)} — we hold no "
+                    f"record for these, so they are absent from the PDF. Do not read the "
+                    f"report as covering them."
+                )
+            lines.append(
+                "Want a different set? Call `create_audit_session(name, chemicals)` and "
+                "report on that session."
             )
         lines.append("Open in a browser or `curl -O` to download the PDF.")
         return CallToolResult(
@@ -1958,11 +1994,15 @@ async def get_audit_report(session_id: Annotated[str | None, Field(
                 "expires_in_seconds": 300,
                 "built_from_recent_analyses": bool(built_from_recent),
                 "chemicals": built_from_recent or None,
+                "chemicals_not_in_report": not_in_report or None,
             },
         )
     finally:
-        _log_intent("get_audit_report", None,
-                        _json.dumps({"session_id": session_id}),
+        # 🔴 把「走的是哪条路径」记下来：这次改动要回答的正是「零参调用有没有被用起来」，
+        # 两条路径记成同一个形状的话，下一轮读日志的人读不出答案。
+        _log_intent("get_audit_report", built_from_recent or None,
+                        _json.dumps({"session_id": session_id,
+                                     "built_from_recent": bool(built_from_recent)}),
                     success=success, error_message=error_msg)
 
 
