@@ -1017,6 +1017,58 @@ async def _direct_compare_sds(chemical: str, supplier: str = "", region: str = "
         return _billed_json(res)
 
 
+async def _build_audit_session(experiment_name: str, chemicals: list[str]) -> dict:
+    """Create a session, attach the chemicals, run the analysis. Returns the raw parts.
+
+    Extracted so `get_audit_report()` (no session_id — CI-174) builds sessions the
+    exact same way `create_audit_session` does. 🔴 Two implementations of a
+    three-call sequence is how the two paths start producing different reports.
+    """
+    # 🔴 TIMEOUT_MULTI 而不是 TIMEOUT：第 3 步是 pairwise 兼容性分析（O(n²) 且带 LLM 兜底），
+    # 本来就属于「多组分」预算。此前挂在 15s 上是 `create_audit_session` 一直带着的隐患，
+    # 而 CI-174 的零参路径会自动喂进最多 12 个化学品，把它变成常态。
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
+        # 1. Create the session (bound to the API key owner)
+        res = await client.post(
+            f"{API_URL}/sessions",
+            json={"experiment_name": experiment_name, "source": "mcp"},
+            headers=_headers(),
+        )
+        res.raise_for_status()
+        session_id = res.json()["session_id"]
+
+        # 2. Persist chemicals as MsdsRecord (so the report PDF has data)
+        res = await client.post(
+            f"{API_URL}/sessions/{session_id}/chemicals",
+            json={"chemicals": chemicals},
+            headers=_headers(),
+        )
+        res.raise_for_status()
+        chem_result = res.json()
+
+        # 3. Run compatibility + risk analysis (reads CAS from MsdsRecord)
+        res = await client.post(
+            f"{API_URL}/sessions/{session_id}/compatibility",
+            json={},
+            headers={**_headers(), "Accept-Language": LANG},
+        )
+        res.raise_for_status()
+        compat = res.json()
+
+    return {"session_id": session_id, "chemicals": chem_result, "compatibility": compat}
+
+
+async def _direct_recent_chemicals(days: int = 7, limit: int = 12) -> dict:
+    """GET /api/v2/recent-chemicals — what this caller analysed recently (CI-174)."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.get(
+            f"{API_URL}/api/v2/recent-chemicals",
+            params={"days": days, "limit": limit},
+            headers=_headers(),
+        )
+        return _billed_json(res)
+
+
 async def _direct_sds_document(chemical: str) -> dict:
     """GET /api/v2/sds-document-url — return signed PDF URL or availability status."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -1734,33 +1786,9 @@ async def create_audit_session(
                 "callers authenticate through the gateway."
             )
 
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            # 1. Create the session (will be bound to API key owner)
-            res = await client.post(
-                f"{API_URL}/sessions",
-                json={"experiment_name": experiment_name, "source": "mcp"},
-                headers=_headers(),
-            )
-            res.raise_for_status()
-            session_id = res.json()["session_id"]
-
-            # 2. Persist chemicals as MsdsRecord (so report PDF has data)
-            res = await client.post(
-                f"{API_URL}/sessions/{session_id}/chemicals",
-                json={"chemicals": chemicals},
-                headers=_headers(),
-            )
-            res.raise_for_status()
-            chem_result = res.json()
-
-            # 3. Run compatibility + risk analysis (reads CAS from MsdsRecord)
-            res = await client.post(
-                f"{API_URL}/sessions/{session_id}/compatibility",
-                json={},
-                headers={**_headers(), "Accept-Language": LANG},
-            )
-            res.raise_for_status()
-            compat = res.json()
+        built = await _build_audit_session(experiment_name, chemicals)
+        session_id, chem_result, compat = (
+            built["session_id"], built["chemicals"], built["compatibility"])
 
         matrix = compat.get("matrix", [])
         warnings = compat.get("warnings", [])
@@ -1836,21 +1864,34 @@ async def create_audit_session(
                     success=success, error_message=error_msg)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Audit Report", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+# 🔴 `read_only_hint=False`：零参路径会建 session、跑分析、落库（CI-174）。宿主会**自动放行**
+# 标为只读的工具，而这个工具已经不是只读的了，也不是幂等的（问两次＝两个 session、两次分析）。
+@mcp.tool(annotations=ToolAnnotations(title="Get Audit Report", read_only_hint=False, destructive_hint=False, open_world_hint=False), structured_output=False)
+@_graceful_timeout
 @_reported
-async def get_audit_report(session_id: Annotated[str, Field(
-    description='The session id returned by `create_audit_session`, e.g. "DEMO-A1B2C3D4".',
-)]) -> str:
+async def get_audit_report(session_id: Annotated[str | None, Field(
+    description='The session id returned by `create_audit_session`, e.g. "DEMO-A1B2C3D4". '
+                'OMIT IT to report on what this user has already analysed in the last 7 '
+                'days — no session needed, nothing to restate.',
+)] = None) -> str:
     """
-    Get a short-lived signed URL to download the audit report PDF.
+    Get a short-lived signed URL to download an archivable PDF safety report.
 
-    Use after `create_audit_session` to retrieve an archivable PDF report
-    containing the chemicals, compatibility matrix, risk warnings, and
-    session metadata.
+    Two ways to call it:
+    - **No arguments** — builds the report from the chemicals this user has analysed
+      over the last 7 days (compatibility / risk / regulatory / protocol checks).
+      Use this whenever the user asks for "a report", "something for the file",
+      "a document for my PI / safety officer" and you do not already hold a
+      session id. You do NOT need to ask them to list the chemicals again.
+    - **With a session_id** — the classic path, for a session you just created
+      with `create_audit_session`.
+
+    The PDF contains the chemicals, compatibility matrix, risk warnings and session
+    metadata, and is signed, so it can be filed as a compliance record.
 
     Args:
-        session_id: The session id returned by `create_audit_session`,
-                    e.g. "DEMO-A1B2C3D4".
+        session_id: Optional. The session id returned by `create_audit_session`,
+                    e.g. "DEMO-A1B2C3D4". Omit to report on recent analyses.
 
     Returns:
         A signed URL valid for ~5 minutes. The session must be owned by the
@@ -1858,9 +1899,56 @@ async def get_audit_report(session_id: Annotated[str, Field(
     """
     error_msg = None
     success = True
+    built_from_recent: list[str] = []
+    not_in_report: list[str] = []
     try:
         if not get_caller_credential():
             return "get_audit_report requires an authenticated API key (MSDS_API_KEY for stdio, or gateway auth for remote)."
+
+        if not session_id:
+            # CI-174: the report used to be reachable only through a session id the
+            # caller never had. Measured on Prod (2026-08-16): the "call
+            # create_audit_session if you want a signed report" hint has been on
+            # batch_safety_check since the day it shipped — 60 external calls,
+            # 6 external users, ZERO sessions created. So the missing piece was not
+            # another hint, it was this step. Build the session from what they have
+            # already analysed instead of asking them to say it again.
+            # 🔴 12 而不是后端上限 24：兼容性分析是 pairwise，24 个＝276 对，串行跑 + LLM
+            # 兜底会稳稳超时；12 个＝66 对。用户没指定范围时，宁可少覆盖也别给他一个超时。
+            try:
+                recent = await _direct_recent_chemicals(limit=12)
+            except httpx.HTTPStatusError as e:
+                # 两个仓独立部署 ⇒ MCP 先上时后端还没有这个端点。别把 404 抛成裸异常：
+                # 那正好发生在我们刚把所有模型都指向零参调用之后。
+                if e.response is not None and e.response.status_code == 404:
+                    success, error_msg = False, "recent-chemicals endpoint unavailable"
+                    return (
+                        "Reporting on recent analyses is not available on this server yet. "
+                        "Call `create_audit_session(name, chemicals)` and then "
+                        "`get_audit_report(session_id)`."
+                    )
+                raise
+            chemicals = recent.get("chemicals") or []
+            if not chemicals:
+                # 🔴 不标 success=False：这是一句正常的答案（新用户必然先撞它），
+                # 标成失败会让 `get_audit_report` 的错误率被新用户淹掉——刚清理过
+                # 79 条自造失败的那张表，别马上又往里灌。
+                return (
+                    "No analyses found in the last 7 days to report on.\n\n"
+                    "Run a safety check first (e.g. `batch_safety_check` or "
+                    "`check_chemical_compatibility`), then ask for the report again — "
+                    "or call `create_audit_session(name, chemicals)` to report on a "
+                    "specific list of chemicals."
+                )
+            built = await _build_audit_session(
+                f"Recent MCP analyses ({len(chemicals)} chemicals)", chemicals)
+            session_id = built["session_id"]
+            # 🔴 覆盖范围只能报**后端真的收进去的**那些。请求了 5 个、库里认得 3 个时，
+            # 说「涵盖 5 个」＝让用户把一份不含另外两个的签名文件当成含了。
+            added = built.get("chemicals", {}).get("added") or []
+            built_from_recent = [c["name"] for c in added
+                                 if c.get("status") in ("added", "already_added")]
+            not_in_report = built.get("chemicals", {}).get("not_found") or []
 
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             res = await client.get(
@@ -1878,20 +1966,43 @@ async def get_audit_report(session_id: Annotated[str, Field(
             relative = res.json()["url"]
 
         full_url = relative if str(relative).startswith("http") else f"{API_URL}{relative}"
+        lines = [f"**Signed report URL** (valid ~5 min):\n{full_url}\n"]
+        if built_from_recent:
+            # 🔴 Say what went in. A signed compliance record whose scope the user
+            # never stated must state its own scope, or they will file a document
+            # believing it covers work it does not.
+            lines.append(
+                f"Built from your last 7 days of analyses — covers "
+                f"{', '.join(built_from_recent)}."
+            )
+            if not_in_report:
+                lines.append(
+                    f"⚠️ **Not in this report:** {', '.join(not_in_report)} — we hold no "
+                    f"record for these, so they are absent from the PDF. Do not read the "
+                    f"report as covering them."
+                )
+            lines.append(
+                "Want a different set? Call `create_audit_session(name, chemicals)` and "
+                "report on that session."
+            )
+        lines.append("Open in a browser or `curl -O` to download the PDF.")
         return CallToolResult(
-            content=[TextContent(type="text", text=(
-                f"**Signed report URL** (valid ~5 min):\n{full_url}\n\n"
-                f"Open in a browser or `curl -O` to download the PDF."
-            ))],
+            content=[TextContent(type="text", text="\n".join(lines))],
             structured_content={
                 "session_id": session_id,
                 "report_url": full_url,
                 "expires_in_seconds": 300,
+                "built_from_recent_analyses": bool(built_from_recent),
+                "chemicals": built_from_recent or None,
+                "chemicals_not_in_report": not_in_report or None,
             },
         )
     finally:
-        _log_intent("get_audit_report", None,
-                        _json.dumps({"session_id": session_id}),
+        # 🔴 把「走的是哪条路径」记下来：这次改动要回答的正是「零参调用有没有被用起来」，
+        # 两条路径记成同一个形状的话，下一轮读日志的人读不出答案。
+        _log_intent("get_audit_report", built_from_recent or None,
+                        _json.dumps({"session_id": session_id,
+                                     "built_from_recent": bool(built_from_recent)}),
                     success=success, error_message=error_msg)
 
 
@@ -3099,7 +3210,9 @@ async def batch_safety_check(
             sections.append(_format_sds_documents(documents))
 
         sections.append(
-            "\n---\n*Use `create_audit_session` if you need a signed PDF report for compliance records.*"
+            "\n---\n*Need a filed record of this? Call `get_audit_report()` with no "
+            "arguments — it builds a signed PDF from what you have analysed here, "
+            "nothing to restate.*"
         )
 
         structured = {

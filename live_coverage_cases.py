@@ -126,6 +126,7 @@ CASES: dict[str, dict] = {
     # ── 需要 session 的 ────────────────────────────────────────
     "get_audit_report": {
         "args": {"session_id": "00000000-0000-0000-0000-000000000000"},
+        "writes": True,   # CI-174：零参调用会建 session + 跑分析；本用例仍走假 id 的失败路径
         "expect_error_ok": True,
         "note": "🔴 故意用假 session_id 走**错误路径**：验的是「报错报得明白」而不是崩掉。"
                 "⇒ 这条的可用性判据是「有响应且不是 5xx/超时」，isError 本身是预期内的。"

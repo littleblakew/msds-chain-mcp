@@ -287,6 +287,7 @@ _DIRECT_TIMEOUT_EXPECTATIONS = {
     "_direct_emergency": (("acetone", "spill"), False),
     "_direct_compliance": (("acetone", ["EU"]), False),
     "_direct_regulatory_lists": (("acetone",), False),
+    "_direct_recent_chemicals": ((), False),
     "_direct_online_search": (("acetone",), False),
     "_direct_sds_section": (("acetone", 2), False),
     "_direct_compare_sds": (("acetone",), False),
