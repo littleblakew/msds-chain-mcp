@@ -30,18 +30,30 @@ SUPPORTED = {
     "validate_protocol_chemicals": {"protocol_text": "add acetone"},
     "check_mixing_order": {"chemical_a": "a", "chemical_b": "b"},
     "check_regulatory_lists": {"chemical": "a"},
+    # 🔴 下面两条是 2026-08-17 从 UNSUPPORTED **搬上来**的——搬的依据是**重跑对比**，
+    # 不是「后端说改好了」：
+    #   get_ppe_recommendation：CI-361 第二步切片一让 P 码描述跟 lang 走（此前那 11 条
+    #     描述是本模块自己的英文副本，所以 en/zh 逐字节等长）。
+    #   get_sds_section：CI-361 第一步把 `no_section_text_note` 搬进 5 语言 catalog，
+    #     Prod 实测 zh 与 en 的响应 md5 不同（此前返回的是 SDS 原文，确实无从翻译；
+    #     现在**说明文字**这一段是我们自己的）。
+    "get_ppe_recommendation": {"chemicals": ["a"]},
+    "get_sds_section": {"chemical": "a", "section": 4},
 }
 
 # 后端实测**不认** lang 的端点 → 这些工具**不该**有 lang 参数。
 # value = 实测证据，改这张表之前先重跑那个对比。
 UNSUPPORTED = {
-    "get_ppe_recommendation": "ppe-recommendation：en/zh 响应逐字节等长(1031)、零中文",
     "check_regulatory_compliance": "compliance：en/zh 均 372 字节、零中文",
     "search_msds_online": "online-search：en/zh 均 1599 字节、零中文",
     "get_transport_classification": "transport-classification：en/zh 均 325 字节、零中文",
     "get_waste_disposal": "waste-disposal：en/zh 均 792 字节、零中文",
-    "get_sds_section": "sds-section：en/zh 均 1283 字节（返回的是 SDS 原文）",
 }
+
+# 🔴 **这张表是快照，不是事实**：它记的是「某天实测后端不认 lang」。后端每修好一个端点，
+# 这里就多一条**过期证据**——而过期证据长得和有效证据一模一样。2026-08-17 一次就搬走了
+# 两条（ppe / sds-section）。⇒ 改这张表之前**重跑那个对比**（同一入参、两种语言、比响应），
+# 别照抄括号里的旧字节数。
 
 
 class _Resp:

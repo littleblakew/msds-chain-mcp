@@ -186,7 +186,7 @@ def test_compat_surfaces_usage_in_result(monkeypatch):
 def test_lookup_tool_does_not_leak_usage_key(monkeypatch):
     """Lookup tools expose structuredContent=data directly; the internal _usage key
     that _billed_json attaches must be stripped (CI-39 leak fix)."""
-    async def fake_ppe(chemicals, **_):
+    async def fake_ppe(chemicals, lang=None, **_):
         return {"results": [{"chemical_name": "acetone", "ppe": {}}], "unresolved": [],
                 "_usage": {"cost": 0, "balance": 100, "reason": "free"}}
     monkeypatch.setattr(server, "_direct_ppe", fake_ppe)
@@ -797,7 +797,7 @@ def test_get_sds_document_pdf_hash_absent_on_old_backend(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def _patch_sds_section_direct(monkeypatch, data: dict):
-    async def fake(chemical, section):
+    async def fake(chemical, section, lang=None):
         return data
     monkeypatch.setattr(server, "_direct_sds_section", fake)
 
@@ -1054,7 +1054,7 @@ def test_risk_ci89_no_documents(monkeypatch):
 
 def test_ppe_ci89_sds_backed_label(monkeypatch):
     """PPE result with traceability='sds_backed' gets [Source: SDS document] in header."""
-    async def fake_ppe(chemicals, **_):
+    async def fake_ppe(chemicals, lang=None, **_):
         return {
             "results": [{
                 "chemical_name": "Acetone", "cas": "67-64-1",
@@ -1078,7 +1078,7 @@ def test_ppe_ci89_sds_backed_label(monkeypatch):
 
 def test_ppe_ci89_rule_based_label(monkeypatch):
     """PPE result with traceability='rule_based' gets [Basis: rule/standard] in header."""
-    async def fake_ppe(chemicals, **_):
+    async def fake_ppe(chemicals, lang=None, **_):
         return {
             "results": [{
                 "chemical_name": "Methanol", "cas": "67-56-1",
@@ -1095,7 +1095,7 @@ def test_ppe_ci89_rule_based_label(monkeypatch):
 
 def test_ppe_ci89_no_documents(monkeypatch):
     """When backend omits 'documents', section not rendered, structuredContent documents=[]."""
-    async def fake_ppe(chemicals, **_):
+    async def fake_ppe(chemicals, lang=None, **_):
         return {
             "results": [{"chemical_name": "X", "cas": "N/A", "signal_word": "W",
                          "minimum_ppe_level": "A", "ppe": {}}],
@@ -1109,7 +1109,7 @@ def test_ppe_ci89_no_documents(monkeypatch):
 
 def test_ppe_ci89_internal_usage_key_not_leaked(monkeypatch):
     """_usage internal key must not appear in structuredContent (existing CI-39 contract)."""
-    async def fake_ppe(chemicals, **_):
+    async def fake_ppe(chemicals, lang=None, **_):
         return {
             "results": [{"chemical_name": "A", "cas": "1", "signal_word": "W",
                          "minimum_ppe_level": "B", "ppe": {}}],

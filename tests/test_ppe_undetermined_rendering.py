@@ -17,7 +17,7 @@ import server
 
 
 async def _run(payload):
-    async def _fake(chemicals):
+    async def _fake(chemicals, lang=None):
         return payload
     orig = server._direct_ppe
     server._direct_ppe = _fake

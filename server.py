@@ -958,12 +958,12 @@ async def _direct_batch(chemicals: list[str], lang: str | None = None) -> dict:
         return _billed_json(res)
 
 
-async def _direct_ppe(chemicals: list[str]) -> dict:
+async def _direct_ppe(chemicals: list[str], lang: str | None = None) -> dict:
     """POST /api/v2/ppe-recommendation — direct, no LLM."""
     async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/ppe-recommendation",
-            json={"chemicals": chemicals, "lang": LANG},
+            json={"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
             headers=_headers(),
         )
         return _billed_json(res)
@@ -1131,12 +1131,13 @@ async def _direct_waste(chemicals: list[str]) -> dict:
         return _billed_json(res)
 
 
-async def _direct_sds_section(chemical: str, section: int) -> dict:
+async def _direct_sds_section(chemical: str, section: int, lang: str | None = None) -> dict:
     """POST /api/v2/sds-section — direct, no LLM."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         res = await client.post(
             f"{API_URL}/api/v2/sds-section",
-            json={"chemical": chemical, "section": section, "lang": LANG},
+            json={"chemical": chemical, "section": section,
+                  "lang": _normalize_lang(lang or LANG)},
             headers=_headers(),
         )
         return _billed_json(res)
@@ -1665,7 +1666,7 @@ async def ask_chemical_safety(
 @mcp.tool(annotations=ToolAnnotations(title="Get PPE Recommendation", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
-async def get_ppe_recommendation(chemicals: ChemicalList) -> str:
+async def get_ppe_recommendation(chemicals: ChemicalList, lang: Lang = None) -> str:
     """
     Get PPE (Personal Protective Equipment) recommendations for chemicals.
 
@@ -1683,7 +1684,7 @@ async def get_ppe_recommendation(chemicals: ChemicalList) -> str:
     error_msg = None
     success = True
     try:
-        data = await _direct_ppe(chemicals)
+        data = await _direct_ppe(chemicals, lang)
         lines = ["**PPE Recommendations**\n"]
 
         # CI-89: build set of SDS-backed chemicals from documents list
@@ -2538,6 +2539,7 @@ async def get_sds_section(
                     "8 exposure controls & PPE, 9 physical properties, "
                     "13 disposal, 14 transport.",
     )],
+    lang: Lang = None,
 ) -> str:
     """
     Retrieve a specific SDS (Safety Data Sheet) section for a chemical.
@@ -2584,7 +2586,7 @@ async def get_sds_section(
             15: "Regulatory information", 16: "Other information",
         }
         sec_name = section_names[section]
-        data = await _direct_sds_section(chemical, section)
+        data = await _direct_sds_section(chemical, section, lang)
         if data.get("error"):
             return _text_result(f"SDS section error: {data['error']}")
         chem_display = data.get("chemical", chemical)
