@@ -1,0 +1,51 @@
+# dsh-msds-chain: the hosted MSDS Chain MCP endpoint as a DeepSeek Harness bundle.
+#
+# Inserts a single row that connects to https://mcp.lagentbot.com/mcp (Streamable
+# HTTP) through the mcp-client bridge the dsh CLI ships with
+# (@deepseek-ai/dsh-mcp-client). The server's 23 tools are registered on ctx.tools
+# under the `msds-chain` namespace:
+#   mcp__msds-chain__ask_chemical_safety
+#   mcp__msds-chain__check_chemical_compatibility
+#   mcp__msds-chain__check_regulatory_compliance
+#   mcp__msds-chain__get_ppe_recommendation
+#   ...
+#
+# Authentication: an API key is REQUIRED — unlike some hosted endpoints there is no
+# anonymous tier here; without a key the gateway answers 401 and no tools register.
+# Get one at https://msdschain.lagentbot.com → API Keys (free tier: 100 calls/month)
+# and export it as MSDS_API_KEY. The headers expression attaches the header only when
+# the variable is set, so an unset variable produces a clean 401 at activation rather
+# than a malformed header.
+#
+# failOnStartupError is deliberately left at its default (false). Measured against dsh
+# 0.1.0-rc.6: with `true`, a 401 (expired key, endpoint outage) aborts the whole plugin
+# tree and dsh refuses to boot — this bundle should never be able to take down someone's
+# harness. The cost of that choice is that a bad key is silent: no tools, no console
+# message. The README carries a one-line curl to check the key directly.
+#
+# toolCallTimeoutMs is 150000 deliberately: the server's own LLM-backed path
+# (ask_chemical_safety and friends) budgets 120 s and returns an actionable
+# "timed out, retry" answer of its own when it overruns. A client timeout below that
+# would cut the connection first and replace that guidance with an opaque error.
+#
+# Override per deployment from a later layer (profile cordis.patch.yml or --patch) by
+# referencing this row's id WITHOUT `insert` — the loader treats an id+name+config
+# patch as an override, while a second `insert` with the same id fails the loader with
+# "duplicate loader entry id". For example, to point at a self-hosted core:
+#
+#   - id: mcp-msds-chain
+#     name: '@deepseek-ai/dsh-mcp-client'
+#     config:
+#       serverName: msds-chain
+#       transport: streamable-http
+#       url: http://localhost:8080/mcp
+#
+- insert:
+    - id: mcp-msds-chain
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: msds-chain
+        transport: streamable-http
+        url: https://mcp.lagentbot.com/mcp
+        headers: !!js 'process.env.MSDS_API_KEY ? { Authorization: `Bearer ${process.env.MSDS_API_KEY}` } : {}'
+        toolCallTimeoutMs: 150000
