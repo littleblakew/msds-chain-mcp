@@ -1217,7 +1217,16 @@ def _format_alternatives(data: dict, chemical: str) -> str:
     alts = data.get("alternatives") or []
     lines = [f"**Safer alternatives — {data.get('chemical') or chemical}**"]
     cas = data.get("cas_number")
-    lines.append(f"**CAS:** {cas}" if cas else "**CAS:** not resolved")
+    if cas:
+        lines.append(f"**CAS:** {cas}")
+    else:
+        # 🔴 身份没定下来时**必须显著说出来**：curated 表的兜底分支会拿用户原串去撞 CAS 键
+        # （`"50" in "50-00-0"` 为真），于是可能返回甲醛的替代品而 `cas_number` 是空的。
+        # 不说这句，用户看到的是「一份针对某物质的替代清单」，而我们根本没认出那是什么。
+        lines.append(
+            "⚠️ **We could not identify this substance** (no CAS resolved). "
+            "Anything below is generic hazard-reduction advice, **not** a substitution "
+            "recommendation for a confirmed substance — confirm the identity first.")
     if data.get("risk_level"):
         lines.append(f"**Risk level of the original:** {data['risk_level']}")
     src = data.get("source_info") or {}
@@ -1226,6 +1235,13 @@ def _format_alternatives(data: dict, chemical: str) -> str:
             f"**Source:** {src.get('supplier')}"
             + (f" · revision {src['revision_date']}" if src.get("revision_date") else "")
         )
+    # 🔴 CI-226 的两条披露：风险等级是**从某一份 SDS 推出来的**，而那份 SDS 可能是替代品
+    # 或不同浓度的。丢掉它们，等于把一个有前提的判断说成无条件的。
+    if src.get("substitution"):
+        lines.append(f"> ⚠️ Risk level derived from a substituted SDS: {src['substitution']}")
+    if src.get("concentration_mismatch"):
+        lines.append(
+            f"> ⚠️ Concentration mismatch vs the SDS used: {src['concentration_mismatch']}")
     lines.append("")
     if alts:
         for a in alts:
@@ -2673,7 +2689,38 @@ async def get_chemical_alternatives(
                 "and set it via MSDS_API_KEY or gateway authentication."
             )
 
-        data = await _direct_alternatives(chemical, use_case, lang=lang)
+        # 🔴 **窄回退，不是硬切换**：确定性路径快 30 倍（9.7s → 0.3s），但 curated 表
+        # 给不了两样 quick-chat 本来给得了的东西：
+        #   ① 非英文答复 —— 表里的 `rationale` / `trade_offs` / `note` 是英文常量；
+        #   ② 按 `use_case` 裁剪 —— handler 收下这个参数但从不读它。
+        # 硬切换会让 zh 调用方从「中文」退回「英文」、让写了 use_case 的人拿到与上下文
+        # 无关的通用建议 —— 那是拿能力换速度，而且**回退是静默的**。
+        # ⚠️ 我**量不出**受影响的人有多少：`input_params` 只有 CI-344（08-15）之后的数据，
+        # 这个工具在那之后没有调用记录 ⇒ 「没人用 zh」是猜的，不是测的。所以按原则走保守。
+        # ⏭ 退出条件：curated 表本地化（[[CI-361]] 的地盘）+ handler 真的读 `use_case`
+        # 之后，删掉这个回退、全部走直连。
+        wants_more_than_curated = bool(use_case) or _normalize_lang(lang or LANG) != "en"
+        if wants_more_than_curated:
+            ctx = f" It is being used as: {use_case}." if use_case else ""
+            message = (
+                f"Suggest 2-4 safer alternatives to {chemical}.{ctx} "
+                "For each alternative, provide: chemical name, CAS number, "
+                "why it's safer (specific hazard reduction), any trade-offs "
+                "(performance, cost, availability), and whether the original is "
+                "restricted under any regulation (REACH SVHC, TSCA, etc.). "
+                "Focus on drop-in replacements that serve the same function."
+            )
+            data = await _quick_chat(message, lang=lang)
+            if data.get("_timed_out"):
+                success = False
+                error_msg = "timeout"
+            return _quick_result(data)
+
+        data = await _direct_alternatives(chemical)
+        if data.get("error"):
+            # 后端 handler 对空入参返回 `{"error": …}` —— 那是失败，不是「没有替代品」。
+            success, error_msg = False, str(data["error"])[:120]
+            return _text_result(f"Could not look up alternatives: {data['error']}")
         return CallToolResult(
             content=[TextContent(type="text",
                                  text=_format_alternatives(data, chemical))],
