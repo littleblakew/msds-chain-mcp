@@ -55,13 +55,22 @@ def test_an_exposure_limit_is_rendered_as_evidence_not_as_a_verdict():
 def test_absence_from_an_inventory_is_rendered_as_a_warning_not_dropped():
     """🔴 极性相反的那一半：不在 TSCA/IECSC/KECL 名录上通常意味着进口前要申报。
     旧渲染只念 `status` + flags，这一整条信息**根本不会出现在用户看到的文本里**。"""
+    # 🔴 note 必须与引擎**当前**产出的措辞一致 —— 手搓一份旧文案然后断言它出现，
+    # 只能证明管道通，证明不了契约还在（review 第 9 条）。下面这段抄自
+    # `compliance_engine._check_inventories` 的 partial 分支。
     out = _text(_rr(status="not_restricted", inventory={
         "lists_checked": ["US EPA TSCA Inventory"], "on_inventory": False,
-        "note": "CAS 99999-08-0 was NOT found on US EPA TSCA Inventory. For an existing-substance "
-                "inventory this is the direction that needs attention: a substance absent from the "
-                "inventory typically requires new-substance notification before import."}))
+        "coverage": "partial",
+        "note": "CAS 99999-08-0 was not found in our copy of US EPA TSCA Inventory. "
+                "🔴 Our copies of these inventories are PARTIAL (e.g. the TSCA import covers the "
+                "ACTIVE subset, IECSC is an extracted snapshot), so this is NOT evidence that the "
+                "substance is absent from the official inventory. If it genuinely is absent, import "
+                "typically requires new-substance notification — verify against the official "
+                "inventory before acting."}))
     assert "NOT listed" in out, f"名录缺席没被渲染出来：{out!r}"
     assert "new-substance notification" in out
+    # 对冲句和缺席提示必须一起到达，否则用户读到的是一个肯定的断言
+    assert "PARTIAL" in out and "NOT evidence" in out, f"覆盖率对冲被丢了：{out!r}"
 
 
 def test_being_on_an_inventory_is_not_dressed_up_as_clearance():
@@ -82,3 +91,17 @@ def test_restricted_still_renders_its_flags():
     """回归护栏：新增的两条不能挤掉原本就对的那条路径。"""
     out = _text(_rr(status="restricted", flags=["Listed on California Proposition 65"]))
     assert "restricted" in out and "Proposition 65" in out
+
+
+def test_every_status_the_engine_can_emit_gets_its_details_rendered():
+    """🔴 第一版这里是个白名单 `("not_restricted","unverified","detected")`，于是
+    `restricted`（details 里装着限制正文，如 "shall not be used in toys…"）和
+    `unsupported`（details 说明为什么这个法域答不了）被静静吞掉 —— 白名单漏掉的
+    恰恰是最需要解释的那两个。
+
+    判据枚举**引擎真的会产出的每一个状态**，而不是挑几个来测：白名单式的守卫
+    对「名单本身漏了一项」结构性失明，本仓已经在别处栽过这一类。
+    """
+    for st in ("restricted", "detected", "not_restricted", "unverified", "unsupported"):
+        out = _text(_rr(status=st, details=f"explanation-for-{st}"))
+        assert f"explanation-for-{st}" in out, f"{st} 的解释没被渲染：{out!r}"

@@ -1432,7 +1432,11 @@ def _format_region_results(region_results: list[dict]) -> list[str]:
         lines.append(f"- **{rr.get('region', '?')}:** {st}")
         for flag in rr.get("flags", []):
             lines.append(f"  - {flag}")
-        if st in ("not_restricted", "unverified", "detected") and rr.get("details"):
+        # 🔴 白名单在这里是错的形状：漏掉的恰恰是**最需要解释的那些**。
+        # `restricted` 的 details 装着限制正文（"shall not be used in toys…"），
+        # `unsupported` 的 details 说明为什么这个法域答不了 —— 白名单把两者都吞了。
+        # 有 details 就转述，不做取舍。
+        if rr.get("details"):
             lines.append(f"  - _{rr['details']}_")
         inv = rr.get("inventory") or {}
         if inv.get("on_inventory") is True:
