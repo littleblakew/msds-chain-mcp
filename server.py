@@ -1417,6 +1417,32 @@ async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None)
                     success=success, error_message=error_msg)
 
 
+def _format_region_results(region_results: list[dict]) -> list[str]:
+    """把每个法域的结果渲染成人读的行。
+
+    🔴 CI-493：**状态词单独一个是读不出意思的**。`not_restricted` 不说清「查了哪几份」
+    会被读成放行；`unverified` 不说清会被读成「没问题」；而「不在现有物质名录上」
+    与「不在限制清单上」方向相反 —— 前者是风险，后者是好消息，混在一起念就是那条
+    「错误绿灯」。后端把这些话放在 `details` / `inventory.note` 里，这一层必须转述：
+    修在引擎里而渲染层不接，等于没到达真正的消费者（同 CI-488 那条教训）。
+    """
+    lines: list[str] = []
+    for rr in region_results:
+        st = rr.get("status", "unknown")
+        lines.append(f"- **{rr.get('region', '?')}:** {st}")
+        for flag in rr.get("flags", []):
+            lines.append(f"  - {flag}")
+        if st in ("not_restricted", "unverified", "detected") and rr.get("details"):
+            lines.append(f"  - _{rr['details']}_")
+        inv = rr.get("inventory") or {}
+        if inv.get("on_inventory") is True:
+            checked = ", ".join(inv.get("lists_checked") or []) or "n/a"
+            lines.append(f"  - 📋 Inventory: listed ({checked}) — registration status, not a restriction")
+        elif inv.get("on_inventory") is False:
+            lines.append(f"  - ⚠️ Inventory: **NOT listed** — {inv.get('note', '')}")
+    return lines
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Compliance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
@@ -1429,18 +1455,33 @@ async def check_regulatory_compliance(
     )] = None,
 ) -> str:
     """
-    Check multi-region regulatory compliance status for chemicals.
+    Check multi-region regulatory status for chemicals. Answers TWO separate questions
+    per region — do not collapse them (CI-493):
 
-    Backed by a regulatory list per region:
-      EU (SVHC / REACH Annex XVII / CLP Annex VI / CMR), US (OSHA PEL / TSCA / Prop 65),
-      CN (Catalogue of Hazardous Chemicals), JP (CSCL), CA (DSL), AU (AIIC).
-    Accepted but NOT backed by a list today: KR, TW. For those the tool can only read
-    the SDS Section 15 text, so a negative result there means "we have no list to check
-    against", not "cleared for that market".
+    1. `status` — is it on a RESTRICTION list (SVHC / REACH Annex XVII / CLP Annex VI /
+       Prop 65 / China Catalogue of Hazardous Chemicals / JP CSCL / SG EPMA)?
+         `restricted`     on at least one restriction list, or a CMR hazard code
+         `detected`       only indirect evidence (occupational exposure limit, or an SDS
+                          Section 15 mention). 🔴 NOT a clearance and NOT a violation.
+         `not_restricted` we DID check that region's restriction lists and it is not on
+                          them. `details` names which lists were checked. Lists we do not
+                          hold were not checked, so this is not a clearance either.
+         `unverified`     no check was performed — we hold no restriction list for that
+                          region (KR, TW, CA, AU), or the source could not be read.
+                          🔴 Never report this as "not regulated".
+    2. `inventory` — is it on that region's EXISTING-SUBSTANCE inventory (TSCA / IECSC /
+       KECL / DSL / AIIC / REACH registered)? Here the polarity is REVERSED:
+         `on_inventory: true`  registered there — about registration, not restriction
+         `on_inventory: false` 🔴 the direction that needs attention: a substance absent
+                               from the inventory typically needs new-substance
+                               notification before import
+         `on_inventory: null`  we hold no inventory for that region
 
-    Use this when preparing export documentation, compliance audits,
-    or when working with chemicals that may be restricted in certain jurisdictions.
-    A "not listed" result is never on its own an import/export clearance.
+    Use this when preparing export documentation, compliance audits, or when working with
+    chemicals that may be restricted in certain jurisdictions.
+    🔴 No result from this tool is ever, on its own, an import/export clearance. In
+    particular an exposure limit (OSHA PEL) answers "how much exposure is allowed", not
+    "is this substance permitted" — report it as evidence, never as compliance.
 
     Args:
         chemicals: List of chemical names or CAS numbers
@@ -1478,10 +1519,7 @@ async def check_regulatory_compliance(
                 continue
             lines.append(f"### {data.get('chemical', chemical)} (CAS: {data.get('cas', 'N/A')})")
             lines.append(f"- **Overall compliance level:** {data.get('summary_level', 'unknown')}")
-            for rr in data.get("region_results", []):
-                lines.append(f"- **{rr.get('region', '?')}:** {rr.get('status', 'unknown')}")
-                for flag in rr.get("flags", []):
-                    lines.append(f"  - {flag}")
+            lines.extend(_format_region_results(data.get("region_results", [])))
             lines.append("")
         _usage = ({"cost": _usage_cost, "balance": _usage_bal, "reason": _usage_reason}
                   if _usage_bal is not None else None)
