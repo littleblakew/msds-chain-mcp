@@ -1,0 +1,34 @@
+{
+  "name": "dsh-msds-chain",
+  "description": "Chemical safety intelligence for DeepSeek Harness: mounts the hosted MSDS Chain MCP endpoint (https://mcp.lagentbot.com/mcp) through the in-box @deepseek-ai/dsh-mcp-client bridge",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/littleblakew/msds-chain-mcp.git",
+    "directory": "plugins/dsh"
+  },
+  "homepage": "https://msdschain.lagentbot.com",
+  "files": [
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "mcp",
+    "chemistry",
+    "safety",
+    "msds",
+    "sds",
+    "ghs",
+    "compliance"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
