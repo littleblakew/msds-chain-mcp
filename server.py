@@ -1194,6 +1194,62 @@ async def _build_audit_session(experiment_name: str, chemicals: list[str]) -> di
     return {"session_id": session_id, "chemicals": chem_result, "compatibility": compat}
 
 
+async def _direct_alternatives(chemical: str, use_case: str = "", lang: str | None = None) -> dict:
+    """POST /api/v2/chemical-alternatives — 确定性 curated 替代表，不走 LLM（CI-137）。"""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.post(
+            f"{API_URL}/api/v2/chemical-alternatives",
+            json={"chemical": chemical, "use_case": use_case or "general",
+                  "lang": _normalize_lang(lang or LANG)},
+            headers=_headers(),
+        )
+        return _billed_json(res)
+
+
+def _format_alternatives(data: dict, chemical: str) -> str:
+    """渲染确定性替代品结果（CI-137）。纯函数，便于逐分支测。
+
+    🔴 三件必须原样出现在文本里，别让它们只留在 structuredContent：
+      - `note`：curated 表的边界（「没有硬编码替代品」也是一种答案，不是空）
+      - `risk_level`：替代建议的**前提**——不知道原物质多危险，"更安全"就没有意义
+      - `source_info`：CI-65 的可追溯性红线（供应商 + 版本）
+    """
+    alts = data.get("alternatives") or []
+    lines = [f"**Safer alternatives — {data.get('chemical') or chemical}**"]
+    cas = data.get("cas_number")
+    lines.append(f"**CAS:** {cas}" if cas else "**CAS:** not resolved")
+    if data.get("risk_level"):
+        lines.append(f"**Risk level of the original:** {data['risk_level']}")
+    src = data.get("source_info") or {}
+    if src.get("supplier"):
+        lines.append(
+            f"**Source:** {src.get('supplier')}"
+            + (f" · revision {src['revision_date']}" if src.get("revision_date") else "")
+        )
+    lines.append("")
+    if alts:
+        for a in alts:
+            name = a.get("name") or "Unknown"
+            a_cas = f" (CAS {a['cas']})" if a.get("cas") else ""
+            lines.append(f"- **{name}**{a_cas}")
+            # 🔴 字段名照后端抄（`chemical_substitution.py` 的 `alternatives.append`）：
+            # `rationale` / `trade_offs` / `risk_level`。初版按想当然写了 `reason`/`trade_off`
+            # ——那正是 CI-529 刚栽过的「键名是我编的」，两次都发生在同一天。
+            for key, label in (("rationale", "Why safer"),
+                               ("risk_level", "Alternative risk"),
+                               ("trade_offs", "Trade-offs")):
+                if a.get(key):
+                    lines.append(f"  - {label}: {a[key]}")
+    else:
+        # 后端在没有 curated 映射时会给一条通用建议（`name` 形如
+        # "No hardcoded substitution available"），所以真正的空列表极少见——
+        # 但空了就说空，别渲染成"有建议"。
+        lines.append("No alternative could be produced for this chemical.")
+    if data.get("note"):
+        lines.append(f"\n> {data['note']}")
+    return "\n".join(lines)
+
+
 async def _direct_recent_chemicals(days: int = 7, limit: int = 12) -> dict:
     """GET /api/v2/recent-chemicals — what this caller analysed recently (CI-174)."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -2572,6 +2628,7 @@ async def get_sds_section(
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Chemical Alternatives", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@_graceful_timeout
 @_reported
 async def get_chemical_alternatives(
     chemical: Chemical,
@@ -2602,20 +2659,26 @@ async def get_chemical_alternatives(
     error_msg = None
     success = True
     try:
-        ctx = f" It is being used as: {use_case}." if use_case else ""
-        message = (
-            f"Suggest 2-4 safer alternatives to {chemical}.{ctx} "
-            "For each alternative, provide: chemical name, CAS number, "
-            "why it's safer (specific hazard reduction), any trade-offs "
-            "(performance, cost, availability), and whether the original is "
-            "restricted under any regulation (REACH SVHC, TSCA, etc.). "
-            "Focus on drop-in replacements that serve the same function."
+        # CI-137：此前拼一句英文 prompt 交给 `_quick_chat`（RAI→intent→summary 三轮 LLM），
+        # 实测 p50 **9.7 秒**；而后端 `agent/tools/chemical_substitution.py` 早就是确定性实现
+        # （curated 替代表 + `resolve_cas` + GHS 风险比较，全文件零 LLM 引用）。
+        # 同 [[CI-523]] 一族：**信息在，只是这条通道没去拿。**
+        # 🔴 保留凭证检查：`_quick_chat` 会 `_require_api_key()`，`_direct_*` 不会 ⇒
+        # 直接换端点会把这个工具顺带变成匿名可调（CI-523 踩过）。
+        if err := _require_api_key():
+            success, error_msg = False, "no_credential"
+            return _text_result(
+                f"Authentication required: {err}\n\n"
+                "Get a free API key at https://msdschain.lagentbot.com (API Keys tab) "
+                "and set it via MSDS_API_KEY or gateway authentication."
+            )
+
+        data = await _direct_alternatives(chemical, use_case, lang=lang)
+        return CallToolResult(
+            content=[TextContent(type="text",
+                                 text=_format_alternatives(data, chemical))],
+            structured_content=_strip_usage(data),
         )
-        data = await _quick_chat(message, lang=lang)
-        if data.get("_timed_out"):
-            success = False
-            error_msg = "timeout"
-        return _quick_result(data)
     finally:
         _log_intent("get_chemical_alternatives", [chemical],
                         _json.dumps({"chemical": chemical, "use_case": use_case}),

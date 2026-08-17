@@ -288,6 +288,7 @@ _DIRECT_TIMEOUT_EXPECTATIONS = {
     "_direct_compliance": (("acetone", ["EU"]), False),
     "_direct_regulatory_lists": (("acetone",), False),
     "_direct_recent_chemicals": ((), False),
+    "_direct_alternatives": (("acetone",), False),
     "_direct_online_search": (("acetone",), False),
     "_direct_sds_section": (("acetone", 2), False),
     "_direct_compare_sds": (("acetone",), False),
@@ -506,16 +507,22 @@ def test_ask_chemical_safety_timeout_logs_failure(monkeypatch):
 
 
 def test_get_chemical_alternatives_timeout_logs_failure(monkeypatch):
-    """get_chemical_alternatives: timed-out _quick_chat → _log_call(success=False)."""
-    monkeypatch.setattr(server, "_quick_chat", _make_fake_quick_chat())
+    """CI-137 改了机制、没改要求：这个工具不再走 `_quick_chat`（那会返回降级 dict），
+    改打 `/api/v2/chemical-alternatives` ⇒ 超时现在是**抛出来的** `httpx.TimeoutException`，
+    由 `@_graceful_timeout` 转成可读消息。失败仍必须进调用日志——`@_reported` 在它内层
+    正是为此。"""
+    async def _timing_out(*a, **kw):
+        raise httpx.ReadTimeout("")
+
+    monkeypatch.setattr(server, "_direct_alternatives", _timing_out)
     log_fn, captured = _capture_log_call()
     monkeypatch.setattr(server, "_log_call", log_fn)
 
-    res = asyncio.run(server.get_chemical_alternatives("benzene", use_case="solvent"))
+    res = asyncio.run(server.get_chemical_alternatives("acetone"))
 
-    assert isinstance(res, CallToolResult)
+    assert isinstance(res, str)   # graceful 重试话术，不是不透明错误
     assert captured[0]["success"] is False
-    assert captured[0]["error_message"] == "timeout"
+    assert captured[0]["error_message"], "超时被记成了无原因的失败（CI-250 的形状）"
 
 
 def test_validate_protocol_chemicals_timeout_logs_failure(monkeypatch):
