@@ -1845,7 +1845,13 @@ async def get_emergency_response(
         description='Type of emergency: "spill" (leak/release), "fire", or "exposure" '
                     '(skin/eye/inhalation first aid). These three are the only accepted '
                     'values — the backend rejects anything else, so map the incident to '
-                    'the closest one (e.g. skin contact / splash / inhalation → "exposure").',
+                    'the closest one (e.g. skin contact / splash / inhalation → "exposure"). '
+                    '🔴 PERSON FIRST: if the material reached a person, use "exposure" EVEN IF '
+                    'the incident is also a spill and the user said "spilled" — e.g. "I spilled '
+                    'it on my hand" is "exposure", not "spill". Only "exposure" returns the '
+                    'substance-specific first-aid protocol (e.g. the calcium gluconate protocol '
+                    'for hydrofluoric acid); picking "spill" for a contact incident silently '
+                    'returns cleanup guidance instead of the antidote.',
     )] = "spill",
     lang: Lang = None,
 ) -> str:
@@ -1859,6 +1865,9 @@ async def get_emergency_response(
         chemical: Chemical name or CAS number, e.g. "hydrochloric acid"
         scenario: Type of emergency — "spill" (leak/release), "fire", or
                   "exposure" (skin/eye/inhalation first aid). Defaults to "spill".
+                  🔴 Person first: material that reached a person is "exposure" even
+                  when the user says "spilled" — only "exposure" returns the
+                  substance-specific antidote protocol (CI-579).
     """
     error_msg = None
     success = True

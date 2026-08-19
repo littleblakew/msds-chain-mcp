@@ -64,3 +64,23 @@ def test_bounded_numeric_params_declare_their_bounds():
         f"get_sds_section.section 的 schema 边界是 "
         f"{section.get('minimum')}..{section.get('maximum')}，后端接受的是 1..16"
     )
+
+
+def test_scenario_description_tells_the_client_person_first():
+    """CI-579：接触到人的事故必须选 `exposure`，即使用户说的是「spilled」。
+
+    事故形状（2026-08-19，后端那半的 Dev 实调）：「I spilled HF on my hand」被分到
+    `spill` ⇒ 物质级解毒规程**只在 exposure 注入**，于是载荷里 calcium 一个字都没有，
+    而模型用自己的知识把钙剂补了上去（无出处）。后端那边修的是正则分类；
+    **这一面的「分类器」是客户端模型**，它读的就是这条 description。
+
+    🔴 断言打在 `inputSchema` 上而不是 docstring 上 —— 本文件顶部那条教训：
+    docstring 进的是 `Tool.description`，客户端选**参数值**时读的是 schema 里这个字段。
+    写在 docstring 里等于没写给它看。
+    """
+    schemas = {f"{t}.{p}": s for t, p, s in _params()}
+    desc = (schemas["get_emergency_response.scenario"].get("description") or "").lower()
+    assert "person" in desc, f"没告诉客户端「人优先」：{desc!r}"
+    assert "spilled" in desc and "exposure" in desc, (
+        "必须点名『用户说 spilled 但接触到人时仍选 exposure』这个具体误判，"
+        f"泛泛说一句『按最接近的选』挡不住它：{desc!r}")
