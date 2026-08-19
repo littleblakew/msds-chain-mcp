@@ -1293,6 +1293,23 @@ async def _direct_sds_document(chemical: str) -> dict:
 # Tools
 # ---------------------------------------------------------------------------
 
+def _form_disclosure_lines(item: dict) -> list[str]:
+    """CI-572：把后端的 `physical_form_disclosure` 渲染进**文本**面。
+
+    同一个 CAS 可以承载两种处置方式完全不同的形态（无水氟化氢 vs 氢氟酸水溶液），
+    而我们对每个 CAS 只有一份 SDS ⇒ 不说清是哪一种，用户会默认「就是我手上这种」。
+    后端此前只在 `/sds-section`、`/sds-document-url` 产出这个键，CI-572 把它接进了
+    另外 6 个安全端点；**但后端产出 ≠ 用户看见**：这些工具都是
+    `structured_output=False`，多数客户端只把 text 喂给模型，只透 structuredContent
+    等于没修（CI-553/CI-360 各栽过一次，get_sds_section 那处的注释写的是同一件事）。
+
+    `None` ＝ 无话可说（未判定且该 CAS 不在双形态名单上，或我们一份 SDS 都没有）
+    ⇒ 什么都不说，绝不编一句「本品为某某形态」。
+    """
+    note = item.get("physical_form_disclosure") if isinstance(item, dict) else None
+    return [f"- **⚠️ {note}**"] if note else []
+
+
 def _insufficient_lines(item: dict, what: str) -> list[str]:
     """CI-360: 把后端的「判不了」渲染成人看得懂的文字，而不是一行 `Data source: none`。
 
@@ -1707,6 +1724,7 @@ async def get_ppe_recommendation(chemicals: ChemicalList, lang: Lang = None) -> 
                 header += f"  {trace_label}"
             header += _inline_sds(doc_lut, item.get("chemical_name"), item.get("cas"))  # CI-89-inline
             lines.append(header)
+            lines.extend(_form_disclosure_lines(item))  # CI-572
             lines.append(f"- Signal word: **{item.get('signal_word') or 'N/A'}**")
             # CI-243: the backend now returns null when the SDS parsed no hazards at
             # all. `.get(k, 'N/A')` does NOT catch that — the key exists, its value is
@@ -1777,6 +1795,7 @@ async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None) -> st
         lines = ["**Storage Guidance**\n"]
         for item in data.get("results", []):
             lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
+            lines.extend(_form_disclosure_lines(item))  # CI-572
             lines.append(f"- **Storage class:** {item.get('storage_class_label', 'N/A')}")
             lines.append(f"- **Cabinet color:** {item.get('cabinet_color', 'N/A')}")
             lines.append(f"- **Recommended cabinet:** {item.get('recommended_cabinet', 'N/A')}")
@@ -1845,6 +1864,9 @@ async def get_emergency_response(
         chem_display = data.get("chemical", chemical)
         cas = data.get("cas", "N/A")
         lines = [f"**Emergency Response: {scenario.title()} — {chem_display} ({cas})**\n"]
+        # 🔴 CI-572：急救是形态差异最致命的场景（无水 HF vs 氢氟酸水溶液），
+        # 这一行必须在任何处置动作**之前**出现。
+        lines.extend(_form_disclosure_lines(data))
         if data.get("signal_word"):
             lines.append(f"Signal word: **{data['signal_word']}**\n")
         immediate = data.get("immediate_actions", [])
@@ -1925,6 +1947,7 @@ async def get_exposure_limits(
         lines = ["**Occupational Exposure Limits**\n"]
         for item in data.get("results", []):
             lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
+            lines.extend(_form_disclosure_lines(item))  # CI-572
             if item.get("region_filter"):
                 lines.append(f"Region filter: **{item['region_filter']}**")
             limits = item.get("limits", [])
@@ -1973,6 +1996,7 @@ async def get_transport_classification(chemicals: ChemicalList) -> str:
         lines = ["**UN Transport Classification**\n"]
         for item in data.get("results", []):
             lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
+            lines.extend(_form_disclosure_lines(item))  # CI-572
             lines.append(f"- **UN Number:** {item.get('un_number', 'N/A')}")
             lines.append(f"- **Proper Shipping Name:** {item.get('proper_shipping_name', 'N/A')}")
             lines.append(f"- **Hazard Class:** {item.get('hazard_class', 'N/A')}")
@@ -3003,6 +3027,7 @@ async def get_waste_disposal(chemicals: ChemicalList) -> str:
         lines = ["**Waste Disposal Guidance**\n"]
         for item in data.get("results", []):
             lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
+            lines.extend(_form_disclosure_lines(item))  # CI-572
             # 🔴 CI-360：无依据时 `waste_classification` 是后端的兜底桶
             # （`general_chemical_waste`），把它当分类结论渲染，会和同一段里的
             # `Data source: none` 直接打架——一句说「这是普通化学废物」，一句说
