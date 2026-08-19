@@ -1874,11 +1874,38 @@ async def get_emergency_response(
         lines.extend(_form_disclosure_lines(data))
         if data.get("signal_word"):
             lines.append(f"Signal word: **{data['signal_word']}**\n")
+        # 🔴 CI-568：披露必须渲进**文本**。后端算出 `provenance_note` 已久，但两个面的
+        # 返回字典都没抄它（后端侧已修），而即便抄了，只读 TextContent 的客户端仍然
+        # 看不到——这条渲染函数是逐键取值的。CI-553 刚在管制前体披露上栽过同一形状。
+        # 位置在最上方：它是「下面这些字是谁说的」，读到步骤之后才看到披露就晚了。
+        note = data.get("provenance_note")
+        if note:
+            lines.append(f"*Provenance: {note}*\n")
+        # 🔴 CI-567：物质级规程条目单独成段并排在最前。事故形状（2026-08-18 Prod 实调）：
+        # 它们混在 immediate_actions 里、没有任何标记，而通用 [Hxxx] 行数量多篇幅大 ⇒
+        # 模型拿通用行的数字把物质级那条改写掉（HF 的「立刻涂钙剂」被降级成
+        # 「告知医护人员以便他们提供」＝延迟解毒）。标题里写死「不要用通用指引替换」。
+        # 🔴 按 `[protocol]` **前缀**认，不靠后端多返回一个字段：第一版是单独字段，
+        # 那等于把同一段安全关键原文复制第二份进载荷，实测把载荷推过裁剪预算、
+        # 反而把「立即冲洗 15 分钟」那句挤掉了。标记随文本走就没有这个问题。
+        priority = [a for a in (data.get("immediate_actions") or [])
+                    if isinstance(a, str) and a.startswith("[protocol]")]
+        if priority:
+            lines.append("**Substance-specific protocol — follow these first, verbatim** "
+                         "(generic hazard-code guidance below does NOT override these; "
+                         "do not substitute its durations or defer these actions to clinicians):")
+            lines.extend(f"  - {a}" for a in priority)
+            if data.get("protocol_citation"):
+                lines.append(f"  *Source: {data['protocol_citation']}*")
+            lines.append("")
         immediate = data.get("immediate_actions", [])
         if immediate:
-            lines.append("**Immediate Actions:**")
-            lines.extend(f"  - {a}" for a in immediate)
-            lines.append("")
+            # priority 那几条已经单独渲染过，别再重复一遍（CI-553 折叠重复披露的同一教训）。
+            rest = [a for a in immediate if a not in priority]
+            if rest:
+                lines.append("**Immediate Actions:**")
+                lines.extend(f"  - {a}" for a in rest)
+                lines.append("")
         sds = data.get("sds_instructions", [])
         if sds:
             lines.append("**SDS-Specific Instructions:**")
