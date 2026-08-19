@@ -1350,6 +1350,7 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
         if data.get("unresolved"):
             lines.extend(_unresolved_block(data, trailing_newline=True))
         lines.extend(_rejected_products_block(data))
+        lines.extend(_precursor_disclosure_block(data))
 
         # CI-89-inline: per-chemical link lookup so each pair row carries its own
         # SDS links (survives client-model summarization better than a trailing block).
@@ -1441,6 +1442,7 @@ async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None)
         if data.get("unresolved"):
             lines.extend(_unresolved_block(data, trailing_newline=True))
         lines.extend(_rejected_products_block(data))
+        lines.extend(_precursor_disclosure_block(data))
 
         # CI-89: build a set of chemicals that have SDS-backed documents
         documents = data.get("documents", [])
@@ -2323,6 +2325,52 @@ def _rejected_products_block(data: dict) -> list[str]:
         "These were **excluded from the results below** — treat any conclusion "
         "here as covering only the other inputs.\n"
     )
+    return lines
+
+
+def _precursor_disclosure_block(data: dict) -> list[str]:
+    """CI-553/CI-562: render the backend's regulated-precursor disclosure into **text**.
+
+    CI-541 added a top-level `precursor_disclosure` key to /compatibility/check,
+    /risk-warnings and /batch-safety. `_expose()` passes it through to
+    structuredContent for free — but the model reads `TextContent`, and that is
+    assembled field-by-field by each renderer, so a key nobody mentions simply
+    never appears. For `batch_safety_check` the loss is total: that tool returns a
+    bare string, so there is no structuredContent to fall back to either.
+
+    🔴 The disclosure is informational and the answer still stands — Blake's CI-541
+    ruling was "answer AND disclose", never "refuse". The wording is rendered
+    backend-side (`statement`, 5 languages, single source in the i18n catalog);
+    do NOT re-phrase it here or a second, unversioned copy starts drifting.
+    """
+    entries = data.get("precursor_disclosure") or []
+    if not entries:
+        return []
+    lines = [
+        "**⚠️ Regulated-precursor notice (informational — the analysis below was "
+        "still performed):**",
+    ]
+    for e in entries:
+        name = e.get("query_name") or e.get("matched_name") or "(unnamed)"
+        cas = e.get("cas")
+        label = f"**{name}**" + (f" (CAS {cas})" if cas else "")
+        statement = (e.get("statement") or "").strip()
+        if statement:
+            lines.append(f"- {label} — {statement}")
+        else:
+            # 🔴 Never drop an entry just because the rendered sentence is missing:
+            # a hit with no `statement` is exactly when the reader most needs to be
+            # told something was flagged. Fall back to the machine-readable facets
+            # and say plainly that the wording did not arrive.
+            facets = " / ".join(
+                str(e[k]) for k in ("regime", "tier", "authority") if e.get(k))
+            lines.append(
+                f"- {label} — listed as a regulated precursor"
+                + (f" ({facets})" if facets else "")
+                + ". The disclosure text was not returned by the backend; treat this "
+                  "as a flagged listing and verify against the cited regime."
+            )
+    lines.append("")
     return lines
 
 
@@ -3449,6 +3497,7 @@ async def batch_safety_check(
         if data.get("unresolved"):
             sections.extend(_unresolved_block(data, trailing_newline=True))
         sections.extend(_rejected_products_block(data))
+        sections.extend(_precursor_disclosure_block(data))
 
         # CI-89: extract documents and build SDS-backed chemical set
         documents = data.get("documents", [])
