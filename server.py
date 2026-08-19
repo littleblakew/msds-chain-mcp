@@ -2335,22 +2335,42 @@ def _precursor_disclosure_block(data: dict) -> list[str]:
     /risk-warnings and /batch-safety. `_expose()` passes it through to
     structuredContent for free — but the model reads `TextContent`, and that is
     assembled field-by-field by each renderer, so a key nobody mentions simply
-    never appears. For `batch_safety_check` the loss is total: that tool returns a
-    bare string, so there is no structuredContent to fall back to either.
+    never appears in the text面 for any of the three.
+
+    ⚠️ Do NOT repeat the CI-553 ticket's claim that `batch_safety_check` "returns a
+    bare string so it has no structuredContent" — measured false: it is annotated
+    `-> str` but actually returns a CallToolResult carrying `_expose(data)`
+    (`test_ci342_structured_passthrough.py` asserts exactly that). All three tools
+    reach structured clients; what was missing everywhere is the text面.
 
     🔴 The disclosure is informational and the answer still stands — Blake's CI-541
     ruling was "answer AND disclose", never "refuse". The wording is rendered
     backend-side (`statement`, 5 languages, single source in the i18n catalog);
     do NOT re-phrase it here or a second, unversioned copy starts drifting.
+
+    🔴 Batch truncation is why the header cannot promise "all of this was analysed":
+    the backend computes the disclosure BEFORE the 12-chemical size gate (deliberate
+    — a dropped chemical was still submitted and still audited), while this tool
+    accepts up to 20. So a disclosed chemical can be one that never entered the
+    analysis. When `truncated` is set we say so instead of implying coverage.
     """
     entries = data.get("precursor_disclosure") or []
     if not entries:
         return []
     lines = [
-        "**⚠️ Regulated-precursor notice (informational — the analysis below was "
-        "still performed):**",
+        "**⚠️ Regulated-precursor notice — informational only. This is a listing "
+        "notice, not a refusal: the requested analysis was performed and its "
+        "results follow below.**",
     ]
     for e in entries:
+        # 🔴 A non-dict entry must not take down the whole safety answer: this block
+        # runs before any result rendering, so an AttributeError here replaces the
+        # compatibility/risk answer the user asked for with a tool error — strictly
+        # worse than the missing disclosure being fixed. `_unresolved_block` guards
+        # the same way.
+        if not isinstance(e, dict):
+            lines.append(f"- {e} (unrecognised disclosure entry — reported verbatim)")
+            continue
         name = e.get("query_name") or e.get("matched_name") or "(unnamed)"
         cas = e.get("cas")
         label = f"**{name}**" + (f" (CAS {cas})" if cas else "")
@@ -2370,6 +2390,12 @@ def _precursor_disclosure_block(data: dict) -> list[str]:
                 + ". The disclosure text was not returned by the backend; treat this "
                   "as a flagged listing and verify against the cited regime."
             )
+    if data.get("truncated"):
+        lines.append(
+            "🔴 This request exceeded the batch size limit, so **not every submitted "
+            "chemical was analysed**. The notice above covers what you submitted; the "
+            "results below cover only the chemicals that appear in them."
+        )
     lines.append("")
     return lines
 
