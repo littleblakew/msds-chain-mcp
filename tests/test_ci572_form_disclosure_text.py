@@ -47,7 +47,7 @@ _CASES = [
     ("get_ppe_recommendation", "_direct_ppe",
      _listed({"ppe": {"gloves": ["Nitrile"]}, "minimum_ppe_level": 2,
               "signal_word": "Danger", "traceability": "sds_backed"}),
-     ("hydrofluoric acid",), ("Nitrile",)),
+     (["hydrofluoric acid"],), ("Nitrile",)),   # 🔴 list，与生产同形
     ("get_storage_guidance", "_direct_storage",
      _listed({"storage_class_label": "Corrosive Acids", "cabinet_color": "White"}),
      (["hydrofluoric acid"],), ("Corrosive Acids",)),
@@ -106,3 +106,59 @@ def test_no_disclosure_means_silence_not_a_guess(
     assert "⚠️" not in txt
     for keep in must_keep:
         assert keep in txt
+
+
+# ── review 抓到的第七条面：get_sds_document ────────────────────────────────
+
+_DOC_PAYLOAD = {
+    "available": True, "record_kind": "substance",
+    "chemical_name": "Hydrofluoric Acid", "cas": "7664-39-3",
+    "supplier": "Air Liquide USA LLC", "revision_date": "2022-09-01", "region": "US",
+    "pdf_url": "https://example.invalid/hf.pdf", "record_id": 1, "pdf_hash": "a" * 64,
+    "physical_form": "aqueous_solution", "physical_form_disclosure": _DISCLOSURE,
+}
+
+
+def _run_doc(payload):
+    """`get_sds_document` 在打后端之前先过 `_require_api_key`，所以这条路要先给凭证
+    （同 test_server_tools.py 的既有写法）——不给的话工具在渲染之前就返回一段
+    「需要认证」的文本，断言会在**没有执行到被测代码**的情况下红/绿，两种都是假的。"""
+    from request_identity import get_caller_credential, set_caller_credential
+    prev = get_caller_credential()
+    set_caller_credential("sk-msds-test")
+    try:
+        return _run(server.get_sds_document, "_direct_sds_document", payload,
+                    "hydrofluoric acid")
+    finally:
+        # 🔴 必须还原：凭证是 contextvar、跨用例可见，不还原会把
+        # test_request_identity 的「没有凭证时是什么行为」染绿（实测撞到过）。
+        set_caller_credential(prev)
+
+
+def test_sds_document_renders_the_disclosure_in_text_not_only_structured():
+    """后端在 `/sds-document-url` 上**早就**产出这两个键，而这条工具此前只把它们放进
+    structuredContent。多数客户端只读 text ⇒ 用户拿到 PDF 链接和出处，却读不到
+    「这份是水溶液、无水的我们没有」。（本票 review 抓到的，不是新缺陷是旧缺口。）"""
+    res = _run_doc(_DOC_PAYLOAD)
+    assert _DISCLOSURE in res
+    assert "Signed URL" in res, "披露不能挤掉这条工具本来的正文"
+
+
+def test_sds_document_stays_silent_without_a_disclosure():
+    payload = dict(_DOC_PAYLOAD, physical_form=None, physical_form_disclosure=None)
+    res = _run_doc(payload)
+    assert "⚠️" not in res or "formulated product" in res
+    assert "Signed URL" in res
+
+
+# ── 🔴 别给整句再套一层加粗：四种语言的这句话自带 `**`，套了会把否定词的强调反过来 ──
+
+def test_the_disclosure_line_does_not_nest_bold_markers():
+    """zh/ja/de/id 的披露文案里，加粗的正是否定词（「我们**没有**」/「**keine**」/
+    「**tidak**」）。外面再包一层 `**…**` 会拼出 `**A**B**C**`，客户端于是把 A、C
+    加粗、把中间那个否定词渲染成普通字 —— 强调恰好反了。英文那条不带 `**`，
+    所以这条守卫必须用**带标记的那种**文案，否则它对真实用例免疫。"""
+    zh_note = "这份数据描述的是水溶液形态。我们**没有**这个 CAS 无水形态的数据。"
+    lines = server._form_disclosure_lines({"physical_form_disclosure": zh_note})
+    assert lines == [f"- ⚠️ {zh_note}"]
+    assert "**⚠️" not in lines[0]

@@ -1307,7 +1307,12 @@ def _form_disclosure_lines(item: dict) -> list[str]:
     ⇒ 什么都不说，绝不编一句「本品为某某形态」。
     """
     note = item.get("physical_form_disclosure") if isinstance(item, dict) else None
-    return [f"- **⚠️ {note}**"] if note else []
+    # 🔴 **不给整句再套一层 `**`**：这句话在 zh/ja/de/id 四种语言里**自带**加粗标记，
+    # 而且加粗的正是否定词（zh「我们**没有**这个 CAS…」/ de「**keine**」/ id「**tidak**」）。
+    # 再套一层会拼出 `**A**B**C**`，markdown 客户端于是把 A、C 加粗、把中间那个否定词
+    # 渲染成普通文字 —— **强调恰好反了**，最该显眼的那半句反而最不显眼。
+    # （英文那条不带 `**`，所以这个 bug 只咬另外四种语言，本仓的默认 lang 恰恰是 zh。）
+    return [f"- ⚠️ {note}"] if note else []
 
 
 def _insufficient_lines(item: dict, what: str) -> list[str]:
@@ -2785,8 +2790,9 @@ async def get_sds_section(
         #
         # `None` ＝ 未判定（不是「只有一种形态」）⇒ 那时**什么都不说**，
         # 别编一句「本品为某某形态」出来。
-        if data.get("physical_form_disclosure"):
-            lines.append(f"- **⚠️ {data['physical_form_disclosure']}**")
+        # CI-572：改走 `_form_disclosure_lines`（此前是与它逐字相同的手写一份）。
+        # 格式留两份 ⇒ 改一处漏另一处，七条工具的披露会长成两个样子。
+        lines.extend(_form_disclosure_lines(data))
         lines.append(f"\n*Data source: {data.get('data_source', 'unknown')}*")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
@@ -3831,6 +3837,11 @@ async def get_sds_document(chemical: Chemical) -> CallToolResult:
                 "",
                 "Open in a browser or `curl -O` to download the PDF.",
             ]
+            # 🔴 CI-572 review 抓到的第七条面：后端在 `/sds-document-url` 上**早就**
+            # 产出这两个键，而这里只把它们塞进 structuredContent、文本里一个字没有
+            # ——多数客户端只把 text 喂给模型 ⇒ 用户拿到 HF 的 PDF 链接和出处，
+            # 却读不到「这份是水溶液、无水的我们没有」。与本票其余六条同一条理由。
+            lines.extend(_form_disclosure_lines(data))
             if kind == "product":
                 lines.insert(1, (
                     "- ⚠️ This is a **formulated product**. Its GHS classification "
@@ -3852,7 +3863,8 @@ async def get_sds_document(chemical: Chemical) -> CallToolResult:
                     # "is this the same physical file as get_sds_section returned",
                     # since record_id comes from a different table on each path.
                     "pdf_hash": data.get("pdf_hash"),
-                    # CI-347 的形态披露：文本里早就渲染了，structuredContent 此前读不到
+                    # CI-347 的形态披露（文本面见上方 `_form_disclosure_lines`；
+                    # CI-572 之前这里**只有** structuredContent，文本里没有）
                     "physical_form": data.get("physical_form"),
                     "physical_form_disclosure": data.get("physical_form_disclosure"),
                     "pdf_url": full_url,
