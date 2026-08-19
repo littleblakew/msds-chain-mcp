@@ -1858,7 +1858,11 @@ async def get_emergency_response(
         # 它们混在 immediate_actions 里、没有任何标记，而通用 [Hxxx] 行数量多篇幅大 ⇒
         # 模型拿通用行的数字把物质级那条改写掉（HF 的「立刻涂钙剂」被降级成
         # 「告知医护人员以便他们提供」＝延迟解毒）。标题里写死「不要用通用指引替换」。
-        priority = data.get("priority_steps") or []
+        # 🔴 按 `[protocol]` **前缀**认，不靠后端多返回一个字段：第一版是单独字段，
+        # 那等于把同一段安全关键原文复制第二份进载荷，实测把载荷推过裁剪预算、
+        # 反而把「立即冲洗 15 分钟」那句挤掉了。标记随文本走就没有这个问题。
+        priority = [a for a in (data.get("immediate_actions") or [])
+                    if isinstance(a, str) and a.startswith("[protocol]")]
         if priority:
             lines.append("**Substance-specific protocol — follow these first, verbatim** "
                          "(generic hazard-code guidance below does NOT override these; "

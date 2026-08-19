@@ -35,7 +35,9 @@ def _run(tool, patch_name, payload, *args):
         setattr(server, patch_name, orig)
 
 
-HF_LINE = ("HF-SPECIFIC — SKIN: apply 2.5% calcium gluconate gel to the affected skin "
+# 🔴 前缀是契约的一部分：后端用 `[protocol]` 标记物质级步骤（与 `[Hxxx]`、
+# `[glove-compat]` 同构）。本面按前缀分段，不依赖后端多返回一个复制原文的字段。
+HF_LINE = ("[protocol] HF-SPECIFIC — SKIN: apply 2.5% calcium gluconate gel to the affected skin "
            "immediately and keep massaging it in.")
 
 HF_EMERGENCY = {
@@ -43,7 +45,6 @@ HF_EMERGENCY = {
     "signal_word": "Danger",
     "provenance_note": ("PROVENANCE: not everything here is text from the cited SDS. "
                         "Items in `from_hcodes` are standard GHS hazard-code guidance."),
-    "priority_steps": [HF_LINE],
     "protocol_citation": "standard HF first-aid — US university EHS / NIH",
     "critical_antidote": True,
     "immediate_actions": [HF_LINE, "Call poison control or emergency services"],
