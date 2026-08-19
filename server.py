@@ -2362,34 +2362,89 @@ def _precursor_disclosure_block(data: dict) -> list[str]:
         "notice, not a refusal: the requested analysis was performed and its "
         "results follow below.**",
     ]
+
+    # 🔴 A non-dict entry must not take down the whole safety answer: this block runs
+    # before any result rendering, so an AttributeError here replaces the
+    # compatibility/risk answer the user asked for with a tool error — strictly worse
+    # than the missing disclosure being fixed. `_unresolved_block` guards the same way.
+    bad = [e for e in entries if not isinstance(e, dict)]
+    entries = [e for e in entries if isinstance(e, dict)]
+    for e in bad:
+        lines.append(f"- {e} (unrecognised disclosure entry — reported verbatim)")
+
+    # Group by chemical. Everyday bulk chemicals sit on several control lists at once
+    # (HCl: UN 1988 Table II + DEA List II + EU 273/2004 Cat 3), and those statements are
+    # the same sentence with the list name swapped in — printed one per row they buried
+    # the actual answer under seven near-identical paragraphs (measured live on Prod,
+    # hydrochloric acid + acetone).
+    #
+    # 🔴 The safety property is the equality test below, NOT this grouping: a follow-up
+    # statement is folded away ONLY if it equals the first one with its own tier
+    # substituted in. Anything else is printed in full — acetone's EU 2019/1148 Annex II
+    # entry (reportable suspicious transactions) survives that way, and so would two
+    # tiers of one regime that differ on a threshold.
+    #
+    # Grouping by (chemical, regime) was tried first; a mutation run showed it changes
+    # no output at all, because the equality test already refuses to fold anything that
+    # reads differently. Keeping it would have been a knob that looks protective and
+    # isn't — the kind of guard this repo keeps catching itself writing.
+    groups: dict[tuple, list[dict]] = {}
     for e in entries:
-        # 🔴 A non-dict entry must not take down the whole safety answer: this block
-        # runs before any result rendering, so an AttributeError here replaces the
-        # compatibility/risk answer the user asked for with a tool error — strictly
-        # worse than the missing disclosure being fixed. `_unresolved_block` guards
-        # the same way.
-        if not isinstance(e, dict):
-            lines.append(f"- {e} (unrecognised disclosure entry — reported verbatim)")
-            continue
-        name = e.get("query_name") or e.get("matched_name") or "(unnamed)"
-        cas = e.get("cas")
+        key = (e.get("cas") or e.get("query_name"),)
+        groups.setdefault(key, []).append(e)
+
+    for key, items in groups.items():
+        head = items[0]
+        name = head.get("query_name") or head.get("matched_name") or "(unnamed)"
+        cas = head.get("cas")
         label = f"**{name}**" + (f" (CAS {cas})" if cas else "")
-        statement = (e.get("statement") or "").strip()
-        if statement:
-            lines.append(f"- {label} — {statement}")
-        else:
+        statement = (head.get("statement") or "").strip()
+        if not statement:
             # 🔴 Never drop an entry just because the rendered sentence is missing:
             # a hit with no `statement` is exactly when the reader most needs to be
             # told something was flagged. Fall back to the machine-readable facets
             # and say plainly that the wording did not arrive.
             facets = " / ".join(
-                str(e[k]) for k in ("regime", "tier", "authority") if e.get(k))
+                str(head[k]) for k in ("regime", "tier", "authority") if head.get(k))
             lines.append(
                 f"- {label} — listed as a regulated precursor"
                 + (f" ({facets})" if facets else "")
                 + ". The disclosure text was not returned by the backend; treat this "
                   "as a flagged listing and verify against the cited regime."
             )
+            rest = items[1:]
+        else:
+            lines.append(f"- {label} — {statement}")
+            rest = items[1:]
+
+        head_tier = head.get("tier") or ""
+        same, different = [], []
+        for e in rest:
+            stmt = (e.get("statement") or "").strip()
+            tier = e.get("tier") or ""
+            if statement and stmt and head_tier and tier and \
+                    stmt == statement.replace(head_tier, tier):
+                same.append(e)
+            else:
+                different.append(e)
+        if same:
+            listed = " · ".join(
+                (e.get("tier") or "?") + (f" ({e['authority']})" if e.get("authority") else "")
+                for e in same)
+            lines.append(f"  Also listed on: {listed} — same wording as above.")
+        for e in different:
+            stmt = (e.get("statement") or "").strip()
+            if stmt:
+                lines.append(f"- {label} — {stmt}")
+            else:
+                facets = " / ".join(
+                    str(e[k]) for k in ("regime", "tier", "authority") if e.get(k))
+                lines.append(
+                    f"- {label} — listed as a regulated precursor"
+                    + (f" ({facets})" if facets else "")
+                    + ". The disclosure text was not returned by the backend; treat this "
+                      "as a flagged listing and verify against the cited regime."
+                )
     if data.get("truncated"):
         lines.append(
             "🔴 This request exceeded the batch size limit, so **not every submitted "

@@ -167,3 +167,80 @@ def test_empty_disclosure_renders_nothing():
         out = _run(server.check_chemical_compatibility, "_direct_compat", payload,
                    ["water", "acetone"])
         assert "Regulated-precursor" not in out, out
+
+
+# ── 折叠同一 regime 的重复行（2026-08-19 live 实测促成）────────────────────────
+# 这份 payload 是 Prod 上 `check_chemical_compatibility(["hydrochloric acid","acetone"])`
+# **真实返回**的 7 条（照抄，别改成手编的简化版）：日常大宗化学品同时挂在同一 regime 的
+# 多张清单上，逐条打印会在回答开头堆出七段近乎相同的话。
+def _drug(cas, name, tier, authority):
+    return {"cas": cas, "query_name": name, "matched_name": name,
+            "regime": "drug_precursor", "tier": tier, "authority": authority, "note": "",
+            "statement": (f"This substance is listed on {tier} and is a monitored "
+                          "drug-precursor chemical. Purchase, storage and transfer may "
+                          "require registration or reporting in some jurisdictions. It is "
+                          "a bulk industrial chemical — appearing on a control list does "
+                          "not mean there is anything unusual about this query.")}
+
+
+ACETONE_EXPLOSIVE = {
+    "cas": "67-64-1", "query_name": "acetone", "matched_name": "Acetone",
+    "regime": "explosive_precursor", "tier": "EU 2019/1148 Annex II",
+    "authority": "Regulation (EU) 2019/1148", "note": "",
+    "statement": ("This substance is listed on EU 2019/1148 Annex II. Suspicious "
+                  "transactions involving it are reportable; no concentration threshold "
+                  "applies. It is a bulk industrial chemical — appearing on a control "
+                  "list does not mean there is anything unusual about this query."),
+}
+
+LIVE_SEVEN = [
+    _drug("7647-01-0", "hydrochloric acid", "UN 1988 Table II",
+          "UN 1988 Convention Tables (INCB Red List, 23rd ed., 2025)"),
+    _drug("7647-01-0", "hydrochloric acid", "DEA List II", "21 CFR 1310.02"),
+    _drug("7647-01-0", "hydrochloric acid", "EU 273/2004 Category 3",
+          "Regulation (EC) No 273/2004, Annex I"),
+    _drug("67-64-1", "acetone", "UN 1988 Table II",
+          "UN 1988 Convention Tables (INCB Red List, 23rd ed., 2025)"),
+    _drug("67-64-1", "acetone", "DEA List II", "21 CFR 1310.02"),
+    _drug("67-64-1", "acetone", "EU 273/2004 Category 3",
+          "Regulation (EC) No 273/2004, Annex I"),
+    ACETONE_EXPLOSIVE,
+]
+
+
+def _block(entries):
+    return "\n".join(server._precursor_disclosure_block({"precursor_disclosure": entries}))
+
+
+def test_same_regime_duplicates_collapse_to_one_sentence():
+    """同一物质同一 regime 的多张清单：整句只说一次，其余只列清单名。"""
+    out = _block(LIVE_SEVEN)
+    assert out.count("is a monitored drug-precursor chemical") == 2, out  # HCl 一次、丙酮一次
+    assert "Also listed on: DEA List II (21 CFR 1310.02) · EU 273/2004 Category 3" in out, out
+
+
+def test_a_different_regime_is_never_collapsed():
+    """🔴 丙酮的 EU 2019/1148 Annex II 讲的是「可疑交易须报告、无浓度阈值」，与毒品前体监控
+    是两回事——它必须原样打印，不能被折进「Also listed on」。"""
+    out = _block(LIVE_SEVEN)
+    assert "Suspicious transactions involving it are reportable" in out, out
+
+
+def test_same_regime_but_materially_different_text_is_kept_in_full():
+    """折叠的判据是「把清单名换掉之后逐字相同」。不满足就必须全文打印——比如带浓度阈值的那种。"""
+    a = _drug("1310-73-2", "sodium hydroxide", "Annex I", "EU")
+    b = dict(a, tier="Annex II",
+             statement="This substance is listed on Annex II with a limit value of 12 % w/w.")
+    out = _block([a, b])
+    assert "limit value of 12 % w/w" in out, out
+    assert "Also listed on" not in out, out
+
+
+def test_collapsing_actually_shortens_the_live_payload():
+    """钉住效果本身：真实那 7 条 ⇒ **3 段整句**（HCl 毒品前体 / 丙酮毒品前体 / 丙酮爆炸物前体）
+    ＋ 2 行清单名折叠。没有这条，折叠逻辑被改回「全展开」时上面几条断言仍可能通过。"""
+    body = _block(LIVE_SEVEN)
+    full = [l for l in body.splitlines() if l.startswith("- ")]
+    collapsed = [l for l in body.splitlines() if l.lstrip().startswith("Also listed on:")]
+    assert len(full) == 3, full
+    assert len(collapsed) == 2, collapsed
