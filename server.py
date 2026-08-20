@@ -563,15 +563,126 @@ async def _quick_chat(message: str, lang: str | None = None) -> dict:
                 "_timed_out": True}
 
 
+# 🔴 CI-595：这两个数是**量出来的**，别凭感觉调。Prod 上一份 4 化学品的相容性结果
+# 10,227 字符；旧的 600 会让 6 对里只剩 2 对、且切在 JSON 中间，而被切掉的正是排在
+# 后面的漂白剂+盐酸（氯气）· 漂白剂+氨水（氯胺）。4000 的依据：matrix 2,534（结论）
+# + sources 1,509（供应商与版本日期，工具说明要求必须引用）+ 结构开销 ≈ 3,900，
+# 派生的 warnings（6,061，与 matrix 重复）被丢掉并留记号。
+# 总预算是防「某个工具返回一份病态大列表就把上下文撑爆」——按条目先到先得。
+_RAW_ENTRY_BUDGET = 4000
+_RAW_TOTAL_BUDGET = 8000
+
+
+def _shorten_strings(obj, allowance: int):
+    """把一个条目里过长的字符串截短（保留键），供 `_compact_for_context` 用。
+
+    只动**字符串值**，不动键、不动数值、不删字段——因为结论住在字段里
+    （`verdict` / `level`），而解释住在长字符串里（`reason`）。
+    截短处留一个可见记号，别让模型以为它读到的是全文。
+    """
+    if isinstance(obj, str):
+        if len(obj) <= allowance:
+            return obj
+        # 🔴 记号要带**量级**：只留 "..." 的话模型无从判断自己错过了多少
+        # （后端 `tool_payload` 用的也是这个约定）。
+        marker = f"...(+{len(obj) - allowance} chars)"
+        return obj[: max(allowance - len(marker), 1)] + marker
+    if isinstance(obj, dict):
+        return {k: _shorten_strings(v, allowance) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_shorten_strings(v, allowance) for v in obj]
+    return obj
+
+
+def _compact_for_context(result, budget: int = _RAW_ENTRY_BUDGET) -> str:
+    """把一条工具结果压进预算 —— **按结构压，不按字节切**。
+
+    🔴 CI-595：这里原来是 `json.dumps(result)[:600]`。逐对的
+    `check_compatibility` 结果各自远小于 600，所以每一对都活着；CI-589 之后快聊面
+    改发**一份整份矩阵**（Prod 实测 **10,227 字符**）⇒ 附录被切在 JSON 中间，
+    **6 对里只剩 2 对，而被切掉的正是排在后面的那几对**——漂白剂+盐酸（氯气）、
+    漂白剂+氨水（氯胺）。CI-589 存在的理由就是那两对。
+
+    🔴 而且这条通道不是可有可无的补充：本文件另一处注释已经写明「多数 MCP 客户端
+    **只读 text**，`structuredContent` 不进模型上下文」。
+
+    压缩红线：**宁可缩短每一条的解释，也不丢掉任何一条结论**。实在放不下才丢条目，
+    且必须显式写出丢了几条——静默丢弃就是把「我们没说」变成「它不存在」。
+    """
+    full = json.dumps(result, ensure_ascii=False)
+    if len(full) <= budget:
+        return full
+
+    def _dump(obj) -> str:
+        return json.dumps(obj, ensure_ascii=False)
+
+    if not isinstance(result, dict):
+        keep = max(budget - 24, 1)
+        return f"{full[:keep]}...(+{len(full) - keep} chars trimmed)"
+
+    # 顺序是**量出来的**，不是拍的。Prod 上一份 4 化学品的相容性结果 10,227 字符，构成：
+    #   warnings 6,061（**由 matrix 逐对派生**，与结论重复）· matrix 2,534（结论本体）
+    #   · sources 1,509（供应商 + 版本日期，MCP 工具说明要求必须引用）
+    # ⇒ ①先丢最大的那个列表（这里正好是派生的 warnings）②再逐级缩短字符串
+    #   ③实在不行才动剩下的列表。丢任何一条都留显式记号。
+    # 🔴 反过来做（先缩短字符串）几乎无效：缩到每串 12 字符总长仍有 7,005——
+    # 大头是**结构本身**不是散文，那样只会把 reason 割碎，最后照样得丢结论。
+    work = {k: v for k, v in result.items()}
+    lists = sorted(
+        [k for k, v in work.items() if isinstance(v, list) and v],
+        key=lambda k: len(_dump(work[k])), reverse=True,
+    )
+
+    # ① 丢最大的那个列表的条目——**只丢第一个（最大的）那条列表**，别顺手把结论也丢了
+    if lists:
+        key = lists[0]
+        while len(work[key]) > 0 and len(_dump(work)) > budget:
+            work[key] = work[key][:-1]
+            work[f"_omitted_{key}"] = work.get(f"_omitted_{key}", 0) + 1
+        if len(_dump(work)) <= budget:
+            return _dump(work)
+
+    # ② 逐级缩短字符串（保住全部剩余条目）
+    for allowance in (160, 100, 60, 40, 24, 12):
+        candidate = _dump(_shorten_strings(work, allowance))
+        if len(candidate) <= budget:
+            return candidate
+
+    # ③ 还是放不下，才丢剩下列表里的条目，同样留记号
+    work = _shorten_strings(work, 12)
+    for key in lists[1:]:
+        while len(work.get(key, [])) > 1 and len(_dump(work)) > budget:
+            work[key] = work[key][:-1]
+            work[f"_omitted_{key}"] = work.get(f"_omitted_{key}", 0) + 1
+        if len(_dump(work)) <= budget:
+            break
+
+    out = _dump(work)
+    if len(out) > budget:
+        # 🔴 兜底必须**真的**兜住：走到这里说明每个列表都只剩一条了还是超预算
+        # （病态输入）。不加这一步，`_RAW_TOTAL_BUDGET` 就只是个愿望——调用方
+        # 按返回值扣预算，而返回值可以任意大。代价是这一条不再是合法 JSON，
+        # 所以记号要写明白。
+        keep = max(budget - 28, 1)
+        return f"{out[:keep]}...(+{len(out) - keep} chars trimmed)"
+    return out
+
+
 def _format_tool_results(tool_results: list[dict]) -> str:
     """Render tool_results as compact structured text for context."""
     if not tool_results:
         return ""
     lines = ["\n\n---\n**Raw tool data:**"]
+    remaining = _RAW_TOTAL_BUDGET
     for item in tool_results:
         tool = item.get("tool", "unknown")
         result = item.get("result", {})
-        lines.append(f"\n`{tool}`: {json.dumps(result, ensure_ascii=False)[:600]}")
+        if remaining <= 0:
+            lines.append(f"\n`{tool}`: (omitted — raw-data budget exhausted)")
+            continue
+        rendered = _compact_for_context(result, min(_RAW_ENTRY_BUDGET, remaining))
+        remaining -= len(rendered)
+        lines.append(f"\n`{tool}`: {rendered}")
     return "\n".join(lines)
 
 
