@@ -1801,6 +1801,11 @@ async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None) -> st
         for item in data.get("results", []):
             lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
             lines.extend(_form_disclosure_lines(item))  # CI-572
+            # 🔴 CI-586：柜型是按**另一份** SDS 的更严分类给的时候，那句「是哪一家、
+            # 哪一版说的」必须进文本面 —— 否则模型看到的是一个没有出处的加严，
+            # 而它引用的 supplier 恰恰是**没有**这个分类的那一份（可追溯性反噬）。
+            if item.get("hazard_classification_conflict_note"):
+                lines.append(f"- {item['hazard_classification_conflict_note']}")
             lines.append(f"- **Storage class:** {item.get('storage_class_label', 'N/A')}")
             lines.append(f"- **Cabinet color:** {item.get('cabinet_color', 'N/A')}")
             lines.append(f"- **Recommended cabinet:** {item.get('recommended_cabinet', 'N/A')}")
