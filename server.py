@@ -574,19 +574,24 @@ _RAW_TOTAL_BUDGET = 8000
 
 
 def _shorten_strings(obj, allowance: int):
-    """把一个条目里过长的字符串截短（保留键），供 `_compact_for_context` 用。
+    """把过长的字符串截短（保留键），供 `_compact_for_context` 用。
 
-    只动**字符串值**，不动键、不动数值、不删字段——因为结论住在字段里
-    （`verdict` / `level`），而解释住在长字符串里（`reason`）。
-    截短处留一个可见记号，别让模型以为它读到的是全文。
+    只动**字符串值**，不动键、不动数值、不删字段——结论住在字段里（`verdict` /
+    `level`），解释住在长字符串里（`reason`）。截短处留一个带**量级**的记号。
+
+    🔴 两个坑（review 实测抓到的）：
+    ① 记号自己也占长度 ⇒ `allowance` 太小时「缩短」后的串**比原串还长**，
+       于是逐级收紧的循环**不单调**，反而把载荷推进兜底截断。⇒ 下限钳住。
+    ② 记号里的数字要是**真正丢掉的字符数**，不是「超出 allowance 的量」——
+       两者差一个记号的长度，报少了会让人以为丢得比实际少。
     """
     if isinstance(obj, str):
         if len(obj) <= allowance:
             return obj
-        # 🔴 记号要带**量级**：只留 "..." 的话模型无从判断自己错过了多少
-        # （后端 `tool_payload` 用的也是这个约定）。
-        marker = f"...(+{len(obj) - allowance} chars)"
-        return obj[: max(allowance - len(marker), 1)] + marker
+        keep = max(allowance - 20, 24)
+        if keep >= len(obj):
+            return obj
+        return obj[:keep] + f"...(+{len(obj) - keep} chars)"
     if isinstance(obj, dict):
         return {k: _shorten_strings(v, allowance) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -594,20 +599,35 @@ def _shorten_strings(obj, allowance: int):
     return obj
 
 
+def _with_markers_first(body: dict, omitted: dict) -> dict:
+    """把 `_omitted_*` 记号排在**最前面**。
+
+    🔴 review 实测：记号是新加的键，`json.dumps` 把它排在最后，于是兜底的字节截断
+    **第一个砍掉的就是它** ⇒ 模型拿到一份空矩阵却看不到任何「有东西被删了」的提示，
+    读起来就是「没有发现不相容」。丢弃重新变回静默——正是本函数存在的理由。
+    """
+    return {**omitted, **body}
+
+
 def _compact_for_context(result, budget: int = _RAW_ENTRY_BUDGET) -> str:
     """把一条工具结果压进预算 —— **按结构压，不按字节切**。
 
-    🔴 CI-595：这里原来是 `json.dumps(result)[:600]`。逐对的
-    `check_compatibility` 结果各自远小于 600，所以每一对都活着；CI-589 之后快聊面
-    改发**一份整份矩阵**（Prod 实测 **10,227 字符**）⇒ 附录被切在 JSON 中间，
-    **6 对里只剩 2 对，而被切掉的正是排在后面的那几对**——漂白剂+盐酸（氯气）、
-    漂白剂+氨水（氯胺）。CI-589 存在的理由就是那两对。
+    🔴 CI-595：这里原来是 `json.dumps(result)[:600]`。逐对的 `check_compatibility`
+    结果各自远小于 600，所以每一对都活着；CI-589 之后快聊面改发**一份整份矩阵**
+    （Prod 实测 **10,227 字符**）⇒ 附录被切在 JSON 中间，**6 对里只剩 2 对，而被切掉的
+    正是排在后面的那几对**——漂白剂+盐酸（氯气）、漂白剂+氨水（氯胺）。而本文件另一处
+    注释已写明「多数 MCP 客户端**只读 text**」⇒ 这条通道不是可有可无的补充。
 
-    🔴 而且这条通道不是可有可无的补充：本文件另一处注释已经写明「多数 MCP 客户端
-    **只读 text**，`structuredContent` 不进模型上下文」。
+    降级顺序（**每一步都可解释，不靠「哪个列表最大」这种启发式**）：
+      ① 逐级缩短长字符串——解释可以短，结论不能没有
+      ② 还放不下才丢条目，**在所有列表之间轮流丢**，并把 `_omitted_*` 记号排在最前
+      ③ 最后才字节截断，并写明丢了多少
 
-    压缩红线：**宁可缩短每一条的解释，也不丢掉任何一条结论**。实在放不下才丢条目，
-    且必须显式写出丢了几条——静默丢弃就是把「我们没说」变成「它不存在」。
+    🔴 **别再按「最大的那个列表」优先丢**（第一版就是这样，review 用 20 个化学品的
+    批量结果打穿了）：那份载荷里最大的列表**恰好是 matrix 本身**（190 对，而 warnings
+    只有 2 条）⇒ 190 对里 175 对被丢，**两条 incompatible 一条都没活下来**，因为它们
+    排在尾部——正是本票说「绝不能被切掉」的那个位置。轮流丢不保证公平，但它保证
+    **不会有某一条列表被单独清空**。
     """
     full = json.dumps(result, ensure_ascii=False)
     if len(full) <= budget:
@@ -617,52 +637,87 @@ def _compact_for_context(result, budget: int = _RAW_ENTRY_BUDGET) -> str:
         return json.dumps(obj, ensure_ascii=False)
 
     if not isinstance(result, dict):
-        keep = max(budget - 24, 1)
+        keep = max(budget - 28, 1)
         return f"{full[:keep]}...(+{len(full) - keep} chars trimmed)"
 
-    # 顺序是**量出来的**，不是拍的。Prod 上一份 4 化学品的相容性结果 10,227 字符，构成：
-    #   warnings 6,061（**由 matrix 逐对派生**，与结论重复）· matrix 2,534（结论本体）
-    #   · sources 1,509（供应商 + 版本日期，MCP 工具说明要求必须引用）
-    # ⇒ ①先丢最大的那个列表（这里正好是派生的 warnings）②再逐级缩短字符串
-    #   ③实在不行才动剩下的列表。丢任何一条都留显式记号。
-    # 🔴 反过来做（先缩短字符串）几乎无效：缩到每串 12 字符总长仍有 7,005——
-    # 大头是**结构本身**不是散文，那样只会把 reason 割碎，最后照样得丢结论。
-    work = {k: v for k, v in result.items()}
-    lists = sorted(
-        [k for k, v in work.items() if isinstance(v, list) and v],
-        key=lambda k: len(_dump(work[k])), reverse=True,
-    )
-
-    # ① 丢最大的那个列表的条目——**只丢第一个（最大的）那条列表**，别顺手把结论也丢了
-    if lists:
-        key = lists[0]
-        while len(work[key]) > 0 and len(_dump(work)) > budget:
-            work[key] = work[key][:-1]
-            work[f"_omitted_{key}"] = work.get(f"_omitted_{key}", 0) + 1
+    # ① 缩短字符串（保住全部字段与全部条目）
+    work = result
+    for allowance in (160, 100, 60, 40, 24):
+        work = _shorten_strings(result, allowance)
         if len(_dump(work)) <= budget:
             return _dump(work)
 
-    # ② 逐级缩短字符串（保住全部剩余条目）
-    for allowance in (160, 100, 60, 40, 24, 12):
-        candidate = _dump(_shorten_strings(work, allowance))
-        if len(candidate) <= budget:
-            return candidate
+    # ② 轮流丢条目，记号在最前
+    body = {k: v for k, v in work.items()}
+    omitted: dict = {}
+    lists = [k for k, v in body.items() if isinstance(v, list) and v]
+    # 🔴 dict 值同样能吃掉整个预算（`sources` 在实测载荷里 1,509 字符，而它不是列表）
+    # ——第一版只认列表，于是 matrix 被清空、结果**仍然**超预算、最后走字节截断，
+    # 两条红线（结论不许丢 / 必须仍是合法 JSON）被同一份载荷同时打破。
+    dicts = [k for k, v in body.items() if isinstance(v, dict) and v]
 
-    # ③ 还是放不下，才丢剩下列表里的条目，同样留记号
-    work = _shorten_strings(work, 12)
-    for key in lists[1:]:
-        while len(work.get(key, [])) > 1 and len(_dump(work)) > budget:
-            work[key] = work[key][:-1]
-            work[f"_omitted_{key}"] = work.get(f"_omitted_{key}", 0) + 1
-        if len(_dump(work)) <= budget:
+    def _too_big() -> bool:
+        return len(_dump(_with_markers_first(body, omitted))) > budget
+
+    guard = 0
+    while _too_big() and (lists or dicts) and guard < 10000:
+        guard += 1
+        pool = [(k, len(body[k])) for k in lists if len(body[k]) > 0] + \
+               [(k, len(body[k])) for k in dicts if len(body[k]) > 0]
+        if not pool:
             break
+        # 轮流：每次从**当前条目数最多**的那个容器里砍掉一条尾部条目。
+        # 🔴 用条目数而不是字节数选，才不会因为某个列表条目更长就被反复清空。
+        key = max(pool, key=lambda kv: kv[1])[0]
+        container = body[key]
+        # 按比例先砍一刀，别一条一条删——review 实测 3,000 条的列表逐条重序列化
+        # 要 7.7 秒 CPU，而这是**同步**调用在事件循环里。
+        # 🔴 **二分出放得下的最大条目数**，别按固定比例砍：砍 25% 会过度丢弃
+        # （实测同一份 Prod 载荷，预算够放 6 对时只留下了 3 对），而逐条砍在 3,000 条
+        # 的列表上要 7.7 秒 CPU——这是**同步**调用在事件循环里。二分两头都躲开。
+        def _sample(container, keep_n):
+            """跨步取样，**不是砍尾巴**。CI-589 的原始 bug 就是位置偏置；砍尾巴是
+            同一个毛病换个位置——review 实测 20 个化学品的批量结果里两条
+            `incompatible` 落在下标 150 / 188，砍尾巴让它们一条都没活下来。
+            取样不能保证留下危险的那些（那需要语义），但保证幸存者**铺满整个列表**。"""
+            n = len(container)
+            keep_n = max(1, min(keep_n, n))
+            if keep_n >= n:
+                return container
+            idx = sorted({min(round(i * (n - 1) / max(keep_n - 1, 1)), n - 1)
+                          for i in range(keep_n)}) if keep_n > 1 else [0]
+            if isinstance(container, list):
+                return [container[i] for i in idx]
+            keys = list(container)
+            return {keys[i]: container[keys[i]] for i in idx}
 
-    out = _dump(work)
+        original = container
+        lo, hi = 0, len(container) - 1
+        best = 0
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            body[key] = _sample(original, mid)
+            omitted[f"_omitted_{key}"] = len(original) - len(body[key])
+            if len(_dump(_with_markers_first(body, omitted))) <= budget:
+                best = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        body[key] = _sample(original, best)
+        kept = len(body[key]) if best else 0
+        if best == 0:
+            body[key] = [] if isinstance(original, list) else {}
+            kept = 0
+        omitted[f"_omitted_{key}"] = len(original) - kept
+        if kept == len(original):
+            # 这个容器已经放得下了却仍然超预算 ⇒ 换下一个容器，别死循环
+            lists = [k for k in lists if k != key]
+            dicts = [k for k in dicts if k != key]
+
+    out = _dump(_with_markers_first(body, omitted))
     if len(out) > budget:
-        # 🔴 兜底必须**真的**兜住：走到这里说明每个列表都只剩一条了还是超预算
-        # （病态输入）。不加这一步，`_RAW_TOTAL_BUDGET` 就只是个愿望——调用方
-        # 按返回值扣预算，而返回值可以任意大。代价是这一条不再是合法 JSON，
-        # 所以记号要写明白。
+        # ③ 兜底必须**真的**兜住：不加这一步，`_RAW_TOTAL_BUDGET` 只是个愿望——
+        # 调用方按返回值扣预算，而返回值可以任意大。代价是这一条不再是合法 JSON。
         keep = max(budget - 28, 1)
         return f"{out[:keep]}...(+{len(out) - keep} chars trimmed)"
     return out
@@ -674,14 +729,17 @@ def _format_tool_results(tool_results: list[dict]) -> str:
         return ""
     lines = ["\n\n---\n**Raw tool data:**"]
     remaining = _RAW_TOTAL_BUDGET
+    left = len(tool_results)
     for item in tool_results:
         tool = item.get("tool", "unknown")
         result = item.get("result", {})
-        if remaining <= 0:
-            lines.append(f"\n`{tool}`: (omitted — raw-data budget exhausted)")
-            continue
-        rendered = _compact_for_context(result, min(_RAW_ENTRY_BUDGET, remaining))
-        remaining -= len(rendered)
+        # 🔴 **按剩余条目均分**，不是先到先得。先到先得时前两个大结果就能吃掉总预算的
+        # 一半以上，第三个（可能正是相容性结论）只剩几十字符 ⇒ **比旧的 `[:600]` 还惨**，
+        # 而且「哪个工具活下来」取决于后端返回的顺序——一个与安全无关的变量。
+        share = max(remaining // max(left, 1), 200)
+        rendered = _compact_for_context(result, min(_RAW_ENTRY_BUDGET, share))
+        remaining = max(remaining - len(rendered), 0)
+        left -= 1
         lines.append(f"\n`{tool}`: {rendered}")
     return "\n".join(lines)
 

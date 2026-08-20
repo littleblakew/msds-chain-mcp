@@ -122,5 +122,95 @@ def test_the_whole_appendix_is_bounded():
     """单条有预算不等于整份有界：五个大结果照样能把上下文撑爆。"""
     results = [{"tool": f"t{i}", "result": _prod_shaped_matrix_result()} for i in range(5)]
     text = server._format_tool_results(results)
-    assert len(text) <= server._RAW_TOTAL_BUDGET + 500, len(text)
-    assert "budget exhausted" in text, "被总预算挡掉的条目也要说出来，别静默消失"
+    assert len(text) <= server._RAW_TOTAL_BUDGET + 800, len(text)
+    # 🔴 总预算按**剩余条目均分**，不是先到先得：先到先得时前两个大结果吃掉一半以上，
+    # 排在后面的（可能正是相容性结论）比旧的 [:600] 还惨，而谁活下来取决于后端返回顺序。
+    for i in range(5):
+        entry = text.split(f"`t{i}`: ", 1)[1].split("\n`", 1)[0]
+        assert len(entry) > 200, f"t{i} 只剩 {len(entry)} 字符——被前面的条目吃光了"
+        assert "_omitted_" in entry or len(entry) > 1000, entry[:80]
+
+
+# --- review 打穿第一版的三种形状，各留一条守卫 -----------------------------
+
+
+def _batch_shaped_result(n_chem: int = 20) -> dict:
+    """结论列表**本身就是最大的那个列表**：20 个化学品 = 190 对，而 warnings 只有 2 条。
+
+    🔴 第一版按「最大的列表优先丢」，在这份载荷上把 190 对里的 175 对丢掉，
+    **两条 incompatible 一条都没活下来**——因为它们排在尾部，正是本票说绝不能被切掉的位置。
+    """
+    chems = [f"chem-{i:02d}" for i in range(n_chem)]
+    matrix = [
+        _pair(a, b, "incompatible" if (i in (150, 188)) else "no_known_incompatibility")
+        for i, (a, b) in enumerate(
+            (x, y) for i, x in enumerate(chems) for y in chems[i + 1:])
+    ]
+    return {"matrix": matrix, "warnings": [
+        {"level": "high", "chemical": "x+y", "description": "d"} for _ in range(2)],
+        "count": len(matrix)}
+
+
+def test_the_conclusion_list_is_not_singled_out_when_it_is_the_biggest():
+    """🔴 降级不许把某一条列表单独清空——尤其不许是结论那条。"""
+    result = _batch_shaped_result()
+    parsed_text = server._compact_for_context(result)
+    try:
+        parsed = json.loads(parsed_text)
+    except json.JSONDecodeError:
+        pytest.fail(f"不是合法 JSON：{parsed_text[:120]}")
+    assert parsed.get("matrix"), "结论列表被清空了"
+    assert parsed.get("warnings"), "另一条列表却毫发无伤 —— 这就是「单独清空」"
+
+    # 🔴 真正的伤害不是「丢了多少」而是「丢的是哪些」：那两条 incompatible 落在
+    # 下标 150 / 188，**砍尾巴会让它们一条都活不下来**。判据打在位置分布上——
+    # 幸存者必须铺满整个列表，而不是全挤在前半段。
+    names = [p["chemical_b"] for p in parsed["matrix"]]
+    all_names = [p["chemical_b"] for p in result["matrix"]]
+    last_third = set(all_names[int(len(all_names) * 2 / 3):])
+    assert any(n in last_third for n in names), (
+        "幸存的全在前面 —— 尾部被系统性丢掉了，正是 CI-589 那个位置偏置换了个地方"
+    )
+
+
+def test_the_omitted_markers_survive_the_byte_fallback():
+    """🔴 记号必须排在最前：排在最后的话，兜底的字节截断第一个砍掉的就是它
+    ⇒ 模型拿到一份空矩阵却看不到任何「有东西被删了」的提示，读起来就是「没有不相容」。"""
+    # 预算要小到**连丢光都放不下**，兜底截断才会真的发生；否则这条守卫是空跑
+    # （第一版就是：预算 300 时丢一丢就够了，兜底根本没走到，把记号排到最后也照样绿）。
+    result = {"matrix": [_pair("a", f"b{i}", "incompatible") for i in range(20)],
+              "sources": {f"c{i}": {"supplier": "S" * 40, "revision_date": "2023-05-24"}
+                          for i in range(30)},
+              "grounded_count": 4, "ungrounded_count": 0}
+    out = server._compact_for_context(result, budget=90)
+    assert "chars trimmed" in out, f"前提：这个预算下必须走到兜底截断，实际={out[:120]}"
+    assert "_omitted_" in out, out[:120]
+
+
+def test_an_oversized_dict_field_is_trimmed_too():
+    """只认列表的话，一个超大的 dict 字段能吃掉整个预算，然后结论被丢光还照样超预算。"""
+    result = {"matrix": [_pair("a", "b", "incompatible")],
+              "sources": {f"c{i}": {"supplier": "S" * 80} for i in range(60)}}
+    out = server._compact_for_context(result, budget=900)
+    assert len(out) <= 900, len(out)
+    assert "_omitted_sources" in out, out[:150]
+
+
+def test_compaction_of_a_huge_list_is_not_quadratic():
+    """逐条删 + 每次全量重序列化，在 3,000 条的列表上要 7.7 秒 CPU——而这是**同步**
+    调用在事件循环里跑。按比例先砍一刀，别一条一条删。"""
+    import time
+
+    result = {"chemicals": [{"name": f"c{i}", "note": "x" * 100} for i in range(3000)]}
+    t0 = time.perf_counter()
+    server._compact_for_context(result, budget=2000)
+    assert time.perf_counter() - t0 < 1.5, "压缩本身成了瓶颈"
+
+
+def test_shortening_never_makes_a_payload_bigger():
+    """逐级收紧必须**单调**：记号本身占长度，`allowance` 太小时「缩短」会让串变长，
+    于是循环反而把载荷推进兜底截断。"""
+    payload = {f"k{i}": "y" * 13 for i in range(200)}
+    sizes = [len(json.dumps(server._shorten_strings(payload, a), ensure_ascii=False))
+             for a in (160, 100, 60, 40, 24, 12)]
+    assert sizes == sorted(sizes, reverse=True), sizes
