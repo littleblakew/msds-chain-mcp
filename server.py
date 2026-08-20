@@ -3198,28 +3198,12 @@ async def check_mixing_order(
     success = True
     try:
         ctx = f" Context: {context}." if context else ""
-        # 🔴 CI-588：形状钉死，别让模型自由成段。
-        # 原来的写法只给了「说明 (1)(2)(3)」，模型在中文下会把「推荐顺序」和「危险顺序」
-        # 揉进同一句里 —— Prod 实测出过「推荐把 稀释剂（少量的酸性溶液中逐滴加入水的原则）
-        # 按常规实验室惯例：将酸慢慢将酸加入大量水中…」这种自我缠绕的开头。**结论方向是对的，
-        # 但不能见人**（任何 demo 截图前必须先修）。
-        # 🔴 2026-08-21 复采两次未复现那句 ⇒ 它是**间歇**的：所以修法不是改措辞，而是
-        # 把**形状**钉住（固定小节 + 首行一句话 + 每节字数上限），让「揉成一句」这件事
-        # 没有发生的余地。同两次采样里更现实的 demo 杀手是**冗长**（每次七八百字）。
         message = (
-            f"What is the safe order for mixing {chemical_a} and {chemical_b}?{ctx}\n"
-            "Answer with EXACTLY these four blocks, in this order, and nothing else:\n"
-            "1. A single sentence stating the recommended order, in the form "
-            "\"Add <X> to <Y>\" (or \"Order does not matter for this pair\"). "
-            "No preamble, no restating the question.\n"
-            "2. `RECOMMENDED ORDER` — why, in at most 2 sentences.\n"
-            "3. `DANGEROUS ORDER` — the order to avoid and what happens if done wrong, "
-            "at most 2 sentences. Never put the recommended and the dangerous order in "
-            "the same sentence — they must be in their own blocks.\n"
-            "4. `PRECAUTIONS` — at most 4 bullets (cooling, addition rate, stirring, "
-            "inert atmosphere, PPE). One line each.\n"
-            "Keep the whole answer under 200 words. Do not add sections that are not "
-            "listed above."
+            f"What is the safe order for mixing {chemical_a} and {chemical_b}?{ctx} "
+            "Specify: (1) the RECOMMENDED addition order and why, "
+            "(2) the DANGEROUS order to avoid and what happens if done wrong, "
+            "(3) required precautions (cooling, addition rate, stirring, inert atmosphere). "
+            "If order doesn't matter for this pair, say so explicitly."
         )
         data = await _quick_chat(message, lang=lang)
         if data.get("_timed_out"):
