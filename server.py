@@ -3159,6 +3159,110 @@ async def validate_protocol_chemicals(
                     success=success, error_message=error_msg)
 
 
+def _mixing_order_prompt(chemical_a: str, chemical_b: str, context: str = "") -> str:
+    """`check_mixing_order` 发给 `/quick-chat` 的那一串。
+
+    🔴 **这串是量出来的，不是写出来的**，改它之前先读 `docs/pm/tickets/CI-613.md`。
+    Prod 交错采样（bleach + hydrochloric acid，同一时间窗，判据取 `/quick-chat`
+    返回的 `intent`）：
+
+    | 措辞 | 被 RAI 判 `rejected` |
+    |---|---|
+    | 旧串（`the DANGEROUS order to avoid and what happens if done wrong`） | **4/5**（跨轮累计约 2/3）|
+    | 本串 | **0/20**（跨轮累计 0/30）|
+
+    两个改动点，各自单独测过、缺一不可：
+    ① 开头换成 RAI 提示词里逐字白名单的形状（"Is it safe to mix …"）。
+       **只去掉反向条款而不改开头仍是 3/5** ⇒ 票里原本设想的「方向 1」就此证伪。
+    ② 反向那条从祈使式索取（"the DANGEROUS order to avoid and what happens if done
+       wrong"）改成判断句（"whether … is unsafe"）。内容一条没丢 ⇒ 不需要在 MCP 层
+       确定性渲染反向顺序。
+    🔴 **别再去改 RAI 提示词**：两条修法已证伪并回滚（`62a8f174` / `a53bd446`）。
+    🔴 0/30 只够说「没看到回归」，不够说「稳」⇒ 拒答兜底照样留着。
+
+    做成独立函数是为了让这串**可被引用而不是被抄写**：golden
+    `safety_guard.yaml::safe-order-001` 钉的就是它，跨仓一致性由
+    `scripts/cross-repo-consistency-check.py` 看住（抄写过的探针盯不住措辞漂移）。
+    """
+    ctx = f" Context: {context}." if context else ""
+    return (
+        f"Is it safe to mix {chemical_a} and {chemical_b}, and in which order "
+        f"should they be added?{ctx} "
+        "Specify: (1) the RECOMMENDED addition order and why, "
+        "(2) required precautions (cooling, addition rate, stirring, inert atmosphere), "
+        "(3) whether adding them in the reverse sequence is unsafe. "
+        "If order doesn't matter for this pair, say so explicitly."
+    )
+
+
+_MIXING_ORDER_UNAVAILABLE = (
+    "We could not determine a safe addition order for this pair, and no rule-based "
+    "compatibility verdict was available either. Do not infer that the order is "
+    "unimportant — consult the SDS (Section 7, Handling and Storage) or upload it, "
+    "and ask again with `ask_chemical_safety`."
+)
+
+
+async def _mixing_order_grounded_fallback(
+    chemical_a: str, chemical_b: str, lang: str | None,
+) -> dict:
+    """CI-613：quick-chat 被 RAI 判 `rejected` 时的**有依据兜底**。
+
+    形状与 `_quick_chat` 的返回一致（answer / tool_results / documents），
+    好让调用处不必分叉。
+
+    🔴 三条约束，动这段之前先读完：
+    ① **绝不自由生成**。只调 `/api/v2/compatibility/check`（规则引擎，不过 RAI 闸门，
+       `direct_api.py` 里没有 `check_rai`），把它的判定原样渲染。
+    ② **只传结构化的两个化学品名，绝不转发 `context`**（用户自由文本）或原始 message。
+       ⇒ 这条兜底**不能**被当成绕开审核的通道：它能输出的东西，任何人直接调
+       `check_chemical_compatibility` 本来就能拿到，没有新增能力面。
+    ③ **不许把「没查到不相容」渲染成绿灯**。相容性回答的是「能不能共存」，
+       而本工具问的是「按什么顺序加」——**顺序依据我们一条都没有**（同族 [[CI-611]]）。
+       所以文案必须显式说「加料顺序未判定」，不能让读者读成「随便什么顺序都行」。
+    """
+    try:
+        data = await _direct_compat([chemical_a, chemical_b], lang=lang)
+    except Exception:
+        # 兜底自己也失败：宁可说不知道，也不要编一个顺序出来。
+        return {"answer": _MIXING_ORDER_UNAVAILABLE, "tool_results": [], "documents": []}
+
+    lines = [
+        "**Addition order: NOT determined.**",
+        "",
+        "The narrative safety engine declined this phrasing, so the answer below comes "
+        "straight from the rule-based compatibility registry. It tells you whether these "
+        "two may be combined at all — it does **not** establish a safe addition sequence.",
+        "",
+    ]
+    pairs = data.get("pairs", [])
+    for pair in pairs:
+        level = (pair.get("level") or "unknown").lower()
+        tag = {"compatible": "OK", "caution": "CAUTION",
+               "incompatible": "DANGER"}.get(level, level.upper())
+        lines.append(
+            f"- **{pair.get('chem1', chemical_a)}** + **{pair.get('chem2', chemical_b)}**: "
+            f"[{tag}] {pair.get('level', 'unknown')}\n"
+            f"  Reason: {pair.get('reason', 'N/A')}\n"
+            f"  Basis (rule): {pair.get('source', 'unknown')}"
+        )
+        if level == "incompatible":
+            lines.append("  ⚠️ There is **no safe addition order** for an incompatible pair — "
+                         "do not combine them in either direction.")
+        else:
+            # 🔴 这一句是本函数存在的安全理由，别删：`no_known_incompatibility`
+            # 是「登记表里没查到冲突」，不是「顺序无关紧要」。硫酸+水正是这一档，
+            # 而它的全部危险都在顺序上。
+            lines.append("  ⚠️ No known incompatibility is **not** an addition-order clearance. "
+                         "The order for this pair was not evaluated — treat the sequence as "
+                         "unverified and consult the SDS before combining.")
+    if not pairs:
+        lines.append(_MIXING_ORDER_UNAVAILABLE)
+    if data.get("unresolved"):
+        lines.extend(_unresolved_block(data))
+    return {"answer": "\n".join(lines), "tool_results": [], "documents": data.get("documents", [])}
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Check Mixing Order", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_reported
 async def check_mixing_order(
@@ -3196,23 +3300,28 @@ async def check_mixing_order(
     """
     error_msg = None
     success = True
+    rai_rejected = False
     try:
-        ctx = f" Context: {context}." if context else ""
-        message = (
-            f"What is the safe order for mixing {chemical_a} and {chemical_b}?{ctx} "
-            "Specify: (1) the RECOMMENDED addition order and why, "
-            "(2) the DANGEROUS order to avoid and what happens if done wrong, "
-            "(3) required precautions (cooling, addition rate, stirring, inert atmosphere). "
-            "If order doesn't matter for this pair, say so explicitly."
-        )
+        message = _mixing_order_prompt(chemical_a, chemical_b, context)
         data = await _quick_chat(message, lang=lang)
         if data.get("_timed_out"):
             success = False
             error_msg = "timeout"
+        # 🔴 CI-613：拒答不是「没有答案」，是**这条通道**没有答案。
+        # 改措辞把误判率从 ~2/3 压到低位，但**压不到 0**（实测：任何写法都还有残余，
+        # 详见票）。残余那部分若原样返回，调用方拿到的是一句礼貌的「I can't assist」
+        # 加 0 个工具 —— 而这个工具最该服务的正是漂白剂+酸这类真危险对。
+        if data.get("intent") == "rejected":
+            rai_rejected = True
+            data = await _mixing_order_grounded_fallback(chemical_a, chemical_b, lang)
         return _quick_result(data)
     finally:
+        # 🔴 `rai_rejected` 是这条线唯一能在 Prod 上量残余误判率的地方：兜底之后
+        # 用户拿到的是一份正常答案，`success` 仍是 True，**从外面看不出发生过拒答**。
+        # 不记这一笔，就只能靠人拿危险对去手动采样才能发现措辞退化（CI-613 全程如此）。
         _log_intent("check_mixing_order", [chemical_a, chemical_b],
-                        _json.dumps({"chemical_a": chemical_a, "chemical_b": chemical_b, "context": context}),
+                        _json.dumps({"chemical_a": chemical_a, "chemical_b": chemical_b,
+                                     "context": context, "rai_rejected_fallback": rai_rejected}),
                     success=success, error_message=error_msg)
 
 
