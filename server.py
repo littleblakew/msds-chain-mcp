@@ -1475,13 +1475,25 @@ def _form_disclosure_lines(item: dict) -> list[str]:
     `None` ＝ 无话可说（未判定且该 CAS 不在双形态名单上，或我们一份 SDS 都没有）
     ⇒ 什么都不说，绝不编一句「本品为某某形态」。
     """
-    note = item.get("physical_form_disclosure") if isinstance(item, dict) else None
+    if not isinstance(item, dict):
+        return []
+    # 🔴 CI-615：稀释制剂披露走**同一个渲染出口**，理由与本函数存在的理由逐字相同
+    # ——后端产出 ≠ 用户看见。第一版只改了后端载荷，而 `get_sds_document` 的
+    # `structured_content` 是手写白名单、文本面只渲染形态那一条 ⇒ 走 MCP 打那条原始复现
+    # （水 → TMSP 0.03%）**一个字都看不到**。放在形态披露**之前**：它说的是「这份 SDS
+    # 描述的根本不是纯物质」，比「是哪一种形态」更靠前。
+    out: list[str] = []
+    if prep := item.get("preparation_disclosure"):
+        out.append(f"- ⚠️ {prep}")
+    note = item.get("physical_form_disclosure")
     # 🔴 **不给整句再套一层 `**`**：这句话在 zh/ja/de/id 四种语言里**自带**加粗标记，
     # 而且加粗的正是否定词（zh「我们**没有**这个 CAS…」/ de「**keine**」/ id「**tidak**」）。
     # 再套一层会拼出 `**A**B**C**`，markdown 客户端于是把 A、C 加粗、把中间那个否定词
     # 渲染成普通文字 —— **强调恰好反了**，最该显眼的那半句反而最不显眼。
     # （英文那条不带 `**`，所以这个 bug 只咬另外四种语言，本仓的默认 lang 恰恰是 zh。）
-    return [f"- ⚠️ {note}"] if note else []
+    if note:
+        out.append(f"- ⚠️ {note}")
+    return out
 
 
 def _insufficient_lines(item: dict, what: str) -> list[str]:
@@ -4244,6 +4256,12 @@ async def get_sds_document(chemical: Chemical) -> CallToolResult:
                     # CI-572 之前这里**只有** structuredContent，文本里没有）
                     "physical_form": data.get("physical_form"),
                     "physical_form_disclosure": data.get("physical_form_disclosure"),
+                    # 🔴 CI-615：这是一份**手写白名单**——后端新增的键不会自己出现在这里。
+                    # 那票的原始复现就是打这个工具（水 → TMSP，成分段 0.03%），
+                    # 而第一版只改了后端 ⇒ 这里漏抄 = 用户仍然什么都看不到。
+                    # `null` ＝ 这份 SDS 没声明百分比，**不表示「就是纯的」**。
+                    "preparation_percent": data.get("preparation_percent"),
+                    "preparation_disclosure": data.get("preparation_disclosure"),
                     "pdf_url": full_url,
                     "expires_in_seconds": 300,
                 },
