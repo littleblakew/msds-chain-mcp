@@ -340,9 +340,20 @@ def _extract_chemicals(data: dict) -> list[str] | None:
                 _add(pair.get("chemical_a") or pair.get("chem1"))
                 _add(pair.get("chemical_b") or pair.get("chem2"))
         # generate_risk_warnings：warnings[].chemical
+        # 🔴 CI-596：相容性派生的 warning 描述的是**两个**化学品，历史上把它们拼成
+        # `"A+B"` 放进 `chemical`。这里收的名字会进 intent 日志的化学品列（需求语料
+        # 的输入面）⇒ 拼接串会以一个不存在的化学品身份留痕。后端现在给结构化的
+        # `chemicals`，有它就以它为准，拼接的那个只当显示文案、绝不当身份。
         for w in _as_list(result.get("warnings")):
-            if isinstance(w, dict):
-                _add(w.get("chemical") or w.get("chemical_name"))
+            if not isinstance(w, dict):
+                continue
+            members = _as_list(w.get("chemicals"))
+            if members:
+                for member in members:
+                    if isinstance(member, str):
+                        _add(member)
+                continue
+            _add(w.get("chemical") or w.get("chemical_name"))
 
     # 🔴 名字里带逗号的丢掉：这一列在后端是 `",".join(names)` 存的（`mcp_log.py`），
     # 读回来按逗号切 ⇒ `N,N-dimethylformamide` 会变成 `N` + `N-dimethylformamide` 两条，
