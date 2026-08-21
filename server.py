@@ -344,8 +344,16 @@ def _extract_chemicals(data: dict) -> list[str] | None:
         # `"A+B"` 放进 `chemical`。这里收的名字会进 intent 日志的化学品列（需求语料
         # 的输入面）⇒ 拼接串会以一个不存在的化学品身份留痕。后端现在给结构化的
         # `chemicals`，有它就以它为准，拼接的那个只当显示文案、绝不当身份。
+        # 🔴 分支打在 `kind` 上而不是「`chemicals` 非空」上：后者会让一条
+        # kind=pair 但成员缺失的 warning 掉回 else，把拼接串重新当身份收进来
+        # ——未知升级成乐观分支。pair 拿不到成员就一个都不收。
         for w in _as_list(result.get("warnings")):
             if not isinstance(w, dict):
+                continue
+            if w.get("kind") == "pair":
+                for member in _as_list(w.get("chemicals")):
+                    if isinstance(member, str):
+                        _add(member)
                 continue
             members = _as_list(w.get("chemicals"))
             if members:
