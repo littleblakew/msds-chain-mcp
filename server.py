@@ -3263,6 +3263,58 @@ async def _mixing_order_grounded_fallback(
     return {"answer": "\n".join(lines), "tool_results": [], "documents": data.get("documents", [])}
 
 
+# 🔴 CI-611：这条工具问的是「按什么顺序加」，而它拿到的判定来自**相容性引擎**——
+# 那个引擎的单位是「**能不能共存**」。引擎自己的注释就写着「此处说的是共同存放；
+# 混合使用前仍需按各自的反应性单独核实」（`reactivity_matrix.py`）。
+#
+# ⇒ 硫酸 + 水拿到 `no_known_incompatibility` 是**共存问题的正确答案**，
+#   却会被读成**顺序问题的绿灯**——而这一对的全部危险恰恰在顺序上（水入酸 ⇒ 暴沸飞溅）。
+#
+# 🔴 **不把共存判定改红**：它作为共存答案是对的，改红是新的误伤
+# （[[feedback-safety-fix-made-it-worse]]：只验「会不会漏放」而不验「会不会误伤」是半道验证）。
+# 这里只做**加法**——显式声明「加料顺序未判定」，并说清依据为什么不存在。
+#
+# 🔴 **「未判定」是结构性的，不是这次查不到**：全仓零顺序维度（规则引擎里没有
+# `order_sensitive`/`addition_order` 任何形态），SDS 第 7 节只以原文存在于
+# `msds_sections.content`、从未结构化 ⇒ 规则引擎**永远**给不出顺序判定。
+# 散文里那句「酸入水」来自模型，不是来自依据。
+_ORDER_NOT_DETERMINED = {
+    "verdict": "not_determined",
+    "reason": "The rule engine has no addition-order dimension; SDS Section 7 is stored "
+              "as raw text only. Any ordering advice in the prose above is model-generated, "
+              "not derived from a structured source.",
+    "not_a_clearance": "A compatibility verdict answers whether two chemicals may COEXIST. "
+                       "It is not a clearance for the ORDER of addition — sulfuric acid + water "
+                       "is the canonical case where coexistence is fine and the order is the "
+                       "entire hazard.",
+}
+
+
+def _order_scope_note(data: dict) -> str:
+    """CI-611：把「共存 ≠ 顺序」这句话放进**用户真正读到的那条通道**（文本）。
+
+    🔴 多数 MCP 客户端只读 text —— 只塞进 structuredContent 等于没修
+    （[[fix-never-reaches-the-real-consumer]]）。
+    不相容的对不需要这句：那种情况下正确的话是「没有安全的加料顺序」，已单独给出。
+    """
+    incompatible = False
+    for tr in data.get("tool_results", []):
+        res = tr.get("result") if isinstance(tr, dict) else None
+        if not isinstance(res, dict):
+            continue
+        for pair in res.get("matrix", []) or []:
+            if str(pair.get("level") or pair.get("verdict") or "").lower() == "incompatible":
+                incompatible = True
+    if incompatible:
+        return ("\n\n---\n⚠️ **This pair is INCOMPATIBLE — there is no safe addition order.** "
+                "Do not combine them in either direction.")
+    return ("\n\n---\n⚠️ **Addition order: not determined by any structured source.** "
+            "A compatibility verdict (e.g. \"no known incompatibility\") answers whether these "
+            "may COEXIST — it is *not* a clearance for the order of addition. Sulfuric acid + "
+            "water is the canonical case: coexistence is unremarkable, the order is the whole "
+            "hazard. Treat any sequence above as unverified guidance and check SDS Section 7.")
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Check Mixing Order", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_reported
 async def check_mixing_order(
@@ -3314,7 +3366,13 @@ async def check_mixing_order(
         if data.get("intent") == "rejected":
             rai_rejected = True
             data = await _mixing_order_grounded_fallback(chemical_a, chemical_b, lang)
-        return _quick_result(data)
+        else:
+            # CI-611：正常路径也要说清「共存 ≠ 顺序」。兜底那一支自己已经说了。
+            data = {**data, "answer": data.get("answer", "") + _order_scope_note(data)}
+        res = _quick_result(data)
+        res.structured_content = {**(res.structured_content or {}),
+                                  "addition_order": _ORDER_NOT_DETERMINED}
+        return res
     finally:
         # 🔴 `rai_rejected` 是这条线唯一能在 Prod 上量残余误判率的地方：兜底之后
         # 用户拿到的是一份正常答案，`success` 仍是 True，**从外面看不出发生过拒答**。
