@@ -1573,6 +1573,7 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
             lines.extend(_unresolved_block(data, trailing_newline=True))
         lines.extend(_rejected_products_block(data))
         lines.extend(_precursor_disclosure_block(data))
+        lines.extend(_no_hazard_basis_block(data))
 
         # CI-89-inline: per-chemical link lookup so each pair row carries its own
         # SDS links (survives client-model summarization better than a trailing block).
@@ -1665,6 +1666,7 @@ async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None)
             lines.extend(_unresolved_block(data, trailing_newline=True))
         lines.extend(_rejected_products_block(data))
         lines.extend(_precursor_disclosure_block(data))
+        lines.extend(_no_hazard_basis_block(data))
 
         # CI-89: build a set of chemicals that have SDS-backed documents
         documents = data.get("documents", [])
@@ -1690,7 +1692,10 @@ async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None)
             if w.get("reference"):
                 lines.append(f"- **Reference:** {w['reference']}")
 
-        if not data.get("warnings"):
+        if not data.get("warnings") and not data.get("no_hazard_basis"):
+            # 🔴 CI-666：只有在**确实没有可说的**时候才说这句。有 `no_hazard_basis`
+            # 时上面已经逐条说清了「匹配到的记录没有危害数据」，再补一句
+            # "No risk warnings found" 会把它重新压回「查过了、没有」。
             lines.append("No risk warnings found for the given chemicals.")
 
         # CI-89: append SDS document links
@@ -2595,6 +2600,41 @@ def _rejected_products_block(data: dict) -> list[str]:
         "These were **excluded from the results below** — treat any conclusion "
         "here as covering only the other inputs.\n"
     )
+    return lines
+
+
+def _no_hazard_basis_block(data: dict) -> list[str]:
+    """CI-666: render the backend's "we matched a record but it has no hazard data" note.
+
+    🔴 **Without this the fix does not reach the consumer that produced the bug report.**
+    The Prod repro was `get_chemical_risk_warnings(["carbon disulfide"])` over MCP:
+    the response was fully-formed and completely empty, and the only thing the model
+    saw in `TextContent` was `"No risk warnings found for the given chemicals."` — which
+    reads as "we checked, there are none". The backend now publishes a top-level
+    `no_hazard_basis` list saying *why*; `_expose()` carries it into structuredContent
+    for free, **but the model reads TextContent**, which is assembled field-by-field.
+    Same shape of miss as CI-553/CI-562 for `precursor_disclosure`.
+
+    🔴 The wording is rendered backend-side (5 languages, single source in the i18n
+    catalog) — do NOT re-phrase it here or a second, unversioned copy starts drifting.
+    That wording deliberately names the matched CAS: the substance-level answer can
+    still be wrong (a name can match the wrong record), and the CAS is the only clue
+    the caller has to notice that.
+
+    🔴 A non-dict entry must not take down the whole safety answer — same guard, and
+    same reason, as `_precursor_disclosure_block` / `_unresolved_block`.
+    """
+    entries = [e for e in (data.get("no_hazard_basis") or []) if isinstance(e, dict)]
+    if not entries:
+        return []
+    lines = [
+        "**⚠️ Some chemicals matched a record that carries no hazard data — "
+        "this is NOT a finding that they are safe.**",
+    ]
+    for e in entries:
+        name = e.get("query") or e.get("cas") or "Unknown"
+        reason = e.get("reason_en") or e.get("reason") or ""
+        lines.append(f"- **{name}** (CAS {e.get('cas', 'n/a')}): {reason}")
     return lines
 
 
@@ -4018,6 +4058,7 @@ async def batch_safety_check(
             sections.extend(_unresolved_block(data, trailing_newline=True))
         sections.extend(_rejected_products_block(data))
         sections.extend(_precursor_disclosure_block(data))
+        sections.extend(_no_hazard_basis_block(data))
 
         # CI-89: extract documents and build SDS-backed chemical set
         documents = data.get("documents", [])
@@ -4071,7 +4112,10 @@ async def batch_safety_check(
             )
 
         if not data.get("risk_warnings"):
-            sections.append("No risk data available.")
+            # 🔴 CI-666：同上——`no_hazard_basis` 已经逐条说明时别再盖一句
+            # "No risk data available."，那句读起来就是「查过了、没有」。
+            if not data.get("no_hazard_basis"):
+                sections.append("No risk data available.")
 
         # CI-89: append SDS document links
         if documents:
