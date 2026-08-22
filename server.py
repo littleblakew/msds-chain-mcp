@@ -2623,6 +2623,12 @@ def _no_hazard_basis_block(data: dict) -> list[str]:
 
     🔴 A non-dict entry must not take down the whole safety answer — same guard, and
     same reason, as `_precursor_disclosure_block` / `_unresolved_block`.
+
+    🔴 **天花板：渲染进 TextContent ≠ 用户读到。** [[CI-592]] 与 [[CI-523]] 都实测过——
+    工具文本要经过 claude.ai / Copilot 那一层**重写**才到用户眼前，而结构化披露会被
+    summary LLM 复述掉。所以这个 block 让披露**有机会**到达，不保证到达。
+    ⇒ 别在票里、也别对外把「加了渲染线」说成「修复已到达消费者」；真要确定性，
+    得走那条我们自己控制渲染的通道（web 快聊 / Slack / Teams 的 `rich_message.py`）。
     """
     entries = [e for e in (data.get("no_hazard_basis") or []) if isinstance(e, dict)]
     if not entries:
