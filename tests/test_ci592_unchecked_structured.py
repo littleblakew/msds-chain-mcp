@@ -111,9 +111,12 @@ def test_directive_wording_never_asserts_absence_itself(monkeypatch):
         assert forbidden not in directive, f"指令自己断言了不存在：{forbidden}"
 
 
-@pytest.mark.parametrize("over", [{"unchecked": []}, {}])
+@pytest.mark.parametrize("over", [{"unchecked": []}, {"unchecked": None}, {}])
 def test_no_directive_when_nothing_was_unchecked(monkeypatch, over):
-    """空列表、以及老后端（键缺失）⇒ 都不出这段。噪声会让真出现时没人看。
+    """三种都不出这段：空列表（算过没漏）· null（后端说这一轮没算）· 键缺失（老后端）。
+
+    🔴 三者在 structuredContent 里仍可区分（后端 CI-592 定的三态），这里刻意合并
+    ——没有可靠名单时凭空说一句「可能有没查的」是噪声，噪声会让真出现时没人看。
 
     变异：把 `_unchecked_directive` 的空值判断去掉（改成无条件渲染）⇒ 红。
     """
