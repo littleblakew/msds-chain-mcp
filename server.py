@@ -340,9 +340,28 @@ def _extract_chemicals(data: dict) -> list[str] | None:
                 _add(pair.get("chemical_a") or pair.get("chem1"))
                 _add(pair.get("chemical_b") or pair.get("chem2"))
         # generate_risk_warnings：warnings[].chemical
+        # 🔴 CI-596：相容性派生的 warning 描述的是**两个**化学品，历史上把它们拼成
+        # `"A+B"` 放进 `chemical`。这里收的名字会进 intent 日志的化学品列（需求语料
+        # 的输入面）⇒ 拼接串会以一个不存在的化学品身份留痕。后端现在给结构化的
+        # `chemicals`，有它就以它为准，拼接的那个只当显示文案、绝不当身份。
+        # 🔴 分支打在 `kind` 上而不是「`chemicals` 非空」上：后者会让一条
+        # kind=pair 但成员缺失的 warning 掉回 else，把拼接串重新当身份收进来
+        # ——未知升级成乐观分支。pair 拿不到成员就一个都不收。
         for w in _as_list(result.get("warnings")):
-            if isinstance(w, dict):
-                _add(w.get("chemical") or w.get("chemical_name"))
+            if not isinstance(w, dict):
+                continue
+            if w.get("kind") == "pair":
+                for member in _as_list(w.get("chemicals")):
+                    if isinstance(member, str):
+                        _add(member)
+                continue
+            members = _as_list(w.get("chemicals"))
+            if members:
+                for member in members:
+                    if isinstance(member, str):
+                        _add(member)
+                continue
+            _add(w.get("chemical") or w.get("chemical_name"))
 
     # 🔴 名字里带逗号的丢掉：这一列在后端是 `",".join(names)` 存的（`mcp_log.py`），
     # 读回来按逗号切 ⇒ `N,N-dimethylformamide` 会变成 `N` + `N-dimethylformamide` 两条，
@@ -362,6 +381,11 @@ def _quick_result(data: dict) -> CallToolResult:
     CI-89: if the backend returns a top-level `documents` list (blob-backed SDS
     descriptors), append an "📄 Original SDS" section to the text and include
     the list in structuredContent.
+
+    🔴 CI-592：structuredContent **从手抄白名单换成透传**（`_expose`，与 CI-342 给直连
+    工具做的同一件事）。旧写法逐字段列了 3 个键，后端新增的字段**不会带上，也不会报错**
+    ——客户端侧就是「这个字段不存在」。本票要送出去的 `unchecked` 正是这样一个新字段，
+    而下一个新字段还会来。
     """
     answer = data.get("answer", "")
     tool_results = data.get("tool_results", [])
@@ -371,12 +395,59 @@ def _quick_result(data: dict) -> CallToolResult:
     # the client model summarizes the answer and drops the trailing link — verified on
     # prod: backend returns documents correctly, but claude.ai never surfaced the link
     # for ask_chemical_safety while the (short, link-last) direct tools did.
-    text = answer + _format_sds_documents(documents) + _format_tool_results(tool_results)
+    text = (_unchecked_directive(data.get("unchecked"))
+            + answer + _format_sds_documents(documents)
+            + _format_tool_results(tool_results))
     return CallToolResult(
         content=[TextContent(type="text", text=text)],
-        structured_content={"answer": answer, "tool_results": tool_results,
-                           "documents": documents},
+        # 🔴 `override` 那三个键是**已有契约**：老写法无论后端给没给都保证它们在
+        # （`documents` 缺失时给 `[]`）。换成透传时若不补这一手，后端某次没带
+        # `documents` 就会让读 `sc["documents"]` 的客户端 KeyError —— 全量测试当场
+        # 抓到（`test_quick_result_ci89_no_documents`）。**新键不享受这个待遇**：
+        # `unchecked` 缺失时就该缺失，那是「老后端」这个信息本身。
+        structured_content=_expose(
+            data, drop=_QUICK_INTERNAL_KEYS,
+            override={"answer": answer, "tool_results": tool_results,
+                      "documents": documents}),
     )
+
+
+# 🔴 CI-592：这条通道上「散文」不是确定性的——`answer` 会被 claude.ai / Copilot 的
+# 客户端模型**重写**之后才到用户眼前，而 CI-587 的原始事故正是从 MCP 的
+# `validate_protocol_chemicals` 上观察到的。所以这里给的是**指令**，不是内容：
+# 内容（用户可见的那段话）由后端确定性渲染在 `answer` 最前面，本行只负责让改写它的
+# 那个模型知道这段不许丢、不许改写成「我们没有这些数据」。
+#
+# 形状照抄 [[CI-567]] 的 `[protocol]`：那次实测证明**光把正确内容放进载荷不够**，
+# 模型仍会用通用内容覆盖物质级步骤，是「配对的显式禁令」把它扳回来的。
+#
+# 🔴 措辞红线与后端模板同源（`quick_engine._UNCHECKED_TEMPLATES`）：只说两件真话
+# ——没被检查、怎样才能让它被检查。**不许出现「未收录 / 没有数据 / 建议上传」**，
+# 那是断言一件我们根本没验证过的事（CI-243 / CI-322 / CI-334 三次同形事故）。
+_UNCHECKED_DIRECTIVE = (
+    "[unchecked] {n} chemical(s) were NOT looked up in this turn (per-question limit): "
+    "{names}.\n"
+    "You MUST relay this to the user BEFORE any safety conclusion, and you MUST NOT "
+    "state or imply whether we do or do not have data/records for them — this turn did "
+    "not look. Tell the user to ask about them separately. Do not drop this when "
+    "summarizing.\n\n"
+)
+
+
+def _unchecked_directive(unchecked) -> str:
+    """把后端的 `unchecked` 渲染成给客户端模型的显式指令。空/缺失 ⇒ 空串。
+
+    🔴 **三态，这里只有两种渲染，是有意的**：`[]`＝后端说「没有未检查的」；`null`＝
+    后端说「这一轮没算」（额度用尽、或 5 条走不到化学管线的早退路径）；键缺失＝老后端
+    （本仓与后端各自发布，版本会错开）。后两者都渲染成空串——没有可靠名单时凭空说一句
+    「可能有没查的」只会制造噪声。区分留在 structuredContent 里，客户端自己看得见。
+    """
+    if not isinstance(unchecked, list):
+        return ""
+    names = [str(n) for n in unchecked if isinstance(n, str) and n.strip()]
+    if not names:
+        return ""
+    return _UNCHECKED_DIRECTIVE.format(n=len(names), names=", ".join(names))
 
 
 # 后端没给 note 时的兜底文案（老后端、或将来新增的 reason）。键是机器可判的
@@ -1077,6 +1148,12 @@ def _strip_usage(data: dict) -> dict:
 # 要挡的键必须写进 `drop`**，于是「决定不给」这件事永远是显式的、可 grep 的。
 _INTERNAL_KEYS = frozenset({"_usage"})
 
+# CI-592：`/quick-chat` 的载荷除了 `_usage` 还带一个 `_timed_out`——那是 `_quick_chat`
+# 自己在超时兜底时打的标记，工具函数用它记 `_log_intent`，对客户端没有意义（超时这件事
+# 已经写在 `answer` 里）。🔴 它必须**显式**出现在这里：`_expose` 默认全透，漏掉就会把一个
+# 下划线开头的内部标记发给客户端。
+_QUICK_INTERNAL_KEYS = _INTERNAL_KEYS | frozenset({"_timed_out"})
+
 
 def _expose(data: dict, *, rename: dict[str, str] | None = None,
             drop: frozenset[str] = _INTERNAL_KEYS, override: dict | None = None) -> dict:
@@ -1609,6 +1686,7 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
             lines.extend(_unresolved_block(data, trailing_newline=True))
         lines.extend(_rejected_products_block(data))
         lines.extend(_precursor_disclosure_block(data))
+        lines.extend(_no_hazard_basis_block(data))
 
         # CI-89-inline: per-chemical link lookup so each pair row carries its own
         # SDS links (survives client-model summarization better than a trailing block).
@@ -1701,6 +1779,7 @@ async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None)
             lines.extend(_unresolved_block(data, trailing_newline=True))
         lines.extend(_rejected_products_block(data))
         lines.extend(_precursor_disclosure_block(data))
+        lines.extend(_no_hazard_basis_block(data))
 
         # CI-89: build a set of chemicals that have SDS-backed documents
         documents = data.get("documents", [])
@@ -1726,7 +1805,10 @@ async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None)
             if w.get("reference"):
                 lines.append(f"- **Reference:** {w['reference']}")
 
-        if not data.get("warnings"):
+        if not data.get("warnings") and not data.get("no_hazard_basis"):
+            # 🔴 CI-666：只有在**确实没有可说的**时候才说这句。有 `no_hazard_basis`
+            # 时上面已经逐条说清了「匹配到的记录没有危害数据」，再补一句
+            # "No risk warnings found" 会把它重新压回「查过了、没有」。
             lines.append("No risk warnings found for the given chemicals.")
 
         # CI-89: append SDS document links
@@ -1901,6 +1983,11 @@ async def ask_chemical_safety(
 
     When presenting the answer, cite the returned source and do not add hazard,
     medical, or regulatory claims that are not in the tool output.
+
+    A question may name more chemicals than one turn checks. When the result carries a
+    non-empty `unchecked` list, you MUST say so before any conclusion and MUST NOT state
+    or imply whether data exists for those — this turn did not look them up. Tell the
+    user to ask about them separately.
 
     Args:
         question: Any chemical safety question, e.g.
@@ -2607,6 +2694,47 @@ def _rejected_products_block(data: dict) -> list[str]:
     return lines
 
 
+def _no_hazard_basis_block(data: dict) -> list[str]:
+    """CI-666: render the backend's "we matched a record but it has no hazard data" note.
+
+    🔴 **Without this the fix does not reach the consumer that produced the bug report.**
+    The Prod repro was `get_chemical_risk_warnings(["carbon disulfide"])` over MCP:
+    the response was fully-formed and completely empty, and the only thing the model
+    saw in `TextContent` was `"No risk warnings found for the given chemicals."` — which
+    reads as "we checked, there are none". The backend now publishes a top-level
+    `no_hazard_basis` list saying *why*; `_expose()` carries it into structuredContent
+    for free, **but the model reads TextContent**, which is assembled field-by-field.
+    Same shape of miss as CI-553/CI-562 for `precursor_disclosure`.
+
+    🔴 The wording is rendered backend-side (5 languages, single source in the i18n
+    catalog) — do NOT re-phrase it here or a second, unversioned copy starts drifting.
+    That wording deliberately names the matched CAS: the substance-level answer can
+    still be wrong (a name can match the wrong record), and the CAS is the only clue
+    the caller has to notice that.
+
+    🔴 A non-dict entry must not take down the whole safety answer — same guard, and
+    same reason, as `_precursor_disclosure_block` / `_unresolved_block`.
+
+    🔴 **天花板：渲染进 TextContent ≠ 用户读到。** [[CI-592]] 与 [[CI-523]] 都实测过——
+    工具文本要经过 claude.ai / Copilot 那一层**重写**才到用户眼前，而结构化披露会被
+    summary LLM 复述掉。所以这个 block 让披露**有机会**到达，不保证到达。
+    ⇒ 别在票里、也别对外把「加了渲染线」说成「修复已到达消费者」；真要确定性，
+    得走那条我们自己控制渲染的通道（web 快聊 / Slack / Teams 的 `rich_message.py`）。
+    """
+    entries = [e for e in (data.get("no_hazard_basis") or []) if isinstance(e, dict)]
+    if not entries:
+        return []
+    lines = [
+        "**⚠️ Some chemicals matched a record that carries no hazard data — "
+        "this is NOT a finding that they are safe.**",
+    ]
+    for e in entries:
+        name = e.get("query") or e.get("cas") or "Unknown"
+        reason = e.get("reason_en") or e.get("reason") or ""
+        lines.append(f"- **{name}** (CAS {e.get('cas', 'n/a')}): {reason}")
+    return lines
+
+
 def _precursor_disclosure_block(data: dict) -> list[str]:
     """CI-553/CI-562: render the backend's regulated-precursor disclosure into **text**.
 
@@ -3165,6 +3293,12 @@ async def validate_protocol_chemicals(
 
     Use this as the FIRST step before calling batch_safety_check or
     check_chemical_compatibility — it saves the user from manually listing chemicals.
+
+    A protocol routinely names more chemicals than one turn checks. The result carries an
+    `unchecked` list of the ones this turn did NOT look up. When it is non-empty you MUST
+    report those chemicals as "not checked" before any conclusion, and you MUST NOT say
+    or imply that we lack data or a record for them — nothing was looked up. Tell the
+    user to re-send them separately or in smaller batches.
 
     Args:
         protocol_text: Any text containing chemical names — can be a Python script,
@@ -4027,6 +4161,7 @@ async def batch_safety_check(
             sections.extend(_unresolved_block(data, trailing_newline=True))
         sections.extend(_rejected_products_block(data))
         sections.extend(_precursor_disclosure_block(data))
+        sections.extend(_no_hazard_basis_block(data))
 
         # CI-89: extract documents and build SDS-backed chemical set
         documents = data.get("documents", [])
@@ -4080,7 +4215,10 @@ async def batch_safety_check(
             )
 
         if not data.get("risk_warnings"):
-            sections.append("No risk data available.")
+            # 🔴 CI-666：同上——`no_hazard_basis` 已经逐条说明时别再盖一句
+            # "No risk data available."，那句读起来就是「查过了、没有」。
+            if not data.get("no_hazard_basis"):
+                sections.append("No risk data available.")
 
         # CI-89: append SDS document links
         if documents:
