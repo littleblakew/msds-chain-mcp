@@ -1509,15 +1509,70 @@ def _insufficient_lines(item: dict, what: str) -> list[str]:
     说清「判不了」、说清「这不是低危结论」、明确禁止模型用常识补空。
     """
     reason = item.get("insufficient_reason")
+    # 🔴 **主句不许声称我们持有一份记录**（CI-679 的第八处，trust 2026-08-28 定）。
+    # 旧句是「the SDS record **we hold for this substance** parsed no hazard data」，
+    # 而三个消费者（storage / emergency / waste）的「判不了」**都有两种成因**：
+    # `direct_service` 里 `resolved`（有 CAS）与 `has_canonical`（另查一次）是**独立判断**，
+    # `/emergency-response` 只在 `not resolved` 时早返回 ⇒ **CAS 解析得出但没有 canonical 行时
+    # 照样落到这个载荷**。对那一种，旧句是**一句关于我们自己数据的肯定假话**，
+    # 且失效方向很坏：用户因此更不会自己去找 SDS。
+    # ⚠️ 我一度以为 emergency/waste 只有一种成因、想加个开关只给 storage 用 —— 那是错的，
+    # **加开关反而会留下「哪些调用方传了」这份要人记得维护的名单**。
+    # 📌 backend 有字面守卫钉这两句话（`test_ci679_no_record_wording.py`），但它**只扫 backend 仓**
+    # ⇒ 跨不了仓，这处才活到今天。本仓自己的守卫在 `tests/test_storage_insufficient_disclosure.py`。
     lines = [
-        f"- **{what}: CANNOT BE DETERMINED** — the SDS record we hold for this "
-        "substance parsed no hazard data we can answer from. This is NOT a "
+        f"- **{what}: CANNOT BE DETERMINED** — we have no SDS hazard data on file "
+        "for this substance that we can answer from. This is NOT a "
         "low-hazard finding and NOT permission to proceed. Do not infer it from "
         "general knowledge; upload this substance's SDS or try another supplier's "
         "record.",
     ]
     if reason:
         lines.append(f"  - Why: {reason}")
+    return lines
+
+
+def _storage_item_lines(item: dict) -> list[str]:
+    """渲染一条 storage 结果。抽成函数是为了能直接测文本面——这一段的失效方式
+    （渲染出一串 `N/A`）在集成测试里看起来完全正常。
+
+    🔴 **没有危害依据时不许渲染那四行 `N/A`**：后端（CI-678）在无依据时**整个不发**
+    展示键，而 `item.get(k, "N/A")` 的默认值会顶上去 —— 用户读到的是四行 `N/A`，
+    那看起来像「查过了，没有存储要求」，而事实是「我们判不了」。**没有结论被读成没有危害**，
+    与 [[CI-570]] / [[CI-277]] 同形。
+    """
+    lines: list[str] = []
+    lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
+    lines.extend(_form_disclosure_lines(item))  # CI-572
+    # 🔴 CI-586：柜型是按**另一份** SDS 的更严分类给的时候，那句「是哪一家、
+    # 哪一版说的」必须进文本面 —— 否则模型看到的是一个没有出处的加严，
+    # 而它引用的 supplier 恰恰是**没有**这个分类的那一份（可追溯性反噬）。
+    if item.get("hazard_classification_conflict_note"):
+        lines.append(f"- {item['hazard_classification_conflict_note']}")
+    if item.get("insufficient_hazard_data"):
+        lines.extend(_insufficient_lines(item, "Storage class"))
+    else:
+        lines.append(f"- **Storage class:** {item.get('storage_class_label', 'N/A')}")
+        lines.append(f"- **Cabinet color:** {item.get('cabinet_color', 'N/A')}")
+        lines.append(f"- **Recommended cabinet:** {item.get('recommended_cabinet', 'N/A')}")
+        lines.append(f"- **Temperature:** {item.get('temperature_requirement', 'N/A')}")
+    reqs = item.get("storage_requirements", [])
+    if reqs:
+        lines.append("- **Storage requirements:** " + "; ".join(str(r) for r in reqs))
+    # CI-370：GHS 官方存储段处置语（通风/密闭/阴凉/避光/上锁），每条带 P 码。
+    # 与上面的 storage_requirements 分开渲染：那是按危害类别推的柜型/温度要求，
+    # 这是官方指派语 —— 出处不同，别混成一段（同 get_emergency_response）。
+    conditions = item.get("precaution_conditions", [])
+    if conditions:
+        lines.append("- **GHS Standard Precautions (storage):** "
+                     + "; ".join(str(c) for c in conditions))
+    incompatible = item.get("incompatible_materials", [])
+    if incompatible:
+        lines.append("- **Incompatible materials:** " + ", ".join(str(m) for m in incompatible))
+    nfpa = item.get("nfpa_ratings", {})
+    if nfpa:
+        lines.append("- **NFPA ratings:** " + ", ".join(f"{k.title()} {v}" for k, v in nfpa.items()))
+    lines.append("")
     return lines
 
 
@@ -1980,34 +2035,7 @@ async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None) -> st
         data = await _direct_storage(chemicals, lang=lang)
         lines = ["**Storage Guidance**\n"]
         for item in data.get("results", []):
-            lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
-            lines.extend(_form_disclosure_lines(item))  # CI-572
-            # 🔴 CI-586：柜型是按**另一份** SDS 的更严分类给的时候，那句「是哪一家、
-            # 哪一版说的」必须进文本面 —— 否则模型看到的是一个没有出处的加严，
-            # 而它引用的 supplier 恰恰是**没有**这个分类的那一份（可追溯性反噬）。
-            if item.get("hazard_classification_conflict_note"):
-                lines.append(f"- {item['hazard_classification_conflict_note']}")
-            lines.append(f"- **Storage class:** {item.get('storage_class_label', 'N/A')}")
-            lines.append(f"- **Cabinet color:** {item.get('cabinet_color', 'N/A')}")
-            lines.append(f"- **Recommended cabinet:** {item.get('recommended_cabinet', 'N/A')}")
-            lines.append(f"- **Temperature:** {item.get('temperature_requirement', 'N/A')}")
-            reqs = item.get("storage_requirements", [])
-            if reqs:
-                lines.append("- **Storage requirements:** " + "; ".join(str(r) for r in reqs))
-            # CI-370：GHS 官方存储段处置语（通风/密闭/阴凉/避光/上锁），每条带 P 码。
-            # 与上面的 storage_requirements 分开渲染：那是按危害类别推的柜型/温度要求，
-            # 这是官方指派语 —— 出处不同，别混成一段（同 get_emergency_response）。
-            conditions = item.get("precaution_conditions", [])
-            if conditions:
-                lines.append("- **GHS Standard Precautions (storage):** "
-                             + "; ".join(str(c) for c in conditions))
-            incompatible = item.get("incompatible_materials", [])
-            if incompatible:
-                lines.append("- **Incompatible materials:** " + ", ".join(str(m) for m in incompatible))
-            nfpa = item.get("nfpa_ratings", {})
-            if nfpa:
-                lines.append("- **NFPA ratings:** " + ", ".join(f"{k.title()} {v}" for k, v in nfpa.items()))
-            lines.append("")
+            lines.extend(_storage_item_lines(item))
         if data.get("unresolved"):
             lines.extend(_unresolved_block(data))
         if not data.get("results"):
