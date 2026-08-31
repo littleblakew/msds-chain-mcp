@@ -10,10 +10,15 @@ name: Cron Failure Alert
 # cron 自上线起每次都失败，无人发现。
 #
 # ⚠️ 新增 scheduled workflow 时，把它的 `name:` 加进下面的 `workflows:` 清单，
-# 否则它的失败是静默的（就是本 workflow 要防的那类「忘了配」）。核法：
-#   grep -l 'cron:' .github/workflows/*.yml   ⇒ 每个 name: 都应出现在下面
+# 否则它的失败是静默的（就是本 workflow 要防的那类「忘了配」）。
+# 🔴 **这件事不靠你记得** —— `tests/test_cron_alert_coverage.py` 机械查两个方向
+# （新 cron 没登记 / 清单里留着已删的名字），忘了改这里的话它会红。
+# 原先这里写的是「核法＝跑一条 grep」：手动核法一定会腐化（msds-chain 那边一次漏了
+# 4 个，本仓的 `Live Probes Weekly` 也在别处的清单里漏过），而且全文 grep `cron:`
+# 分不出**被注释掉的** schedule。
 #
 # 本 workflow **故意不在自己的清单里**：告警发送失败不能自触发成告警循环。
+# （守卫里对应地把本文件排除掉了——两处一起改。）
 
 on:
   workflow_run:
