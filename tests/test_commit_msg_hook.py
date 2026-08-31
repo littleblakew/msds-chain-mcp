@@ -40,6 +40,28 @@ TOKEN_ALT = "[" + "ci skip" + "]"
 TOKEN_UPPER = "[" + "SKIP CI" + "]"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_git_config(tmp_path, monkeypatch):
+    """🔴 **本文件每一条都必须与开发者的全局 git 配置隔离**（CI-800 review 实测）。
+
+    `install.sh` 是**故意**认 `core.hooksPath` 的。于是在任何设了全局 hooksPath 的
+    机器上（husky / 公司模板），这些用例会把符号链接写进**那个共享目录**，指向
+    pytest 的 `tmp_path`；`tmp_path` 被清掉之后它们变成悬空链接，而**悬空链接下
+    git 静默跳过钩子** —— 那台机器上的**每一个仓**从此没有钩子，且没有任何提示。
+    实测复现过：设了 `core.hooksPath` 之后跑本文件，全局目录里多出 17 个悬空链接。
+
+    ⇒ 把 GIT_CONFIG_GLOBAL / GIT_CONFIG_SYSTEM 指到临时文件。
+    变异：去掉本 fixture 并设一个全局 `core.hooksPath`，会有多条用例红，
+    且那个全局目录里会出现指向 tmp 的链接。
+    """
+    cfg = tmp_path / "gitconfig-isolated"
+    cfg.write_text("")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(cfg))
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(cfg))
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM", raising=False)
+    yield
+
+
 def _seeded_repo(tmp_path, hooks=("commit-msg", "install.sh")):
     """一个装好钩子的真仓。🔴 端到端用例必须走真 `git commit` —— 路径解析、
     符号链接、cleanup 时机只有在这条路径上才是真的。"""
@@ -119,11 +141,21 @@ def test_an_ordinary_message_is_allowed(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
 
 
-def test_a_token_inside_a_comment_line_is_allowed(tmp_path):
-    """`#` 开头的行会被 git 在 cleanup 时删掉，进不了最终 message ⇒ 不算数。
-    拦它就是纯误伤（模板注释、「别写 xxx」这类提示都住在那儿）。"""
+def test_a_token_on_a_top_level_comment_line_is_still_refused(tmp_path):
+    """🔴 **这条曾经是反的，而反的那个版本把一个真实的绕过钉成了契约**（CI-800 review）。
+
+    以前认为「`#` 开头的行 git 会删掉 ⇒ 不算数」。**只有编辑器路径成立**：
+    `--cleanup=default` 只在要打开编辑器时等于 `strip`，走 `-m`/`-F`/`merge --no-edit`
+    时等于 `whitespace`，**顶格 `#` 原样留在最终 message 里**。
+    ⇒ 钩子从钩子里看不出这次是哪条路径，只能按「不删」算（误红可见、误绿静默）。
+
+    端到端的证据在 `test_a_commented_token_really_lands_in_the_message`。
+    变异：把归一化改回对整条 message 做 `stripspace --strip-comments`，本条必红。
+    """
     r = _run_hook(tmp_path, f"CI-999: 普通提交\n\n# 提醒：别在正文里写 {TOKEN}\n")
-    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.returncode != 0, (
+        f"顶格注释行里的令牌被放过去了 —— `-m` 路径下它会真的进 message："
+        f"\n{r.stdout + r.stderr}")
 
 
 # ── 守卫自己坏掉时必须硬失败，而不是安静放行 ──────────────────────────
@@ -311,6 +343,103 @@ def test_the_installer_refuses_to_run_from_a_linked_worktree(tmp_path):
                         cwd=repo, capture_output=True, text=True)
     assert r2.returncode == 0, r2.stdout + r2.stderr
     assert (hooks / "commit-msg").is_symlink(), r2.stdout
+
+
+def test_the_installer_works_from_a_subdirectory_of_the_main_checkout(tmp_path):
+    """🔴 CI-800 review 实测：`git rev-parse --git-dir` / `--git-common-dir` 返回的
+    **形式随 cwd 变** —— 仓根是 `.git` / `.git`，子目录里却是 `/abs/…/.git` / `../.git`。
+    直接字符串比 ⇒ 在**主 checkout 的任何子目录**里都误判成 linked worktree 并退 1，
+    而本脚本的用法说明恰恰写着「在仓根下，或给它绝对路径」。
+    `--check` 被当卫生闸用时，它会给出一个**理由完全错误**的非零退出。
+
+    变异：把 `_abs_dir` 那两行换回裸 `git rev-parse` 字符串比较，本条必红。
+    """
+    repo = _seeded_repo(tmp_path)
+    sub = repo / "scripts"
+    r = subprocess.run(["bash", "hooks/install.sh", "--check"], cwd=sub,
+                       capture_output=True, text=True)
+    out = r.stdout + r.stderr
+    assert "linked worktree" not in out and "worktree" not in out, (
+        f"在主 checkout 的子目录里被误判成 worktree：\n{out}")
+    assert r.returncode == 0, f"从子目录跑 --check 退了非零：\n{out}"
+
+
+def test_a_stale_copy_is_upgraded_even_from_a_subdirectory(tmp_path):
+    """🔴 CI-800 review 实测的第二条 pathspec 坑：判「这是不是我们自己的历史版本」
+    用的 `git log -- "scripts/hooks/X"` 是 **cwd 相对**的，而同一段里的
+    `git rev-parse "$rev:scripts/hooks/X"` 是**根相对**的。两者不同形 ⇒ 从子目录跑时
+    `git log` 命中 0 条、`_ours` 恒为 0，**升级旧拷贝那一支永远不执行**，
+    旧拷贝被当成别人的钩子留在原地，再也拿不到任何修复。
+
+    变异：把 `:(top)` 去掉，本条必红（会报「不是本仓任何历史版本 —— 没动它」）。
+    """
+    repo = _seeded_repo(tmp_path)
+    old_text = HOOK.read_text()
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "hook: 旧版本", "--no-verify"],
+                   cwd=repo, check=True, capture_output=True)
+    (repo / "scripts" / "hooks" / "commit-msg").write_text(old_text + "\n# 新版本多的一行\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "hook: 新版本", "--no-verify"],
+                   cwd=repo, check=True, capture_output=True)
+    hooks = repo / ".git" / "hooks"
+    (hooks / "commit-msg").unlink(missing_ok=True)
+    (hooks / "commit-msg").write_text(old_text)
+    (hooks / "commit-msg").chmod(0o755)
+
+    r = subprocess.run(["bash", "hooks/install.sh"], cwd=repo / "scripts",
+                       capture_output=True, text=True)
+    assert r.returncode == 0, f"从子目录跑失败了：\n{r.stdout + r.stderr}"
+    assert (hooks / "commit-msg").is_symlink(), (
+        f"旧拷贝没被认出来（pathspec 又变回 cwd 相对了？）：\n{r.stdout + r.stderr}")
+
+
+def test_a_non_executable_hook_is_not_reported_as_installed(tmp_path):
+    """🔴 CI-800 review 实测：git 对**不可执行**的钩子是静默跳过的
+    （`advice.ignoredHook` 那句只是 hint，还能被关掉）⇒ 链接建得好好的、
+    `--check` 报 ✅ 退 0，而带令牌的提交照样过 —— 正是本脚本存在要排除的
+    「装了但没触发」。判据必须是「链接对 **且** 目标可执行」。
+
+    🔴 exec 位特别容易丢：`git add` 会按工作树重读它。
+    变异：把 `[ ! -x "$_src" ]` 那一段去掉，本条必红（`--check` 会报 ✅ 退 0）。
+    """
+    repo = _seeded_repo(tmp_path)
+    src = repo / "scripts" / "hooks" / "commit-msg"
+    src.chmod(0o644)
+
+    # ① 前提：不可执行时钩子确实不触发（否则本条什么都没测到）
+    leaked = subprocess.run(["git", "commit", "--allow-empty", "-m", "CI-999: t",
+                             "-m", f"正文里有 {TOKEN}"],
+                            cwd=repo, capture_output=True, text=True)
+    assert leaked.returncode == 0, "前提不成立：不可执行的钩子竟然拦住了"
+
+    # ② --check 必须报出来，不能报绿
+    chk = subprocess.run(["bash", "scripts/hooks/install.sh", "--check"], cwd=repo,
+                         capture_output=True, text=True)
+    assert chk.returncode != 0, (
+        f"源文件不可执行，--check 却报绿 —— 这正是「装了但没触发」：\n{chk.stdout + chk.stderr}")
+
+    # ③ 装一次应当把它修好，并且真的拦得住
+    fix = subprocess.run(["bash", "scripts/hooks/install.sh"], cwd=repo,
+                         capture_output=True, text=True)
+    assert fix.returncode == 0, fix.stdout + fix.stderr
+    assert os.access(src, os.X_OK), "exec 位没被补上"
+    after = subprocess.run(["git", "commit", "--allow-empty", "-m", "CI-999: t2",
+                            "-m", f"正文里有 {TOKEN}"],
+                           cwd=repo, capture_output=True, text=True)
+    assert after.returncode != 0, f"修完仍不触发：\n{after.stdout + after.stderr}"
+
+
+def test_an_unreadable_message_file_refuses_instead_of_passing(tmp_path):
+    """🔴 CI-800 review 的 LOW，但方向是**开着的**：`set -uo pipefail` 没有 `-e`，
+    归一化用的 `awk` 失败时 `_cut` 是空串 ⇒ subject/body 都空 ⇒ 一路走到 exit 0。
+    **闸在自己坏掉的时候放行**，与 lib 加载不上那条同族。
+    变异：把 `if ! _cut=…` 那个判断换回裸赋值，本条必红（会退 0）。
+    """
+    r = subprocess.run(["bash", str(HOOK), str(tmp_path / "does-not-exist")],
+                       capture_output=True, text=True)
+    assert r.returncode != 0, (
+        f"读不到 message 文件时安静放行了：\n{r.stdout + r.stderr}")
 
 
 def test_the_installer_does_not_overwrite_someone_elses_hook(tmp_path):
@@ -537,12 +666,56 @@ def test_an_indented_comment_line_is_still_part_of_the_message(tmp_path):
     assert "999" not in body, f"被拦了却还是提交了：{body}"
 
 
-def test_a_top_level_comment_line_is_still_ignored(tmp_path):
-    """阳性对照：顶格注释确实不该算数（模板注释都住在那儿）。
-    少了它，把归一化改成「什么都不删」也能让上一条绿。"""
+def test_a_commented_token_really_lands_in_the_message(tmp_path):
+    """🔴 **CI-800 review 抓到的 HIGH，端到端的那一半。**
+
+    这条用例存在的理由是：上一版在这里断言 `returncode == 0` 且**从不检查
+    `%B`** —— 于是「钩子放行了」和「令牌没进 message」被当成一回事，而它们不是。
+    真相是 `-m` 路径下 git 不删顶格注释，令牌**真的进了最终 message**，
+    整轮 CI 静默不跑；本仓 push main 即部署 ⇒ 静默不发布。
+
+    判据分两段写清楚：① 钩子拦住 ② 假如没拦住，令牌确实会留在 `%B` 里。
+    ②那半用 `--no-verify` 绕过钩子来证明前提为真——**没有它，①就只是一个
+    自说自话的断言**。
+    """
     repo = _seeded_repo(tmp_path)
+
+    # ② 先证明前提：绕过钩子提交，令牌确实活在最终 message 里
+    subprocess.run(["git", "commit", "--allow-empty", "--no-verify", "-m", "CI-999: 前提",
+                    "-m", f"# 谈论 {TOKEN} 这个令牌"],
+                   cwd=repo, check=True, capture_output=True)
+    body = subprocess.run(["git", "log", "-1", "--format=%B"], cwd=repo,
+                          capture_output=True, text=True).stdout
+    assert TOKEN in body, (
+        "前提不成立：这个 git 版本在 -m 路径下删掉了顶格注释。"
+        f"若真如此，本条要防的绕过就不存在了，请重判。实际 %B：\n{body}")
+
+    # ① 钩子必须拦住它
     r = subprocess.run(
         ["git", "commit", "--allow-empty", "-m", "CI-999: t",
          "-m", f"# 提醒：别在正文里写 {TOKEN}"],
         cwd=repo, capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.returncode != 0, (
+        "顶格注释里的令牌被放过去了，而上面刚证明它会真的进 message ⇒ 整轮 CI 静默不跑："
+        f"\n{r.stdout + r.stderr}")
+
+
+def test_the_editor_path_with_a_clean_message_is_not_touched(tmp_path):
+    """阳性对照 / 误报侧：改成「注释一律算数」之后，**编辑器路径下 git 自己写的
+    那一大块注释**（`# Please enter the commit message…` / `-v` 的文件清单）
+    绝不能把干净的提交拦下来。少了这条，把判据改成「整条 message 有没有令牌」
+    也能让上面几条绿，而那会让每一次带模板的提交都被拦。
+    """
+    repo = _seeded_repo(tmp_path)
+    (repo / "c.txt").write_text("x")
+    subprocess.run(["git", "add", "c.txt"], cwd=repo, check=True)
+    ed = tmp_path / "ed2.sh"
+    ed.write_text("#!/bin/sh\n"
+                  "printf 'CI-999: 干净的标题\\n\\n干净的正文\\n' > \"$1.new\"\n"
+                  "cat \"$1\" >> \"$1.new\" && mv \"$1.new\" \"$1\"\n")
+    ed.chmod(0o755)
+    r = subprocess.run(["git", "commit"], cwd=repo,
+                       env=dict(os.environ, GIT_EDITOR=str(ed)),
+                       capture_output=True, text=True)
+    assert r.returncode == 0, (
+        f"编辑器路径下干净的提交被自己的模板注释拦了：\n{r.stdout + r.stderr}")

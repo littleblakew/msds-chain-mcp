@@ -5,7 +5,8 @@
 # 🔴 **自己发现成员，别维护名单**：`.git/hooks/` 不受版本控制，所以钩子必须手工装；
 #    而「README 里列着装哪几个」是一份会腐化的清单 —— 加了新钩子却没人回来改那一行，
 #    新钩子就永远是个没人装的空文件，**而它和「装了但没触发」完全同形**。
-#    这里扫目录，凡是可执行、且名字是 git 认识的钩子名的，一律建链接。
+#    这里扫目录，凡是名字是 git 认识的钩子名的普通文件，一律建链接；
+#    exec 位不当成筛选条件而是**当成要修的东西**（不可执行的钩子 git 静默跳过）。
 #
 # 用法（在仓根下，或给它绝对路径）：
 #   scripts/hooks/install.sh          # 装
@@ -47,7 +48,19 @@ _resolve_link() {
 #    而这里建的是指向「本次 checkout 路径」的符号链接 ⇒ worktree 一删，那个链接就悬空，
 #    于是**主 checkout 和别人的每一个 worktree 提交时都会撞上一个跑不起来的钩子**。
 #    2026-08-31 差一点这么干（装完才想起来 worktree 待会儿要删）。
-if [ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ] && [ "${FORCE_WORKTREE_INSTALL:-}" != "1" ]; then
+# 🔴 **必须先解析成绝对真身再比**（CI-800 review 实测）：`git rev-parse` 返回的形式
+#    随 cwd 变——在仓根是 `.git` / `.git`，在**子目录**却是 `/abs/…/.git` / `../.git`。
+#    直接字符串比 ⇒ 在**主 checkout 的任何子目录**里都会误判成 linked worktree 并退 1，
+#    而本文件的用法说明恰恰写着「在仓根下，**或给它绝对路径**」。
+#    不用 `--path-format=absolute`（要 git ≥2.31），自己 cd + pwd -P 更稳。
+_abs_dir() { ( cd "$1" 2>/dev/null && pwd -P ); }
+_gd="$(_abs_dir "$(git rev-parse --git-dir)")"
+_gcd="$(_abs_dir "$(git rev-parse --git-common-dir)")"
+if [ -z "$_gd" ] || [ -z "$_gcd" ]; then
+  echo "❌ 解析不出 git 目录 —— 拒绝在不知道自己在哪的情况下装钩子。" >&2
+  exit 1
+fi
+if [ "$_gd" != "$_gcd" ] && [ "${FORCE_WORKTREE_INSTALL:-}" != "1" ]; then
   {
     echo "❌ 这是一个 linked worktree，拒绝在这里装钩子。"
     echo "   .git/hooks 是所有 worktree 共用的，而链接会指向本 worktree 的路径"
@@ -76,6 +89,20 @@ for _src in "$_here"/*; do
   case " $_GIT_HOOK_NAMES " in *" $_name "*) ;; *) continue ;; esac
   [ -f "$_src" ] || continue
   _dst="$_hooks_dir/$_name"
+  # 🔴 **exec 位要单独判**（CI-800 review 实测）：git 对不可执行的钩子是**静默跳过**的
+  #    （`advice.ignoredHook` 那句提示可以被关掉，且它只是 hint 不是错误）⇒ 链接建得
+  #    好好的、`--check` 报 ✅ 退 0，而带令牌的提交照样过 —— 正是本脚本存在要排除的
+  #    「装了但没触发」。判据因此是「**链接对 + 目标可执行**」，不是「链接对」。
+  #    🔴 exec 位还特别容易丢：`git add` 会按工作树重读它，`update-index --chmod=+x`
+  #       会被抹回 644（本 workspace 记过这个坑）。
+  if [ ! -x "$_src" ]; then
+    if [ "$_check_only" = "1" ]; then
+      echo "❌ $_name 源文件不可执行（git 会静默跳过它）—— 跑 scripts/hooks/install.sh 修" >&2
+      _missing=$((_missing+1)); continue
+    fi
+    echo "🩹 $_name 源文件不可执行（git 会静默跳过）—— 补上 exec 位"
+    chmod +x "$_src"
+  fi
   if [ -L "$_dst" ] && [ "$(_resolve_link "$_dst")" = "$_src" ]; then
     echo "✅ $_name 已装"
     _installed=$((_installed+1)); continue
@@ -91,7 +118,12 @@ for _src in "$_here"/*; do
     _dst_hash="$(git hash-object "$_dst" 2>/dev/null || true)"
     _ours=0
     if [ -n "$_dst_hash" ]; then
-      for _rev in $(git log --format=%H -- "scripts/hooks/$_name" 2>/dev/null); do
+      # 🔴 pathspec 必须锚在仓根（`:(top)`）。第一版是 **cwd 相对**的，而下一行的
+      #    `rev-parse "$_rev:scripts/hooks/$_name"` 是**根相对**的 —— 两者不同形
+      #    ⇒ 从子目录跑时 `git log` 命中 0 条、`_ours` 恒为 0，于是「把自己的旧拷贝
+      #    升级成链接」那一支**永远不执行**，旧拷贝被当成别人的钩子留在原地，
+      #    再也拿不到任何修复（正是这一支存在的全部理由）。实测复现过。
+      for _rev in $(git log --format=%H -- ":(top)scripts/hooks/$_name" 2>/dev/null); do
         if [ "$(git rev-parse "$_rev:scripts/hooks/$_name" 2>/dev/null || true)" = "$_dst_hash" ]; then
           _ours=1; break
         fi

@@ -85,23 +85,50 @@ _assert_ci_skip_token_lib || exit 1
 #     「   # …令牌…」的提交**放行**，最终 message 里令牌活着，整轮 CI 静默不跑。
 #     （实测：提交成功，`git log -1 --format=%B` 里令牌还在。）
 #
-# ⇒ 两步，都交给 git 自己判，别手写规则：
-#   1. 先在剪刀线处截断（stripspace 只删注释行，**不删**它下面的 diff）。
-#      模式要求「注释字符 + 破折号 + >8 + 破折号」，够紧，不会误伤正常正文。
-#   2. 再用 `git stripspace --strip-comments` —— 它是 git 自己的实现，
-#      **保留缩进的 `#`、且认 `core.commentChar`（含 `auto`）**，实测过。
-_cut="$(awk '/^[^[:alnum:][:space:]][[:space:]]*-+[[:space:]]*>8[[:space:]]*-+[[:space:]]*$/{exit} {print}' "$_msg_file")"
-# 🔴 stripspace 失败时**别静默退回「不处理」**：那会把模板注释也当正文 ⇒ 假阳性。
+# ⇒ ③ **注释行不能当成「反正会被删掉」**（CI-800 的 review 实测，比 ①② 都严重）。
+#      git 的 `--cleanup=default` 只在**要打开编辑器**时等于 `strip`；走 `-m`/`-F`
+#      （以及 `merge --no-edit`）时它等于 `whitespace`，**顶格 `#` 的行原样留在最终
+#      message 里**。第一版对整条 message 做 `git stripspace --strip-comments`，
+#      于是 `git commit -m "标题" -m "# 谈论<令牌>"` **直接放行，而令牌真的进了 message**
+#      ⇒ 整轮 CI 静默不跑。实测复现过：钩子退 0，`git log -1 --format=%B` 里令牌还在。
+#      🔴 而事故的原始形态（merge commit 正文）走的正是不删注释的那条路径。
+#
+# ⇒ 两处用**不同**的文本，这是刻意的：
+#   · **subject** 从「删掉注释」的版本取 —— 编辑器路径下开头可能是模板注释，
+#     那些不是标题。
+#   · **令牌检测**用「**不删注释**」的版本 —— 因为我们无法从钩子里知道 git 这次
+#     到底会不会删它们（`-m` vs 编辑器 vs `commit.cleanup`，钩子看不到那些）。
+#   🔴 **失效方向决定了这个取舍**：猜错「会删」＝放过一条真的会关掉 CI 的提交（误绿，
+#      没人会发现）；猜错「不删」＝拦下一条其实无害的提交（误红，当场看得见、改个写法
+#      就过）。本仓 push main 即部署 ⇒ 误绿＝静默不发布。**所以一律按不删算。**
+#      已知并接受的误报：编辑器路径下正文里写了一行顶格 `#` 且里面有令牌字面量。
+#      代价是换个写法或 `--no-verify`，而这一类在实际提交里几乎不出现。
+if [ ! -r "$_msg_file" ]; then
+  # 🔴 `${x}` 必须括起来：裸 $x 紧跟中文全角括号时 bash 会把它吞进变量名 ⇒
+  #    `unbound variable`。这条错在 CI-800 这一轮犯了两次，扫法：
+  #    grep -nP '\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]'
+  echo "❌ commit-msg 钩子读不到 message 文件（${_msg_file}）—— 拒绝在看不清内容时放行。" >&2
+  exit 1
+fi
+# 🔴 awk 失败必须硬失败：`set -uo pipefail` 没有 `-e`，失败时 `_cut` 是空串，
+#    于是 subject/body 都空、一路走到 exit 0 —— **闸在自己坏掉时放行**，
+#    与本文件 42 行记的 `_assert_ci_skip_token_lib` 是同一类。
+if ! _cut="$(awk '/^[^[:alnum:][:space:]][[:space:]]*-+[[:space:]]*>8[[:space:]]*-+[[:space:]]*$/{exit} {print}' "$_msg_file")"; then
+  echo "❌ commit-msg 钩子归一化 message 失败 —— 拒绝在没看清内容的情况下放行。" >&2
+  exit 1
+fi
+# 🔴 stripspace 失败时**别静默退回「不处理」**：那会把模板注释也当标题。
 #    退回一个顶格 `#` 的近似（与 git 默认 commentChar 一致），并说一声。
 if _clean="$(printf '%s\n' "$_cut" | git stripspace --strip-comments 2>/dev/null)"; then :; else
   echo "⚠️  git stripspace 不可用，退回顶格 # 的近似判断（commit-msg 钩子）。" >&2
   _clean="$(printf '%s\n' "$_cut" | sed '/^#/d')"
 fi
 
-# subject = 第一条非空行。
+# subject = 删掉注释之后的第一条非空行。
 _subject="$(printf '%s\n' "$_clean" | sed -n '/[^[:space:]]/{p;q;}')"
-# body = 除 subject 之外的全部（用 sed 删掉第一条非空行那一行）。
-_body="$(printf '%s\n' "$_clean" | awk 'seen{print} !seen && NF{seen=1}')"
+# 正文 = 剪刀线以上的全部，**保留注释行**，只去掉 subject 那一行（见上面 ③）。
+_body="$(printf '%s\n' "$_cut" \
+         | awk -v s="$_subject" 'found || $0 != s { print } $0 == s && !found { found = 1 }')"
 
 if _has_ci_skip_token "$_body" && ! _has_ci_skip_token "$_subject"; then
   {

@@ -74,12 +74,17 @@ subject，事故形态只出现在 body。
 ```bash
 cd <workspace>/products
 for f in scripts/hooks/commit-msg scripts/hooks/install.sh scripts/hooks/README.md \
-         scripts/lib/ci-skip-token.sh; do
-  for r in msds-chain-mcp msds-chain-mcp-gateway; do
+         scripts/lib/ci-skip-token.sh tests/test_commit_msg_hook.py; do
+  for r in msds-chain-gateway msds-chain-mcp msds-chain-mcp-gateway; do
+    [ -e "$r/$f" ] || { echo "MISSING: $r/$f  ← 先看这个，别读成 DRIFT"; continue; }
     diff -q "msds-chain-gateway/$f" "$r/$f" >/dev/null || echo "DRIFT: $r/$f"
   done
 done
 ```
+
+🔴 **`MISSING` 和 `DRIFT` 必须分开报**（CI-800 review 抓到的）：三个仓不是同一刻
+落地的，任一仓还没合 main 时这条 diff 会**整片报红**，而**基线本来就是红的判据
+不构成任何证据** —— 下一个人只会学会忽略它。先确认三个仓都有文件，再谈漂移。
 
 ② **与 msds-chain 是同源但有已知差异**，别拿 ①那条 diff 去比它，会全红：
    · `commit-msg` 指向的用例路径不同（那边 `backend/tests/scripts/`，这边 `tests/`）
