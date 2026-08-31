@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+#
+# CI-800（上游 CI-685）—— commit message 的**正文**里出现 CI 跳过令牌就拦下来。
+#
+# 为什么是钩子而不是纪律：GitHub 只认字面量、不管你是在「用」它还是在「谈论」它。
+# 这条已经害过四次（清单在 scripts/lib/ci-skip-token.sh 顶部）。第三次是在改
+# msds-chain 的 `promote-prod.sh` 时犯的，**而那个文件顶部就写着这个坑** —— 读过、
+# 写过、仍然犯。⇒「文档里记着」不是缓解措施。
+#
+# 🔴 **本仓比 msds-chain 更危险，这是它需要这道闸的全部理由**：
+#    msds-chain 那边 CI 静默不跑，还有 promote gate 在 develop→main 那一刻兜住；
+#    **本仓 push main 即部署、没有 promote gate** ⇒ 静默不跑＝**静默不发布**。
+#    2026-08-31 在 msds-chain-gateway 真实发生过一次：merge commit 正文里解释
+#    「为什么这次不加那个令牌」，push 成功、远端有 sha、零报错，而 Prod 镜像
+#    停在上一版。**发现它只能靠「main 变了但镜像 tag 没变」**——没有任何东西会报错。
+#
+# 代价：整轮 workflow 静默不跑，而 `git push` 一切正常、远端有 sha
+# ⇒ **「零个 run」和「CI 还没起来」完全同形**，人只会以为 GitHub 慢。
+#
+# ── 判据：令牌在 body、但不在 subject ──────────────────────────────────
+# 这个区分是**机械可判**的，而且正好切在真实用法上：
+#   · 合法跳过：想跳过 CI 的提交写成 `chore(…): … [<令牌>]`，令牌在 **subject** ⇒ 放行
+#   · 事故形态：正文里引用/解释它                              令牌只在 **body** ⇒ 拦下
+# msds-chain 的 `promote-prod.sh` Gate A 也是按 subject 锚定的，两处口径一致不是巧合。
+# 🔴 **别把判据放宽成「整条 message 有没有令牌」**：那会把合法的跳过提交也拦掉，
+#    于是所有人第一时间学会 `--no-verify`，这道闸当天就死。
+#
+# 两条出路都不需要新开关，所以本钩子**没有环境变量逃生口**：
+#   · 真想跳过 CI ⇒ 把令牌挪到 subject
+#   · 只是在谈论它 ⇒ 换个写法（`skip-ci` / 「跳过令牌」/ 方括号拆开写）
+# 兜底仍是 `git commit --no-verify`。
+#
+# 🔴 **这份文件是 msds-chain `scripts/hooks/commit-msg` 的副本**（四个仓各一份，
+#    逐字相同）。改了任何一份，四个仓都要改——判据见 scripts/hooks/README.md 末节。
+#
+# 自测见 scripts/hooks/README.md；自动化用例在
+# tests/test_commit_msg_hook.py（含反向变异）。
+set -uo pipefail
+
+_msg_file="${1:?commit-msg hook 需要 message 文件路径}"
+
+# 🔴 令牌清单只有一份，在 lib 里。source 失败必须硬失败：函数没定义时
+#    `if ! _has_ci_skip_token …` 返回 127 ⇒ `!` 变成真 ⇒ **静默退化成「从来查不到令牌」**，
+#    而那与「这条 message 确实干净」完全同形。
+# 钩子装在 `.git/hooks/commit-msg`，是指向本仓 `scripts/hooks/commit-msg` 的**符号链接**
+# ⇒ 必须先解析成真身，否则相对 lib 找不到。
+# 🔴 **readlink 必须在任何 cd 之前求值。** 第一版写成
+#     `_real="$(cd "$_here" && cd "$(dirname "$(readlink "${BASH_SOURCE[0]}")")" && pwd -P)"`
+#    ——里层那个 `readlink` 是在 `cd "$_here"` **之后**才展开的，那时 cwd 已经变成
+#    `.git/hooks`，而 git 给的是**相对 repo 根**的 `.git/hooks/commit-msg` ⇒ 那儿没这个文件
+#    ⇒ readlink 输出空 ⇒ `dirname ""` 得 `.` ⇒ `cd .` ⇒ `_here` 一动没动，**而且不报错**。
+#    端到端用例（真跑 git commit）抓到的；只调钩子本身的那几条用例看不见它。
+_src_path="${BASH_SOURCE[0]}"
+_hops=0
+while [ -L "$_src_path" ] && [ "$_hops" -lt 10 ]; do
+  _t="$(readlink "$_src_path")"
+  case "$_t" in
+    /*) _src_path="$_t" ;;
+    *)  _src_path="$(dirname "$_src_path")/$_t" ;;
+  esac
+  _hops=$((_hops+1))
+done
+_here="$(cd "$(dirname "$_src_path")" && pwd -P)"
+_lib="$_here/../lib/ci-skip-token.sh"
+if [ ! -r "$_lib" ]; then
+  echo "❌ commit-msg 钩子找不到 $_lib —— 拒绝在没有令牌检查的情况下提交。" >&2
+  echo "   （重装：scripts/hooks/install.sh）" >&2
+  exit 1
+fi
+# shellcheck source=../lib/ci-skip-token.sh
+. "$_lib" || { echo "❌ 加载 ci-skip-token.sh 失败 —— 拒绝继续。" >&2; exit 1; }
+_assert_ci_skip_token_lib || exit 1
+
+# ── 把 message 归一成「git 最终真会存下来的那些字节」 ─────────────────
+# 🔴 这一步比看起来难，第一版 `grep -v '^[[:space:]]*#'` **两个方向都错**（review 实测）：
+#
+#  ① **漏删 scissors 之下的 raw diff**（假阳性，HIGH）。`git commit -v` / `commit.verbose=true`
+#     会把**暂存的整个 diff** 附在剪刀线之下，那些行**不带注释前缀** ⇒ 我的 grep 留下了它们。
+#     后果很具体：**改本仓 `scripts/lib/ci-skip-token.sh` 时必触发**
+#     ——那个文件的内容里就有令牌字面量 —— 于是一条完全干净的 message 被拦。
+#     而按本钩子自己的设计说明，被误伤的人学会的是 `--no-verify`，闸当天就死。
+#     （实测：编辑器路径 + 干净 message，被拦。`-m` 路径不附 diff，所以复现不出来。）
+#  ② **多删了缩进的注释行**（假阴性，也就是本钩子存在的全部理由）。git 只把**顶格**的
+#     注释字符当注释，而我的 `^[[:space:]]*#` 把缩进的也删了 ⇒ 一条正文里
+#     「   # …令牌…」的提交**放行**，最终 message 里令牌活着，整轮 CI 静默不跑。
+#     （实测：提交成功，`git log -1 --format=%B` 里令牌还在。）
+#
+# ⇒ 两步，都交给 git 自己判，别手写规则：
+#   1. 先在剪刀线处截断（stripspace 只删注释行，**不删**它下面的 diff）。
+#      模式要求「注释字符 + 破折号 + >8 + 破折号」，够紧，不会误伤正常正文。
+#   2. 再用 `git stripspace --strip-comments` —— 它是 git 自己的实现，
+#      **保留缩进的 `#`、且认 `core.commentChar`（含 `auto`）**，实测过。
+_cut="$(awk '/^[^[:alnum:][:space:]][[:space:]]*-+[[:space:]]*>8[[:space:]]*-+[[:space:]]*$/{exit} {print}' "$_msg_file")"
+# 🔴 stripspace 失败时**别静默退回「不处理」**：那会把模板注释也当正文 ⇒ 假阳性。
+#    退回一个顶格 `#` 的近似（与 git 默认 commentChar 一致），并说一声。
+if _clean="$(printf '%s\n' "$_cut" | git stripspace --strip-comments 2>/dev/null)"; then :; else
+  echo "⚠️  git stripspace 不可用，退回顶格 # 的近似判断（commit-msg 钩子）。" >&2
+  _clean="$(printf '%s\n' "$_cut" | sed '/^#/d')"
+fi
+
+# subject = 第一条非空行。
+_subject="$(printf '%s\n' "$_clean" | sed -n '/[^[:space:]]/{p;q;}')"
+# body = 除 subject 之外的全部（用 sed 删掉第一条非空行那一行）。
+_body="$(printf '%s\n' "$_clean" | awk 'seen{print} !seen && NF{seen=1}')"
+
+if _has_ci_skip_token "$_body" && ! _has_ci_skip_token "$_subject"; then
+  {
+    echo "🔴 commit message 的**正文**里出现了 CI 跳过令牌，而标题里没有。"
+    echo
+    echo "   GitHub 只认字面量，不管你是在用它还是在谈论它 ⇒ 这条提交推上去会让"
+    echo "   **整轮 workflow 静默不跑**，而 git push 一切正常、远端有 sha。"
+    echo "   「零个 run」和「CI 还没起来」在你看来完全一样，所以没人会发现。"
+    echo
+    echo "   两条出路："
+    echo "   · 你**真想跳过 CI** ⇒ 把令牌挪到**标题**（合法用法就长这样：chore(docs): … ）"
+    echo "   · 你只是在**谈论**它 ⇒ 换个写法：skip-ci ／「跳过令牌」／把方括号拆开"
+    echo
+    echo "   改：git commit --amend        兜底：git commit --no-verify"
+    echo "   出处：scripts/lib/ci-skip-token.sh（本仓令牌清单唯一真相源）· 票 CI-800 / CI-685"
+  } >&2
+  exit 1
+fi
+exit 0
