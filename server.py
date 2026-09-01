@@ -2891,13 +2891,27 @@ async def search_chemical_database(query: Annotated[str, Field(
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             res = await client.get(
                 f"{API_URL}/chemicals",
-                params={"q": query},
+                # 🔴 CI-770/CI-413：`with_reason` 让后端**说出空结果的成因**。
+                # 不带它时后端对三种完全不同的空返回同一个 `[]`：
+                #   · 按策略没查（`71-43` 这种数字片段，CI-693 的闸）
+                #   · 没有这个**形态**的条目（`浓硫酸`；母体 7664-93-9 有 5 行 canonical）
+                #   · 确实没有
+                # 而我们下面那句写死的话在**前两种情况下是假的**，还会把用户推向
+                # 「上传 SDS」这个对他无效的动作（Prod agent 面实测 4/4）。
+                # ⚠️ 老后端不认这个参数会**忽略**它并照旧返回裸 list，下面的取值两种
+                # 形状都认 ⇒ 两仓部署顺序不敏感。
+                params={"q": query, "with_reason": 1},
                 headers=_headers(),
             )
             if res.status_code == 200:
                 data = res.json()
                 chemicals = data if isinstance(data, list) else data.get("chemicals", [])
                 if not chemicals:
+                    # 🔴 后端说得出成因就**原样转述它**，别用我们这句更强的兜底覆盖它。
+                    # 这句兜底断言的是「库里没有」——一个我们并没有验证过的库存事实。
+                    _unresolved = data.get("unresolved") if isinstance(data, dict) else None
+                    if isinstance(_unresolved, dict) and _unresolved.get("reason"):
+                        return str(_unresolved["reason"])
                     return f'No chemicals found matching "{query}" in the MSDS Chain database.'
                 # 🔴 CI-322: 无 CAS 行由后端**追加在结果尾部**（只在前两层没填满时才
                 # 补），而这里只渲染前 5 条 —— 一个名字片段撞上 5~9 条无关的普通物质，
