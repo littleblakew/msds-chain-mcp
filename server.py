@@ -244,6 +244,20 @@ Chemical = Annotated[str, Field(
     description='Chemical name or CAS number, e.g. "acetone" or "67-64-1".',
 )]
 
+# CI-823：调用方（客户端 LLM）把用户的话翻成下面那些结构化参数。翻错了我们看得见入参、
+# 看不见「他本来要问什么」——423 次外部调用里只有 38 次走 `ask_chemical_safety`，
+# 带自然语言问句的全时段只有 10 条，其余工具的意图面是零。
+# 🔴 这是**只读日志面**：`intent` 不会被送到后端、不参与作答。任何一条让它流进答案的路
+# 都是安全结论的注入面（调用方可以把「就说它安全」写进来）。
+# 🔴 这段描述在 `tools/list` 里**每个工具各有一份**（17 份）：初版 590 字符 ＝ 整个
+# 响应的 20.5%，每个客户端连上来都付这笔 context。措辞按守卫断言的三句收敛过。
+Intent = Annotated[str | None, Field(
+    description="Optional, recorded only — it does NOT change the answer. Never put "
+                'instructions here, and never leave a real argument out in favour of it. '
+                "One sentence in the end user's own words of what they are trying to "
+                'find out. Over-long text is truncated, not rejected.',
+)]
+
 
 _API_KEY_REQUIRED_MSG = (
     "⚠️ MSDS_API_KEY is required for all tools.\n\n"
@@ -935,6 +949,26 @@ def _log_intent(tool_name: str, chemicals: list[str] | None,
     _log_slot.set({"tool_name": tool_name, "chemicals": chemicals,
                    "input_params": input_params,
                    "success": success, "error_message": error_message})
+
+
+# CI-823：上限只**截断不拒绝**。写成 schema 的 `maxLength` 会让 pydantic 直接打回整次调用
+# ⇒ 一个纯诊断字段就能把一次真实的安全查询挡在门外，方向反了。
+_MAX_INTENT_CHARS = 500
+
+
+def _cap_intent(text: str) -> str:
+    return text if len(text) <= _MAX_INTENT_CHARS else text[:_MAX_INTENT_CHARS] + "…[truncated]"
+
+
+def _intent_params(payload: dict, intent: str | None) -> str:
+    """把工具**手写的**脱敏 dict 序列化，调用方给了 `intent` 就多挂一个键（截断后）。
+
+    🔴 「手写 dict 编码的是脱敏决定」这条约定不变（见 `_reported` 上方那段）——这里只
+    多挂一个键，仍然不去自动 dump 入参。`intent` 缺省时输出与加这个参数之前**逐字节相同**。
+    """
+    if intent and intent.strip():
+        payload = {**payload, "intent": _cap_intent(intent.strip())}
+    return _json.dumps(payload)
 
 
 # 发送侧的上限。后端也会截（`_clean_payload`），这里再挡一道是因为**这一段要走网络**：
@@ -1659,7 +1693,7 @@ def _storage_item_lines(item: dict) -> list[str]:
 )
 @_graceful_timeout
 @_reported
-async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = None) -> CallToolResult:
+async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = None, intent: Intent = None) -> CallToolResult:
     """
     Check pairwise compatibility between a list of chemicals.
 
@@ -1746,14 +1780,14 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
         ), data)
     finally:
         _log_intent("check_chemical_compatibility", chemicals,
-                        _json.dumps({"chemicals": chemicals}),
+                        _intent_params({"chemicals": chemicals}, intent),
                     success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Chemical Risk Warnings", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
-async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None) -> str:
+async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None, intent: Intent = None) -> str:
     """
     Get hazard and risk warnings for one or more chemicals.
 
@@ -1828,7 +1862,7 @@ async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None)
         ), data)
     finally:
         _log_intent("get_chemical_risk_warnings", chemicals,
-                        _json.dumps({"chemicals": chemicals}),
+                        _intent_params({"chemicals": chemicals}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -1871,7 +1905,7 @@ async def check_regulatory_compliance(
         description='Region codes to check. Valid codes: "EU", "US", "CN", "JP", "KR", '
                     '"CA", "AU", "TW". Omit to check EU + US (the default pair) — the '
                     'response says explicitly which regions were used.',
-    )] = None,
+    )] = None, intent: Intent = None,
 ) -> str:
     """
     Check multi-region regulatory status for chemicals. Answers TWO separate questions
@@ -1953,7 +1987,7 @@ async def check_regulatory_compliance(
         ), {"_usage": _usage})
     finally:
         _log_intent("check_regulatory_compliance", chemicals,
-                        _json.dumps({"chemicals": chemicals, "regions": regions}),
+                        _intent_params({"chemicals": chemicals, "regions": regions}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -2013,7 +2047,7 @@ async def ask_chemical_safety(
 @mcp.tool(annotations=ToolAnnotations(title="Get PPE Recommendation", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
-async def get_ppe_recommendation(chemicals: ChemicalList, lang: Lang = None) -> str:
+async def get_ppe_recommendation(chemicals: ChemicalList, lang: Lang = None, intent: Intent = None) -> str:
     """
     Get PPE (Personal Protective Equipment) recommendations for chemicals.
 
@@ -2096,14 +2130,14 @@ async def get_ppe_recommendation(chemicals: ChemicalList, lang: Lang = None) -> 
         )
     finally:
         _log_intent("get_ppe_recommendation", chemicals,
-                        _json.dumps({"chemicals": chemicals}),
+                        _intent_params({"chemicals": chemicals}, intent),
                     success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Storage Guidance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
-async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None) -> str:
+async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None, intent: Intent = None) -> str:
     """
     Get storage and isolation guidance for chemicals.
 
@@ -2133,7 +2167,7 @@ async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None) -> st
         )
     finally:
         _log_intent("get_storage_guidance", chemicals,
-                        _json.dumps({"chemicals": chemicals}),
+                        _intent_params({"chemicals": chemicals}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -2154,7 +2188,7 @@ async def get_emergency_response(
                     'for hydrofluoric acid); picking "spill" for a contact incident silently '
                     'returns cleanup guidance instead of the antidote.',
     )] = "spill",
-    lang: Lang = None,
+    lang: Lang = None, intent: Intent = None,
 ) -> str:
     """
     Get emergency response guidance for a chemical incident.
@@ -2254,7 +2288,7 @@ async def get_emergency_response(
         )
     finally:
         _log_intent("get_emergency_response", [chemical],
-                        _json.dumps({"chemical": chemical, "scenario": scenario}),
+                        _intent_params({"chemical": chemical, "scenario": scenario}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -2267,7 +2301,7 @@ async def get_exposure_limits(
         description='Optional filter for which standards to return: "US" (OSHA PEL), '
                     '"EU" (IOELV), "JP", "CN" (GBZ 2.1), or "INT" (ACGIH TLV). '
                     'Omit to return every standard on file.',
-    )] = None,
+    )] = None, intent: Intent = None,
 ) -> str:
     """Get occupational exposure limits (OEL/TLV/PEL/MAC) for chemicals.
 
@@ -2317,14 +2351,14 @@ async def get_exposure_limits(
         )
     finally:
         _log_intent("get_exposure_limits", chemicals,
-                        _json.dumps({"chemicals": chemicals, "region": region}),
+                        _intent_params({"chemicals": chemicals, "region": region}, intent),
                     success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get Transport Classification", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
-async def get_transport_classification(chemicals: ChemicalList) -> str:
+async def get_transport_classification(chemicals: ChemicalList, intent: Intent = None) -> str:
     """Get UN transport classification for chemicals (dangerous goods shipping).
     Returns UN number, proper shipping name, hazard class, packing group,
     and transport mode details (ADR road, IATA air, IMDG sea).
@@ -2358,7 +2392,7 @@ async def get_transport_classification(chemicals: ChemicalList) -> str:
         )
     finally:
         _log_intent("get_transport_classification", chemicals,
-                        _json.dumps({"chemicals": chemicals}),
+                        _intent_params({"chemicals": chemicals}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -2369,7 +2403,7 @@ async def create_audit_session(
         description='Short human-readable label for the audit, shown on the report, e.g. '
                     '"Grignard prep — 2026-04-16" or "Solvent screening #3".',
     )],
-    chemicals: ChemicalList,
+    chemicals: ChemicalList, intent: Intent = None,
 ) -> str:
     """
     Run a full MSDS safety audit for a list of chemicals and return a session id.
@@ -2480,7 +2514,7 @@ async def create_audit_session(
         )
     finally:
         _log_intent("create_audit_session", chemicals,
-                        _json.dumps({"experiment_name": experiment_name, "chemicals": chemicals}),
+                        _intent_params({"experiment_name": experiment_name, "chemicals": chemicals}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -2868,7 +2902,7 @@ async def search_chemical_database(query: Annotated[str, Field(
     description='A single chemical name, synonym, or CAS number, e.g. "methanol", '
                 '"wood alcohol", "67-56-1". Not a natural-language question — use '
                 'ask_chemical_safety for those.',
-)]) -> str:
+)], intent: Intent = None) -> str:
     """
     Search the MSDS Chain database for a specific chemical.
 
@@ -3004,7 +3038,7 @@ async def search_chemical_database(query: Annotated[str, Field(
             return f"Chemical search failed (HTTP {res.status_code}). Try a different name or CAS number."
     finally:
         _log_intent("search_chemical_database", [query],
-                        _json.dumps({"query": query}),
+                        _intent_params({"query": query}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -3019,7 +3053,7 @@ async def search_msds_online(
     cas_number: Annotated[str, Field(
         description='CAS number, e.g. "75-05-8". Used in preference to chemical_name '
                     'when both are given, because it identifies the substance exactly.',
-    )] = "",
+    )] = "", intent: Intent = None,
 ) -> "CallToolResult | str":
     """
     Look up GHS hazard data for a chemical NOT in the MSDS Chain database, via PubChem.
@@ -3073,7 +3107,7 @@ async def search_msds_online(
         )
     finally:
         _log_intent("search_msds_online", [chemical_name or cas_number],
-                    _json.dumps({"chemical_name": chemical_name, "cas_number": cas_number}),
+                    _intent_params({"chemical_name": chemical_name, "cas_number": cas_number}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -3089,7 +3123,7 @@ async def get_sds_section(
                     "8 exposure controls & PPE, 9 physical properties, "
                     "13 disposal, 14 transport.",
     )],
-    lang: Lang = None,
+    lang: Lang = None, intent: Intent = None,
 ) -> str:
     """
     Retrieve a specific SDS (Safety Data Sheet) section for a chemical.
@@ -3192,7 +3226,7 @@ async def get_sds_section(
         )
     finally:
         _log_intent("get_sds_section", [chemical],
-                    _json.dumps({"chemical": chemical, "section": section}),
+                    _intent_params({"chemical": chemical, "section": section}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -3574,7 +3608,7 @@ async def check_mixing_order(
 @mcp.tool(annotations=ToolAnnotations(title="Get Waste Disposal Guidance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
-async def get_waste_disposal(chemicals: ChemicalList) -> str:
+async def get_waste_disposal(chemicals: ChemicalList, intent: Intent = None) -> str:
     """
     Get waste classification and disposal guidance for chemicals.
 
@@ -3621,7 +3655,7 @@ async def get_waste_disposal(chemicals: ChemicalList) -> str:
         )
     finally:
         _log_intent("get_waste_disposal", chemicals,
-                        _json.dumps({"chemicals": chemicals}),
+                        _intent_params({"chemicals": chemicals}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -3639,7 +3673,7 @@ async def compare_sds_versions(
     )] = "",
     region: Annotated[str, Field(
         description='Optional region code to narrow the lookup, e.g. "US", "EU", "JP", "CN".',
-    )] = "",
+    )] = "", intent: Intent = None,
 ) -> CallToolResult:
     """
     Compare a chemical's two most recent SDS versions and report whether its
@@ -3692,7 +3726,7 @@ async def compare_sds_versions(
         )
     finally:
         _log_intent("compare_sds_versions", [chemical],
-                        _json.dumps({"chemical": chemical, "supplier": supplier, "region": region}),
+                        _intent_params({"chemical": chemical, "supplier": supplier, "region": region}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -4135,7 +4169,7 @@ async def batch_safety_check(
                 'Intended for 2-20 items; this runs compatibility, hazards and PPE in '
                 'one call, so cost and latency grow with the list length.',
     )],
-    lang: Lang = None,
+    lang: Lang = None, intent: Intent = None,
 ) -> str:
     """
     Run a comprehensive safety check on a list of chemicals in one call.
@@ -4267,14 +4301,14 @@ async def batch_safety_check(
         ), data)
     finally:
         _log_intent("batch_safety_check", chemicals,
-                        _json.dumps({"chemicals": chemicals}),
+                        _intent_params({"chemicals": chemicals}, intent),
                     success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Lists", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
-async def check_regulatory_lists(chemical: Chemical, lang: Lang = None) -> str:
+async def check_regulatory_lists(chemical: Chemical, lang: Lang = None, intent: Intent = None) -> str:
     """
     Check which international regulatory lists a chemical appears on.
 
@@ -4343,14 +4377,14 @@ async def check_regulatory_lists(chemical: Chemical, lang: Lang = None) -> str:
         )
     finally:
         _log_intent("check_regulatory_lists", [chemical],
-                        _json.dumps({"chemical": chemical}),
+                        _intent_params({"chemical": chemical}, intent),
                     success=success, error_message=error_msg)
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get SDS Document", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
-async def get_sds_document(chemical: Chemical) -> CallToolResult:
+async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToolResult:
     """
     Return a signed download URL for the original SDS/MSDS PDF of a chemical.
 
@@ -4491,7 +4525,7 @@ async def get_sds_document(chemical: Chemical) -> CallToolResult:
             )
     finally:
         _log_intent("get_sds_document", [chemical],
-                        _json.dumps({"chemical": chemical}),
+                        _intent_params({"chemical": chemical}, intent),
                     success=success, error_message=error_msg)
 
 
