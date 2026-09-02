@@ -2333,8 +2333,11 @@ async def get_exposure_limits(
                     ltype = lim.get("type", "?")
                     value = lim.get("value", "—")
                     unit = lim.get("unit", "")
-                    region = lim.get("region", "")
-                    region_suffix = f" ({region})" if region else ""
+                    # CI-578: 别叫 `region` —— 它会盖掉调用方传的过滤条件，而 `finally`
+                    # 里的 `_log_intent` 在循环之后跑，记进日志的就成了最后一条限值的
+                    # region。守卫见 tests/test_ci578_logged_params_not_reassigned.py。
+                    lim_region = lim.get("region", "")
+                    region_suffix = f" ({lim_region})" if lim_region else ""
                     lines.append(
                         f"- **{source}**{region_suffix}: {ltype} = {value} {unit}".rstrip()
                     )
@@ -3436,8 +3439,11 @@ async def validate_protocol_chemicals(
     success = True
     data: dict = {}
     try:
+        # CI-578: 截断结果放进新变量 —— 就地覆盖 `protocol_text` 会让 `finally` 里记的
+        # `protocol_text_length` 对所有超长输入恒等于 4015，分不出 4.5k 和 200k。
+        sent_text = protocol_text
         if len(protocol_text) > 4000:
-            protocol_text = protocol_text[:4000] + "\n[...truncated]"
+            sent_text = protocol_text[:4000] + "\n[...truncated]"
 
         message = (
             "Extract ALL chemical names, reagents, and solvents from the following "
@@ -3447,7 +3453,7 @@ async def validate_protocol_chemicals(
             "- CAS number (if found)\n"
             "- Whether we have safety data for it (yes/no)\n\n"
             "If a name is ambiguous, note the ambiguity.\n\n"
-            f"Text to analyze:\n```\n{protocol_text}\n```"
+            f"Text to analyze:\n```\n{sent_text}\n```"
         )
         data = await _quick_chat(message, lang=lang)
         if data.get("_timed_out"):
