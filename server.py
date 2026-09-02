@@ -2769,6 +2769,63 @@ def _no_hazard_basis_block(data: dict) -> list[str]:
     return lines
 
 
+def _batch_not_analysed(data: dict, submitted: list[str]) -> list[str]:
+    """调用方提交了、但**没进分析**的那些名字（CI-570）。
+
+    后端在解析之后按 `MAX_BATCH_CHEMICALS` 截断，被丢掉的输入在 `data["chemicals"]` 里
+    一条都不出现——analysed / unresolved / rejected 三类都没有 ⇒ 差集就是它们。
+
+    🔴 差集之所以敢做：后端 `_resolve_all` 用**调用方原样的字符串**（strip 后）当 key，
+    不是解析后的规范名。若它换成规范名，`"67-64-1"` 会被算成「没进分析」——而那是一个
+    看起来很权威的**假警报**，比不提示更糟。改后端那一侧的人：这里会跟着错，且不报错。
+    """
+    if not data.get("truncated"):
+        return []
+    accounted = {
+        (e.get("name") or "").strip().lower()
+        for e in (data.get("chemicals") or []) if isinstance(e, dict)
+    }
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in submitted:
+        name = (raw or "").strip()
+        key = name.lower()
+        if not name or key in accounted or key in seen:
+            continue
+        seen.add(key)
+        out.append(name)
+    return out
+
+
+def _batch_truncation_block(data: dict, submitted: list[str]) -> list[str]:
+    """CI-570：提交了 13–20 个时，超出 12 的那些**既不在结果里、也没有任何提示**。
+
+    与 CI-277 同一个形状：**没有结论被读成没有危害**。所以这段话要说清的不是「我们只算了
+    12 个」，而是「下面的一切——**包括没有警告这件事**——都不涉及这几个」。
+    """
+    if not data.get("truncated"):
+        return []
+    dropped = _batch_not_analysed(data, submitted)
+    lines = [
+        "🔴 **This request exceeded the batch size limit, so not every submitted "
+        "chemical was analysed.**",
+    ]
+    if dropped:
+        lines.append(
+            f"These {len(dropped)} were NOT analysed — nothing below says anything "
+            f"about them, **including the absence of a warning**:"
+        )
+        lines.extend(f"- {name}" for name in dropped)
+    else:
+        lines.append(
+            "Some of what you submitted was not analysed; nothing below says anything "
+            "about those, **including the absence of a warning**."
+        )
+    lines.append("Call batch_safety_check again with just those to get their results.")
+    lines.append("")
+    return lines
+
+
 def _precursor_disclosure_block(data: dict) -> list[str]:
     """CI-553/CI-562: render the backend's regulated-precursor disclosure into **text**.
 
@@ -2886,12 +2943,9 @@ def _precursor_disclosure_block(data: dict) -> list[str]:
                     + ". The disclosure text was not returned by the backend; treat this "
                       "as a flagged listing and verify against the cited regime."
                 )
-    if data.get("truncated"):
-        lines.append(
-            "🔴 This request exceeded the batch size limit, so **not every submitted "
-            "chemical was analysed**. The notice above covers what you submitted; the "
-            "results below cover only the chemicals that appear in them."
-        )
+    # 🔴 CI-570：截断提示**曾经写在这里**，于是它只在「这批里恰好有受管制前体」时才出现
+    # ——一个与截断毫无关系的条件。没有前体命中的普通批次（绝大多数）全程沉默。
+    # 现在它是 `_batch_truncation_block`，无条件渲染。别再往这里搬回来。
     lines.append("")
     return lines
 
@@ -4204,6 +4258,9 @@ async def batch_safety_check(
         sections.append("# Batch Safety Report")
         chem_list = ", ".join(chemicals)
         sections.append(f"**Chemicals ({len(chemicals)}):** {chem_list}\n")
+        # 🔴 紧跟抬头：抬头刚说「Chemicals (20)」，截断这件事必须挨着它说，
+        # 埋在报告中段等于没说。
+        sections.extend(_batch_truncation_block(data, chemicals))
 
         if data.get("unresolved"):
             sections.extend(_unresolved_block(data, trailing_newline=True))
@@ -4294,6 +4351,10 @@ async def batch_safety_check(
             # 同 get_chemical_risk_warnings：逐条透传，别再手抄字段
             "risk_warnings": [_expose(w) for w in data.get("risk_warnings", [])],
             "documents": documents,
+            # 🔴 CI-570：上面那行 `"chemicals": chemicals` 回的是**调用方提交的全部**，
+            # 而 pairs 只覆盖前 12 个 ⇒ 光改文本面的话，只拿 structuredContent 的客户端
+            # （claude.ai 连接器）读到的仍是一份声称覆盖 20 个的报告。
+            "not_analysed": _batch_not_analysed(data, chemicals),
         }
         return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(sections))],
