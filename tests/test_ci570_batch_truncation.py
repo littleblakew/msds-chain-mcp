@@ -15,7 +15,10 @@
 | 变异 | 应当 |
 |---|---|
 | 把 `_batch_truncation_block` 的调用搬回 `_precursor_disclosure_block` 里（＝退回事故代码） | `…without_precursor_disclosure` 红 |
-| `_batch_not_analysed` 改成返回 `[]` | `…names_the_dropped_chemicals` 红 |
+| `_batch_not_analysed` 改成返回 `[]` | `…names_the_dropped_chemicals` 红。🔴 **初版这条记录是假的**：断言写成 `"chem13" in out`，而抬头那行会把**每个提交的名字**都念一遍 ⇒ 恒真，改成返回 `[]` 它照样绿。异构 review 实测抓到，已改成只断言「被丢掉的那一节」 |
+| 折回按小写比较 | `…case_differing_duplicate…` 红 |
+| 把作用域写回「nothing below says anything」 | `…does_not_swallow_the_precursor_notice` 红 |
+| 只丢掉 1 个时把建议写回「再调一次 batch」 | `…single_dropped_chemical…` 红 |
 | 删掉 structured 里的 `not_analysed` | `…structured_face_also_says_it` 红 |
 | 把 `_resolve_all` 的 key 换成规范名（后端侧，本仓测不到） | **测不出** —— 见 `_batch_not_analysed` docstring 里写死的那条前提 |
 """
@@ -67,17 +70,30 @@ def test_truncation_is_reported_without_precursor_disclosure(monkeypatch):
     """🔴 零前体载荷 —— 正是 CI-553 的测试从没走过、而线上绝大多数调用走的那条路。"""
     out = _text(_run(_payload(), SUBMITTED, monkeypatch))
     assert "not every submitted chemical was analysed" in out, out
-    assert "including the absence of a warning" in out, (
+    assert "absence of a warning there says nothing about these" in out, (
         "只说了「没全算」，没说清「没有警告也不代表安全」—— 那正是 CI-277 的形状：\n" + out)
+
+
+def _dropped_section(out: str) -> str:
+    """只取「被丢掉的那一节」。
+
+    🔴 **别对整段输出做 `in` 断言**（review 抓到的）：抬头那行
+    `**Chemicals (13):** chem1, …, chem13` 会把**每一个提交的名字**都念一遍
+    ⇒ `assert "chem13" in out` 恒真，把 `_batch_not_analysed` 改成返回 `[]` 它也绿。
+    判据要打在真正决胜的那一段上。
+    """
+    assert "were NOT analysed" in out, f"根本没渲染截断块：\n{out}"
+    return out.split("were NOT analysed")[-1].split("get_chemical_risk_warnings")[0] \
+              .split("Call batch_safety_check")[0]
 
 
 def test_it_names_the_dropped_chemicals(monkeypatch):
     """点名，否则用户无从知道是哪几个。"""
     out = _text(_run(_payload(), SUBMITTED, monkeypatch))
-    assert "chem13" in out, out
+    section = _dropped_section(out)
+    assert "chem13" in section, section
     # 阴性对照：进了分析的那些不该被列成「没分析」
-    dropped_section = out.split("were NOT analysed")[-1].split("Call batch_safety_check")[0]
-    assert "chem1\n" not in dropped_section and "chem12" not in dropped_section, dropped_section
+    assert "chem12" not in section, section
 
 
 def test_structured_face_also_says_it(monkeypatch):
@@ -103,5 +119,49 @@ def test_caller_string_is_what_gets_matched(monkeypatch):
     """差集按调用方原样字符串比 —— 大小写/空格不该造出假的「没分析」。"""
     payload = _payload(chemicals=[{"name": "Acetone", "cas": "67-64-1", "resolved": True}])
     out = _text(_run(payload, ["  Acetone  ", "methanol"], monkeypatch))
-    assert "methanol" in out
-    assert "Acetone" not in out.split("were NOT analysed")[-1].split("Call batch")[0]
+    section = _dropped_section(out)
+    assert "methanol" in section, section
+    assert "Acetone" not in section, section
+
+
+def test_the_claim_does_not_swallow_the_precursor_notice(monkeypatch):
+    """🔴 受管制前体披露是**在截断之前**算的（后端有意），它**能**点到被丢掉的那个。
+
+    所以断言不能笼统说「下面的一切都不涉及它们」—— 那会让读者把两行之下那条真正
+    适用的披露也当成不适用，比不提示更糟。这条是 review 抓到的回归。
+    """
+    payload = _payload(precursor_disclosure=[{"name": "chem13", "statement": "…"}])
+    out = _text(_run(payload, SUBMITTED, monkeypatch))
+    assert "nothing below says anything" not in out, (
+        "作用域又写回「下面的一切」了：\n" + out)
+    assert "compatibility and risk results below" in out, out
+    assert "computed on everything you submitted" in out, (
+        "有前体披露时必须说明它覆盖的是全部提交，否则与上面那句冲突：\n" + out)
+
+
+def test_single_dropped_chemical_gets_an_instruction_that_works(monkeypatch):
+    """本工具拒收 <2 个输入 ⇒ 只丢掉 1 个时叫人「拿这些再调一次」是保证被拒的建议。"""
+    out = _text(_run(_payload(), SUBMITTED, monkeypatch))
+    assert "get_chemical_risk_warnings" in out, out
+    assert "Call batch_safety_check again with just those" not in out, out
+
+
+def test_case_differing_duplicate_is_still_reported_as_dropped(monkeypatch):
+    """🔴 后端 `name_to_cas` 保留原样大小写 ⇒ `Acetone` 与 `acetone` 是两个 key。
+
+    这边若折叠成小写比较，被丢掉的那个会被当成已入账 ⇒ `truncated=true` 配
+    `not_analysed=[]` —— 正是本票要防的那句「我们什么都没丢」。
+    """
+    payload = _payload(chemicals=[{"name": "Acetone", "cas": "67-64-1", "resolved": True}])
+    result = _run(payload, ["Acetone", "acetone"], monkeypatch)
+    sc = getattr(result, "structured_content", None) or {}
+    assert sc.get("not_analysed") == ["acetone"], sc.get("not_analysed")
+
+
+def test_empty_difference_under_truncation_is_loud(monkeypatch):
+    """差集为空 + `truncated` ⇒ 是我们这边算漏了，不是「什么都没丢」。含糊过去的话，
+    `_batch_not_analysed` 那条跨仓前提失效时看起来一切正常。"""
+    payload = _payload(chemicals=[{"name": n, "cas": "x", "resolved": True} for n in SUBMITTED])
+    out = _text(_run(payload, SUBMITTED, monkeypatch))
+    assert "defect on our side" in out, out
+    assert "unknown subset" in out, out

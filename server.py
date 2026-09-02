@@ -2781,18 +2781,22 @@ def _batch_not_analysed(data: dict, submitted: list[str]) -> list[str]:
     """
     if not data.get("truncated"):
         return []
+    # 🔴 **按大小写敏感比**（review 抓到的）：后端 `name_to_cas[name]` 保留原样大小写，
+    # 所以 `"Acetone"` 和 `"acetone"` 在它那边是**两个 key**。这边若折叠成小写，
+    # 「留下 Acetone、丢掉 acetone」时那个被丢的会被当成已入账 ⇒ `truncated=true` 配
+    # `not_analysed=[]`，正是本票要防的那句「我们什么都没丢」。后端已经 strip 过，
+    # 所以这里只 strip、不 lower。
     accounted = {
-        (e.get("name") or "").strip().lower()
+        (e.get("name") or "").strip()
         for e in (data.get("chemicals") or []) if isinstance(e, dict)
     }
     out: list[str] = []
     seen: set[str] = set()
     for raw in submitted:
         name = (raw or "").strip()
-        key = name.lower()
-        if not name or key in accounted or key in seen:
+        if not name or name in accounted or name in seen:
             continue
-        seen.add(key)
+        seen.add(name)
         out.append(name)
     return out
 
@@ -2811,17 +2815,38 @@ def _batch_truncation_block(data: dict, submitted: list[str]) -> list[str]:
         "chemical was analysed.**",
     ]
     if dropped:
+        # 🔴 作用域必须收窄到「相容性 / 风险」两节（review 抓到的）：受管制前体披露是
+        # **在截断之前**算的（后端有意为之），它**能**点到被丢掉的那个物质。原文写
+        # 「nothing below says anything about them」会让读者把两行之下那条真正适用的
+        # 披露也当成不适用 —— 那是比不提示更糟的一种错。
         lines.append(
-            f"These {len(dropped)} were NOT analysed — nothing below says anything "
-            f"about them, **including the absence of a warning**:"
+            f"These {len(dropped)} were NOT analysed. The compatibility and risk results "
+            f"below cover only the others — **the absence of a warning there says nothing "
+            f"about these**:"
         )
         lines.extend(f"- {name}" for name in dropped)
-    else:
+        if data.get("precursor_disclosure"):
+            lines.append(
+                "(The regulated-precursor notice below is computed on everything you "
+                "submitted, so it may name these.)"
+            )
+        # 🔴 本工具拒收少于 2 个输入 ⇒ 丢掉恰好 1 个（13 送 12 算，最常见的一种）时，
+        # 「拿这些再调一次」是一条**保证会被拒**的建议。
         lines.append(
-            "Some of what you submitted was not analysed; nothing below says anything "
-            "about those, **including the absence of a warning**."
+            "Call batch_safety_check again with just those to get their results."
+            if len(dropped) > 1 else
+            f"This tool needs at least 2 chemicals, so check {dropped[0]} with "
+            f"get_chemical_risk_warnings, or re-run the batch with it plus one other."
         )
-    lines.append("Call batch_safety_check again with just those to get their results.")
+    else:
+        # 🔴 走到这里说明差集丢了东西：被截断的输入在 `data["chemicals"]` 的三类里
+        # 一条都不该出现。**要吵，别含糊过去** —— 含糊的措辞会让
+        # `_batch_not_analysed` 那条跨仓前提失效时看起来一切正常。
+        lines.append(
+            "We could not determine which ones. This is a defect on our side, not a "
+            "statement that nothing was dropped — treat the results below as covering "
+            "an unknown subset of what you submitted, and re-submit in groups of 12."
+        )
     lines.append("")
     return lines
 
