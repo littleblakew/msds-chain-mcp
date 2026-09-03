@@ -1988,7 +1988,13 @@ async def check_regulatory_compliance(
                 _usage_reason = _u.get("reason", "")
             results.append(data)
             if data.get("unresolved"):
-                lines.append(f"### {chemical}\n- **Status:** Not found in database\n")
+                # 🔴 CI-714 第三处（扩大作用域时扫出来的，票面只点名了另外两个端点）：
+                # `/api/v2/compliance` 的未解析分支同样只回一个布尔
+                # （`direct_compliance`: `{chemical, cas: None, region_results: [],
+                # summary_level: "unknown", unresolved: True}`），没有任何原因。
+                # 把它渲染成 "Not found in database" 是同一句我们无权说的话。
+                lines.append(f"### {chemical}\n- **Status:** Could not resolve this input to a "
+                             f"record — NOT a statement that the database has no record for it\n")
                 continue
             lines.append(f"### {data.get('chemical', chemical)} (CAS: {data.get('cas', 'N/A')})")
             lines.append(f"- **Overall compliance level:** {data.get('summary_level', 'unknown')}")

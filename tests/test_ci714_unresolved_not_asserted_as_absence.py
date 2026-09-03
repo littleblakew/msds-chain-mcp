@@ -1,6 +1,7 @@
 """CI-714: `unresolved: true` 不许被渲染成「库里没有这份数据」。
 
-这两条单化学品路（`/api/v2/emergency-response` · `/api/v2/sds-section`）回的是一个**布尔**，
+这**三**条单化学品路（`/api/v2/emergency-response` · `/api/v2/sds-section` ·
+`/api/v2/compliance`）回的是一个**布尔**，
 不是多化学品那种 `unresolved: [名字…] + unresolved_detail`。渲染器此前把那个布尔翻译成
 「Chemical not found in database」——**一句我们无权说的话**：`unresolved` 的成因里只有一种
 是「库里没有」，其余是「畸形输入所以我们压根没搜」「有一级没跑成」「名字与 CAS 矛盾所以拒答」。
@@ -16,6 +17,11 @@
   2. 把 `get_emergency_response` 那句换回旧文案 → `test_emergency_*` 红。
   3. 只把禁语改成同义的「no record in our database」而不改语义 → **仍然红**，
      因为断言打在 `_FORBIDDEN` 的**多个拼写**上，不是单一字符串。
+  4. 把 `check_regulatory_compliance` 那句改回 → `test_regulatory_compliance_*` 红。
+     🔴 第三处是**扩大作用域时扫出来的，票面只点名了两个端点** —— 判据是
+     `grep -i "not found in|no record"` 全文件扫，不是照票面那两个名字改完就走。
+     ⚠️ 还有一处**没动**：`create_audit_session` 的 `**Not found in database:**` 来自
+     `sessions.py` 的**精确名/别名查表**（另一个产出者、另一个问题），没量过就别顺手改。
 🔴 反方向（不该红的那半）：`test_resolved_section_still_renders_content` —— 正常解析出来的
 调用必须照旧渲染正文。只验「不许说假话」而不验「该说的还在说」，会放过一个把整段输出
 砍空的改动（同族：本仓「收紧闸门只验漏放、没验误伤」那条）。
@@ -101,6 +107,19 @@ def test_sds_section_renders_the_truthful_note_the_backend_already_sent():
         "载荷里带着后端写好的真话，而模型读到的文本里没有它 —— "
         f"全文：\n{txt}"
     )
+
+
+COMPLIANCE_UNRESOLVED = {
+    "chemical": "71-43", "cas": None, "region_results": [],
+    "summary_level": "unknown", "unresolved": True,
+}
+
+
+def test_regulatory_compliance_does_not_claim_absence_from_the_database():
+    """第三处，票面没点名 —— 扩大作用域时扫出来的（`direct_compliance` 同样只回布尔）。"""
+    txt = _run(server.check_regulatory_compliance, "_direct_compliance",
+               COMPLIANCE_UNRESOLVED, ["71-43"])
+    _assert_no_absence_claim(txt)
 
 
 def test_resolved_section_still_renders_content():
