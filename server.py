@@ -2301,7 +2301,18 @@ async def get_emergency_response(
             lines.append("")
         lines.append(f"*Data source: {data.get('data_source', 'unknown')}*")
         if data.get("unresolved"):
-            lines.append("\n**Note:** Chemical not found in database — showing general guidance only.")
+            # 🔴 CI-714：此前这里写死「Chemical not found in database」——一句**我们无权说的话**。
+            # `unresolved: true` 只说明身份没解析出来，成因可以是「我们压根没搜」（畸形 CAS）、
+            # 「有一级没跑成」、「名字与 CAS 互相矛盾所以拒答」，其中只有一种是「库里没有」。
+            # 实测（2026-09-03，打 Prod）：`71-43`（我们**没有**搜索过）与一个乱码串拿到的这行
+            # **逐字相同** ⇒ 模型据此对付费用户断言我们没有这份数据。同族 [[CI-770]]/[[CI-413]]。
+            # 措辞照抄后端 `unresolved_detail.reason_en` 已经在用的那半句（"This is not a
+            # statement that…"），不新造披露口径。
+            # ⚠️ 这条路的载荷今天**只有** `{unresolved: true, data_source: general}` —— 说得出
+            # 「为什么」要等后端也发 reason（CI-714 的后端那半）。在那之前先别说假话。
+            lines.append("\n**Note:** We could not resolve this input to a record, so this is "
+                         "general guidance only. This is NOT a statement that the database has "
+                         "no record for it.")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
@@ -3283,7 +3294,15 @@ async def get_sds_section(
             f"Chemical: {chem_display} (CAS: {cas})\n",
         ]
         if data.get("unresolved"):
-            lines.append("**Note:** Chemical not found in database.")
+            # 🔴 CI-714：这一支此前写死「Chemical not found in database.」，而**载荷里已经带着
+            # 真话**：`no_section_text_note` 说的是「身份没能解析到 CAS —— 这不是「无危害」的
+            # 结论」。旧写法把它整个短路掉了，正是下面 CI-408 那段注释在防的事，只是那段注释
+            # 管不到这条 early branch。实测 2026-09-03：`71-43`（没搜过）与乱码串输出逐字相同。
+            lines.append(
+                data.get("no_section_text_note")
+                or "We could not resolve this input to a record. This is NOT a statement that "
+                   "the database has no record for it."
+            )
         elif content:
             lines.append(content)
         else:
