@@ -65,7 +65,9 @@ SECTION_RESOLVED = {
 
 def _run(tool, patch_name, payload, *args):
     async def _fake(*_a, **_k):
-        return payload
+        # 🔴 返回**副本**：工具会就地 `data.pop("_usage", None)`，共享 module 级 fixture
+        # 会被前一条测试悄悄改掉（review 抓到；今天无害，明天加一个键就不是了）。
+        return dict(payload)
 
     orig = getattr(server, patch_name)
     setattr(server, patch_name, _fake)
@@ -127,3 +129,57 @@ def test_resolved_section_still_renders_content():
     txt = _run(server.get_sds_section, "_direct_sds_section",
                SECTION_RESOLVED, "acetone", 4)
     assert SECTION_RESOLVED["content"] in txt
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 🔴 上面四条是**行为**测试，只覆盖我手点的四个工具 —— 而「哪些渲染器会说这句话」
+# 是一份会长出新成员的清单。下面这条扫源码，让新成员自己被发现。
+# （CLAUDE.md 反熵：任何清单都要能自己发现成员。review 抓到上一版两个维度都是手写的：
+#  只有英文拼写、且只打三个手点的工具。）
+#
+# 🔴 变异（各自实测过）：
+#   A. 在 server.py 任何渲染分支加一行 `lines.append("**Note:** Not found in the
+#      database.")` → 红。
+#   B. 把它写成中文「库中未收录。」→ 同样红（此前中文面漏在守卫外）。
+#   C. 让扫描器自己扫空（`src = []`）→ **必须也红**。这一条上一版没红：自检写在
+#      另一个测试里、自己又读了一遍文件 ⇒ 它证明的是「文件在」，不是「我扫了它」。
+#      本仓 [[my-own-guards-are-often-no-ops]]：**自检的粒度必须和守卫的粒度一样**，
+#      所以计数断言现在写在**同一个函数体内**。
+#      📌 做这条变异时还现场踩了一次「变异本身空跑」：改写脚本里的 `\n` 没写成 raw
+#      字符串 ⇒ 替换一次都没命中，而结果（全绿）与「守卫真的抓不到」完全同形。
+#      ⇒ **先断言替换命中了，再看红绿**。
+_SOURCE_FORBIDDEN = (
+    "not found in database",
+    "not found in the database",
+    "no record in our database",
+    "no record in the database",
+    "库中未收录",
+)
+
+# 逐字匹配的豁免行（strip 后）。**只放确实有别的产出者的**。
+_ALLOWED_LINES = {
+    # `sessions.py` 的精确名/别名查表真的返回了「这些名字在 chemicals 表里没有」，
+    # 与本票治的那个布尔不是一个产出者。没量过它的成因分布，所以不顺手改。
+    'lines.append(f"**Not found in database:** {\', \'.join(not_found)}")',
+}
+
+
+def test_no_renderer_claims_absence_from_the_database():
+    import pathlib
+    src = pathlib.Path(server.__file__).read_text().split("\n")
+    hits, scanned = [], 0
+    for n, line in enumerate(src, 1):
+        stripped = line.strip()
+        if stripped.startswith("#"):        # 注释里引用旧文案是允许的（本文件就在这么做）
+            continue
+        scanned += 1
+        low = stripped.lower()
+        if any(p in low for p in _SOURCE_FORBIDDEN) and stripped not in _ALLOWED_LINES:
+            hits.append(f"server.py:{n}: {stripped}")
+    # 🔴 就地自检：扫了 0 行和「仓是干净的」在断言结果上完全同形。
+    assert scanned > 3000, f"只扫到 {scanned} 行，这条守卫在空跑"
+    assert not hits, (
+        "有渲染分支在断言「库里没有这份数据」——这条路只知道身份没解析出来：\n"
+        + "\n".join(hits)
+        + "\n\n用 `_unresolved_boolean_note()`；确实有别的产出者就加进 _ALLOWED_LINES 并写清理由。"
+    )

@@ -1318,16 +1318,34 @@ _REG_LIST_COVERAGE_NOTE = {
 }
 _REG_LIST_STRINGS = {
     "en": {"title": "Regulatory Lists", "not_checked": "⚠️ **Not checked.**",
-           "status": "Status", "not_found": "Not found in the database.",
+           "status": "Status",
            "near": "Near matches in the database", "cas": "CAS",
            "count": "Matching lists", "unknown": "Unknown list",
            "none": "No match in our copy of the 23 lists."},
     "zh": {"title": "监管清单", "not_checked": "⚠️ **未核查。**",
-           "status": "状态", "not_found": "库中未收录。",
+           "status": "状态",
            "near": "库中的近似命中", "cas": "CAS",
            "count": "命中清单数", "unknown": "未知清单",
            "none": "在我们那份 23 清单副本中没有命中。"},
 }
+
+
+# CI-714：这三/四条单化学品路只拿得到一个布尔 `unresolved: true`，说不出成因。
+# 唯一被授权说的那句话写在这里**一次** —— 此前它被手抄成三种拼写（review 抓到，
+# 同族 [[CI-572]]「格式留两份 ⇒ 改一处漏另一处」）。
+# 🔴 zh 也要有：`_format_regulatory_lists` 那条路按调用方语言渲染，只给英文等于
+# 在中文面上留一句原样的「库中未收录。」。
+_UNRESOLVED_BOOLEAN_NOTE = {
+    "en": ("We could not resolve this input to a record — this is NOT a statement that "
+           "the database has no record for it."),
+    "zh": "我们没能把这个输入解析到一条记录 —— 这**不**代表库中没有它。",
+}
+
+
+def _unresolved_boolean_note(lang: str | None = None) -> str:
+    """CI-714: 对「只有一个布尔」的未解析载荷，我们唯一说得出口的那句话。"""
+    return _UNRESOLVED_BOOLEAN_NOTE.get(_normalize_lang(lang or LANG),
+                                        _UNRESOLVED_BOOLEAN_NOTE["en"])
 
 
 def _format_regulatory_lists(data: dict, chemical: str, lang: str | None = None) -> str:
@@ -1354,7 +1372,11 @@ def _format_regulatory_lists(data: dict, chemical: str, lang: str | None = None)
         return "\n".join(lines)
 
     if not data.get("cas"):
-        lines.append(f"**{s['status']}:** {data.get('error') or s['not_found']}")
+        # 🔴 CI-714 第四处：`error` 缺席时的兜底此前是 `not_found`
+        # （"Not found in the database." / 「库中未收录。」）—— 而这一支的条件只是
+        # 「没解析出 CAS」。docstring 上面自己写着这里要说"which kind of we don't
+        # have it"，兜底那句恰恰是唯一一种我们无权断言的。
+        lines.append(f"**{s['status']}:** {data.get('error') or _unresolved_boolean_note(lg)}")
         near = data.get("near_matches") or []
         if near:
             lines.append(f"**{s['near']}:** {', '.join(near)}")
@@ -1993,8 +2015,7 @@ async def check_regulatory_compliance(
                 # （`direct_compliance`: `{chemical, cas: None, region_results: [],
                 # summary_level: "unknown", unresolved: True}`），没有任何原因。
                 # 把它渲染成 "Not found in database" 是同一句我们无权说的话。
-                lines.append(f"### {chemical}\n- **Status:** Could not resolve this input to a "
-                             f"record — NOT a statement that the database has no record for it\n")
+                lines.append(f"### {chemical}\n- **Status:** {_unresolved_boolean_note()}\n")
                 continue
             lines.append(f"### {data.get('chemical', chemical)} (CAS: {data.get('cas', 'N/A')})")
             lines.append(f"- **Overall compliance level:** {data.get('summary_level', 'unknown')}")
@@ -2316,9 +2337,8 @@ async def get_emergency_response(
             # statement that…"），不新造披露口径。
             # ⚠️ 这条路的载荷今天**只有** `{unresolved: true, data_source: general}` —— 说得出
             # 「为什么」要等后端也发 reason（CI-714 的后端那半）。在那之前先别说假话。
-            lines.append("\n**Note:** We could not resolve this input to a record, so this is "
-                         "general guidance only. This is NOT a statement that the database has "
-                         "no record for it.")
+            lines.append(f"\n**Note:** {_unresolved_boolean_note(lang)} "
+                         "Showing general guidance only.")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
@@ -3304,11 +3324,14 @@ async def get_sds_section(
             # 真话**：`no_section_text_note` 说的是「身份没能解析到 CAS —— 这不是「无危害」的
             # 结论」。旧写法把它整个短路掉了，正是下面 CI-408 那段注释在防的事，只是那段注释
             # 管不到这条 early branch。实测 2026-09-03：`71-43`（没搜过）与乱码串输出逐字相同。
-            lines.append(
-                data.get("no_section_text_note")
-                or "We could not resolve this input to a record. This is NOT a statement that "
-                   "the database has no record for it."
-            )
+            # 🔴 只有当那条 note 确实是**为这个成因**写的才用它（review 抓到）：
+            # `no_section_text_note` 由 `no_section_text_reason` 决定，三种取值里另外
+            # 两种（`no_sections_parsed` / `section_not_present`）说的是「我们持有这份
+            # SDS 但…」——对一个身份都没解析出来的输入，那是**更强**的一句假话。
+            note = data.get("no_section_text_note")
+            if data.get("no_section_text_reason") != "unresolved":
+                note = None
+            lines.append(note or _unresolved_boolean_note(lang))
         elif content:
             lines.append(content)
         else:
