@@ -31,7 +31,7 @@ import re
 import textwrap
 import time
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from contextvars import ContextVar
 
@@ -3812,6 +3812,33 @@ async def get_waste_disposal(chemicals: ChemicalList, intent: Intent = None) -> 
                     success=success, error_message=error_msg)
 
 
+def _deprecated_version_args_note(ignored: list[str], from_version, to_version,
+                                  *, compared: bool) -> str:
+    """CI-848：把「参数被静默丢弃」写成一句用户能看懂的披露。
+
+    🔴 措辞的红线：必须说清**没有按他要求做**，再说**实际做了什么**。
+    只写「已忽略」不够——读的人（模型或人）会默认结果仍是他要的那份。
+
+    🔴 `compared` 必须由调用方按**它自己分支的那个条件**（`has_newer`）传进来，
+    不许在这里拿 `from_version`/`to_version` 的真假去猜：后端可以返回
+    `has_newer=True` 而版本号为空，那时表头照样印 `Version None → None`，
+    而这里会得出「什么都没比」——**一条自相矛盾的回复**（2026-09-04 review 实测复现）。
+    """
+    names = " / ".join(f"`{n}`" for n in ignored)
+    head = (f"⚠️ {names} was supplied but is no longer supported, and was ignored."
+            if len(ignored) == 1 else
+            f"⚠️ {names} were supplied but are no longer supported, and were ignored.")
+    if not compared:
+        return (f"{head} This tool compares only the two most recent revisions on record, "
+                f"and no comparison was made here — so the pair you asked for was not evaluated.")
+    if from_version and to_version:
+        return (f"{head} This tool compares only the two most recent revisions on record, "
+                f"so the comparison above is {from_version} → {to_version}, "
+                f"not the pair you asked for.")
+    return (f"{head} This tool compares only the two most recent revisions on record, "
+            f"so the comparison above is between those two, not the pair you asked for.")
+
+
 @mcp.tool(
     annotations=ToolAnnotations(title="Compare SDS Versions", read_only_hint=True, destructive_hint=False, open_world_hint=False),
     structured_output=False,
@@ -3826,7 +3853,16 @@ async def compare_sds_versions(
     )] = "",
     region: Annotated[str, Field(
         description='Optional region code to narrow the lookup, e.g. "US", "EU", "JP", "CN".',
-    )] = "", intent: Intent = None,
+    )] = "",
+    version_old: Annotated[Any, Field(
+        description='DEPRECATED and ignored. This tool always compares the two most recent '
+                    'revisions on record; it cannot compare an arbitrary pair. Accepted only so '
+                    'that clients holding an older tool snapshot are told their request was not '
+                    'honoured, instead of silently receiving a different comparison.',
+    )] = None,
+    version_new: Annotated[Any, Field(
+        description='DEPRECATED and ignored. See version_old.',
+    )] = None, intent: Intent = None,
 ) -> CallToolResult:
     """
     Compare a chemical's two most recent SDS versions and report whether its
@@ -3843,7 +3879,23 @@ async def compare_sds_versions(
         chemical: Chemical name or CAS number, e.g. "hydrogen peroxide" or "7722-84-1".
         supplier: Optional SDS supplier/manufacturer to disambiguate (e.g. "Sigma-Aldrich").
         region:   Optional region code to narrow the lookup (e.g. "US", "EU", "JP", "CN").
+        version_old / version_new: DEPRECATED and ignored — an arbitrary version pair
+            cannot be compared. Supplying them adds an explicit note to the reply saying
+            the request was not honoured; they never change what is compared.
     """
+    # CI-848：这两个参数 2026-06-08（`2f59164`，改走 /api/v2 直连）被删掉，但**外部客户端
+    # 拿的是工具面的快照**——ChatGPT 应用目录条目至今仍列着它们（2026-09-03 实测，快照停在
+    # 2026-05-22~06-08）。旧客户端照旧传，而 pydantic 对多余入参**静默丢弃**：用户要求
+    # 「比较 v3 和 v5」，拿到的是「最近两版」的对比，一份看起来完全正常的答案。这比报错贵得多，
+    # 且发生在外部调用量第二高的工具上。⇒ 收回来当**已弃用**接住，只为把静默损失变成显式披露。
+    # 🔴 别拿它去实现任意版本对比——那是另一件事，要改后端。
+    # 🔴 类型是 `Any` 且判据只看「有没有给」，故意的：这两个参数**唯一的职责是不让旧客户端失败**。
+    # 收窄成 `str` 会把 `{"version_old": null}`（旧客户端填未用字段的常见写法）变成
+    # ValidationError ⇒ 改之前它被静默丢弃、调用还能成功，改之后整条失败——
+    # 那正好打在这个改动要保护的那批人身上（2026-09-04 review 实测复现）。
+    ignored = [n for n, v in (("version_old", version_old), ("version_new", version_new))
+               if v is not None and str(v).strip() != ""]
+
     error_msg = None
     success = True
     try:
@@ -3856,9 +3908,15 @@ async def compare_sds_versions(
                 )
             else:
                 text = f"Could not resolve **{chemical}** to a known chemical."
+            payload = _strip_usage(data)
+            if ignored:
+                note = _deprecated_version_args_note(ignored, None, None, compared=False)
+                text = f"{text}\n\n{note}"
+                payload = {**payload, "deprecated_parameters_ignored": ignored,
+                           "deprecated_parameters_note": note}
             return CallToolResult(
                 content=[TextContent(type="text", text=text)],
-                structured_content=_strip_usage(data),
+                structured_content=payload,
             )
         lines = [
             f"**SDS Version Comparison — {chemical}** (CAS {data.get('cas', '?')})",
@@ -3873,13 +3931,21 @@ async def compare_sds_versions(
             f"\n**Verdict-relevant change:** "
             f"{'YES — re-review recommended' if data.get('verdict_relevant') else 'no'}"
         )
+        payload = _strip_usage(data)
+        if ignored:
+            note = _deprecated_version_args_note(
+                ignored, data.get("from_version"), data.get("to_version"), compared=True)
+            lines.append(f"\n{note}")
+            payload = {**payload, "deprecated_parameters_ignored": ignored,
+                       "deprecated_parameters_note": note}
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
-            structured_content=_strip_usage(data),
+            structured_content=payload,
         )
     finally:
         _log_intent("compare_sds_versions", [chemical],
-                        _intent_params({"chemical": chemical, "supplier": supplier, "region": region}, intent),
+                        _intent_params({"chemical": chemical, "supplier": supplier, "region": region,
+                                        **({"deprecated_args": ignored} if ignored else {})}, intent),
                     success=success, error_message=error_msg)
 
 

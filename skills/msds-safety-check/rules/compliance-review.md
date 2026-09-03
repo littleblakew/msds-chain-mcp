@@ -65,8 +65,12 @@ If API key is not configured, present the gathered data in narrative form and su
 
 If the user needs to compare SDS versions:
 ```
-compare_sds_versions(chemical="Acetone", version_old="2023-01", version_new="2025-06")
+compare_sds_versions(chemical="Acetone")
 ```
+It always compares the two most recent revisions on record; an arbitrary version pair
+cannot be requested. `version_old` / `version_new` are deprecated and ignored — passing
+them only adds a "this was not honoured" notice to the user-visible answer, so don't.
+
 Returns: whether a newer version exists, the two version/revision-date pairs, and the
 **hazard changes** between them (H-code additions/removals) plus whether those changes
 are verdict-relevant. It does NOT diff PPE, exposure limits, regulatory, storage or
