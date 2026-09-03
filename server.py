@@ -56,6 +56,26 @@ API_URL = os.environ.get(
     "https://msds-chain-backend-prod.orangepond-4b408d49.southeastasia.azurecontainerapps.io",
 ).rstrip("/")
 LANG = os.environ.get("MSDS_LANG", "en")  # 实测后端只认 en / zh，见下 _BACKEND_LANGS
+
+
+def _log_secret_header() -> dict[str, str]:
+    """CI-835: the backend's /mcp/call-log now requires this shared secret.
+
+    🔴 Read at call time, not at import: the env var is set on the Container App
+    a moment before the enforcing backend ships, and a core that cached "" at
+    import would keep posting unauthenticated (⇒ 401 ⇒ every call record dropped,
+    with only `mcp_call_log_post_failed` in stderr to say so).
+
+    🔴 Sent ONLY on the call-log POST, never on tool calls to the backend: this
+    credential authenticates "we are the log writer", and the tool path already
+    carries the end user's own key. Mixing them would put a service credential
+    on every request a third party's tool call generates.
+
+    Name note: backend + core read `MCP_LOG_SECRET`; the gateway reads
+    `MSDS_GW_MCP_LOG_SECRET` (its Settings has an env_prefix). Same value.
+    """
+    secret = os.environ.get("MCP_LOG_SECRET", "")
+    return {"X-MCP-Log-Secret": secret} if secret else {}
 TIMEOUT = 15.0        # single-chemical / pure-lookup v2 endpoints — fast, no LLM
 # ---------------------------------------------------------------------------
 # TIMEOUT_MULTI — the budget for every v2 endpoint that takes `chemicals: list`.
@@ -898,7 +918,7 @@ async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: in
                     "response_text": response_text,
                     "api_key": cred,
                 },
-                headers=_headers(),
+                headers={**_headers(), **_log_secret_header()},
             )
             # Previously unchecked: a non-2xx response from the logging
             # endpoint itself (e.g. validation 4xx, backend 5xx) was silently
