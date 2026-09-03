@@ -81,6 +81,11 @@ jobs:
         if: always()
         env:
           MCP_COVERAGE_KEY: ${{ secrets.MCP_COVERAGE_KEY }}
+          # CI-835: 这一步是**在 runner 里 import server.py** 直接调工具（上一步走的是
+          # mcp.lagentbot.com），所以它是一个「本地 core」在往 Prod 后端写调用日志。
+          # 后端上闸之后没有这个 secret 就每调一次刷一行 401 warning，且这轮探针的
+          # 调用不再进 mcp_call_logs（历史上它们是 source=internal 那批）。
+          MCP_LOG_SECRET: ${{ secrets.MCP_LOG_SECRET }}
         run: |
           if [ -z "$MCP_COVERAGE_KEY" ]; then
             echo "::warning::MCP_COVERAGE_KEY 未配置 —— 跳过 structuredContent 差集。"
