@@ -87,3 +87,37 @@ def test_no_note_when_not_supplied(call, payload):
     assert "no longer supported" not in text, text
     assert "deprecated_parameters_ignored" not in sc
     assert "deprecated_parameters_note" not in sc
+
+
+# ---- 以下两条来自 2026-09-04 的 review，各自钉住一个被抓到的真缺陷 ----
+
+def test_note_never_contradicts_the_comparison_printed_above_it(call):
+    """后端可以返回 `has_newer=True` 而版本号为空：表头照印 `Version None → None`，
+    若披露按「版本号真不真」判就会说「什么都没比」⇒ 同一条回复自相矛盾。
+    判据必须与调用方**同源**（`has_newer`）。"""
+    text, _ = call({"chemical": "x", "cas": "1", "has_newer": True,
+                    "hazard_changes": [], "verdict_relevant": False},
+                   version_old="2019-01")
+    assert "no comparison was made" not in text, text
+    assert "not the pair you asked for" in text, text
+
+
+@pytest.mark.parametrize("value,expect_disclosure", [
+    (None, False),          # 旧客户端填未用字段的常见写法
+    ("", False),
+    (2023, True),           # 模型把版本填成数字
+    ("2019-03-01", True),
+])
+def test_odd_values_never_turn_a_working_call_into_an_error(value, expect_disclosure, monkeypatch):
+    """🔴 这个改动要保护的正是**持有旧快照的客户端**——把参数收窄成 `str` 会让
+    `{"version_old": null}` 变成 ValidationError，于是改之前还能成功的调用改之后整条失败：
+    安全修复打在它要救的人身上。所以先在 schema 层验「不报错」，再验行为。"""
+    tool = server.mcp._tool_manager._tools["compare_sds_versions"]
+    tool.fn_metadata.arg_model.model_validate({"chemical": "x", "version_old": value})
+
+    async def _fake(*a, **kw):
+        return _PAIR
+    monkeypatch.setattr(server, "_direct_compare_sds", _fake)
+    set_caller_credential("sk-msds-test")
+    res = asyncio.run(server.compare_sds_versions("x", version_old=value))
+    assert ("no longer supported" in res.content[0].text) is expect_disclosure
