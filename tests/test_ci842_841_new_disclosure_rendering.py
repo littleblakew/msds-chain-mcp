@@ -26,6 +26,7 @@ CI-470/CI-666 `no_hazard_basis` · CI-360 `insufficient_reason`）：后端加�
 | `_unchecked_intents_directive` 把 `isinstance(list)` 三态闸删掉 | 红 | 红（None 用例炸 TypeError） |
 | 🔴 **反向**：`query_form_disclosures` 为空时也印抬头 | 红 | 红（`test_silent_when_nothing_to_say`） |
 | 🔴 **反向**：指令里加一句 "we have no data, please upload" | 红 | 红（`test_directive_never_asserts_absence`） |
+| 同第 1 行，只跑 `get_emergency_response`（6 个端点里唯一返回裸 dict 的） | 红 | 红 |
 """
 import asyncio
 
