@@ -193,6 +193,25 @@ def test_single_substance_tools_render_query_form_disclosure(
     assert anchor in out, f"{tool_name} 的正文没了：\n{out}"
 
 
+def test_emergency_response_renders_it_too():
+    """🔴 单独一条：`get_emergency_response` 是这 6 个端点里**唯一形状不同的**——
+    它返回裸 dict 而不是 `{"results": [...]}`，所以 `_form_disclosure_lines` 在那里拿的是
+    `data` 不是 `item`。参数化那组覆盖不到它，而「形状不同的那一个」正是这类缺陷藏身处。
+
+    急救也是形态差异最致命的场景（无水 HF vs 氢氟酸水溶液）⇒ 披露必须在任何处置动作之前。
+    """
+    payload = {"chemical": "Ethanol", "cas": "64-17-5", "scenario": "exposure",
+               "query_form_disclosure": NOTE_EN,
+               "signal_word": "Danger",
+               "immediate_actions": ["Move to fresh air"]}
+    out = _run(server.get_emergency_response, "_direct_emergency", payload,
+               "glacial ethanol", "exposure")
+    assert NOTE_EN in out, out
+    assert "Move to fresh air" in out, "正文被披露挤掉了"
+    assert out.index(NOTE_EN) < out.index("Move to fresh air"), \
+        "披露必须排在任何处置动作之前"
+
+
 def test_both_form_disclosures_coexist_and_query_form_comes_first():
     """🔴 两条披露**不合并、不二选一**（后端 `query_form_match` 的硬契约）。
 
