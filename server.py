@@ -429,7 +429,10 @@ def _quick_result(data: dict) -> CallToolResult:
     # the client model summarizes the answer and drops the trailing link — verified on
     # prod: backend returns documents correctly, but claude.ai never surfaced the link
     # for ask_chemical_safety while the (short, link-last) direct tools did.
-    text = (_unchecked_directive(data.get("unchecked"))
+    # 🔴 CI-841 的指令拼在 `unchecked` **之前** ⇒ 渲染出来在它上面，与后端两个确定性块
+    # 的相对顺序一致（「这一问没查」比「这几个化学品没查」更靠近用户要的那件事）。
+    text = (_unchecked_intents_directive(data.get("unchecked_intents"))
+            + _unchecked_directive(data.get("unchecked"))
             + answer + _format_sds_documents(documents)
             + _format_tool_results(tool_results))
     return CallToolResult(
@@ -482,6 +485,52 @@ def _unchecked_directive(unchecked) -> str:
     if not names:
         return ""
     return _UNCHECKED_DIRECTIVE.format(n=len(names), names=", ".join(names))
+
+
+# 🔴 CI-841：**为什么后端已经确定性拼了一段，这里还要再来一条指令。**
+# 后端那段（`quick_engine._append_unchecked_intents`）防的是**后端自己的** summary LLM
+# ——它确实防住了，Prod 实测 4/5 违反 prompt 侧禁令、确定性拼串才是承重层。但 MCP 这条
+# 通道上还有**第三个模型**：claude.ai / ChatGPT / Copilot 的客户端模型会把 `answer`
+# **重写**之后才送到用户眼前，而后端的确定性对它一个字都管不到。CI-592 正是为此
+# 给 `unchecked` 加了配对指令（原始事故就是从 MCP 的 `validate_protocol_chemicals`
+# 观察到的），CI-567 更早实测过「光把正确内容放进载荷不够」。
+# ⇒ `unchecked` 在这条通道上有两层，`unchecked_intents` 此前只有一层。补齐的是那一层，
+# 不是对称美学。
+#
+# 🔴 措辞红线同 `_UNCHECKED_DIRECTIVE`：只说两件真话——**这一问本轮没跑任何工具**、
+# **请单独再问一次**。**不许出现「未收录 / 没有数据 / 建议上传 SDS」**：我们没查，
+# 不等于我们没有（CI-243 / CI-322 / CI-334 三次同形事故）。
+_UNCHECKED_INTENTS_DIRECTIVE = (
+    "[unchecked-question] This question also asks about: {names}. NO tool was run for "
+    "that part in this turn, so there is NO tool output for it.\n"
+    "You MUST tell the user that part was not checked, BEFORE any conclusion about it. "
+    "You MUST NOT present any statement about it as coming from the SDS, from a "
+    "protocol, from the tool results, or from 'the data' — none of those were consulted "
+    "for it. You MUST NOT state or imply whether we do or do not have data for it — "
+    "this turn did not look. Tell the user to ask about that part separately. Do not "
+    "drop this when summarizing.\n\n"
+)
+
+
+def _unchecked_intents_directive(unchecked_intents) -> str:
+    """把后端的 `unchecked_intents` 渲染成给客户端模型的显式指令。空/缺失 ⇒ 空串。
+
+    三态与 `_unchecked_directive` 逐字相同（`[]`＝算过没有；`None`＝这一轮没算；
+    键缺失＝老后端，本仓与后端各自发布、版本会错开），**两者都渲染成空串**，
+    区分留在 structuredContent 里。不重复论证，见那个函数。
+
+    🔴 这里念的是**后端已经本地化过的 intent 显示名**（`quick_engine._INTENT_DISPLAY`），
+    不是 intent 的内部标识符——后端 `_render_unchecked_intents` 已经翻过一次。
+    ⚠️ 但**载荷里的 `unchecked_intents` 是内部标识符**（`first_aid_guidance` 这类），
+    确定性那段本地化文案只在 `answer` 里。所以这条指令念出来的是标识符：它面向的是
+    模型不是用户，模型据此去 `answer` 里找那段已本地化的话，**用户可见的措辞仍单源在后端**。
+    """
+    if not isinstance(unchecked_intents, list):
+        return ""
+    names = [str(n) for n in unchecked_intents if isinstance(n, str) and n.strip()]
+    if not names:
+        return ""
+    return _UNCHECKED_INTENTS_DIRECTIVE.format(names=", ".join(names))
 
 
 # 后端没给 note 时的兜底文案（老后端、或将来新增的 reason）。键是机器可判的
@@ -1636,6 +1685,20 @@ def _form_disclosure_lines(item: dict) -> list[str]:
     # （水 → TMSP 0.03%）**一个字都看不到**。放在形态披露**之前**：它说的是「这份 SDS
     # 描述的根本不是纯物质」，比「是哪一种形态」更靠前。
     out: list[str] = []
+    # 🔴 CI-842：**排在最前面，因为它质疑的是「这条答案说的是不是你问的那个东西」**。
+    # 下面两条都已经假定记录是对的、只在描述它（是制剂 / 是哪个形态）；本条说的是
+    # 我们据以作答的记录**名字里没有你说的那个形态词** —— 一次静默的替换
+    # （Prod 实测 `glacial ethanol` → 64-17-5 照母体作答、零披露）。先读到「答的可能
+    # 不是这个东西」，比先读到「这个东西是水溶液形态」更靠前。
+    #
+    # 🔴 **不与 `physical_form_disclosure` 合并、也不二选一**（后端 `query_form_match`
+    # 的注释是同一条，这里不重复论证）：一个由**记录**驱动、一个由**查询与命中名之差**
+    # 驱动，两者可以同时出现且不矛盾。合并会丢掉其中一半。
+    #
+    # 🔴 措辞是后端渲染的（5 语言单源在 i18n catalog），**别在这里重写**——理由与本函数
+    # 下面那两条逐字相同，第二份不带版本的副本会各漂各的。
+    if qform := item.get("query_form_disclosure"):
+        out.append(f"- ⚠️ {qform}")
     if prep := item.get("preparation_disclosure"):
         out.append(f"- ⚠️ {prep}")
     note = item.get("physical_form_disclosure")
@@ -1761,6 +1824,9 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
         if data.get("unresolved"):
             lines.extend(_unresolved_block(data, trailing_newline=True))
         lines.extend(_rejected_products_block(data))
+        # 🔴 CI-842 排在 precursor / no_hazard_basis **之前**：那两条都在说「这条答案的
+        # 内容」，本条在说「这条答案说的是不是你问的那个东西」——身份先于内容。
+        lines.extend(_query_form_disclosure_block(data))
         lines.extend(_precursor_disclosure_block(data))
         lines.extend(_no_hazard_basis_block(data))
 
@@ -1854,6 +1920,9 @@ async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None,
         if data.get("unresolved"):
             lines.extend(_unresolved_block(data, trailing_newline=True))
         lines.extend(_rejected_products_block(data))
+        # 🔴 CI-842 排在 precursor / no_hazard_basis **之前**：那两条都在说「这条答案的
+        # 内容」，本条在说「这条答案说的是不是你问的那个东西」——身份先于内容。
+        lines.extend(_query_form_disclosure_block(data))
         lines.extend(_precursor_disclosure_block(data))
         lines.extend(_no_hazard_basis_block(data))
 
@@ -2907,6 +2976,77 @@ def _batch_truncation_block(data: dict, submitted: list[str]) -> list[str]:
             "statement that nothing was dropped — treat the results below as covering "
             "an unknown subset of what you submitted, and re-submit in groups of 12."
         )
+    lines.append("")
+    return lines
+
+
+def _query_form_disclosure_block(data: dict) -> list[str]:
+    """CI-842: render the backend's "you named a form, we answered from the parent
+    record" disclosure into **text**.
+
+    The backend publishes a top-level `query_form_disclosures` list on the three batch
+    endpoints (/compatibility/check, /risk-warnings, /batch-safety). `_expose()` carries
+    it into structuredContent for free — **but the model reads TextContent, and that is
+    assembled field-by-field**, so a key no renderer mentions never appears in the text
+    面 for any of the three. Same shape of miss as CI-553/CI-562 (`precursor_disclosure`)
+    and CI-470/CI-666 (`no_hazard_basis`); this is the fourth time, which is why the
+    single-substance half goes through the one shared exit (`_form_disclosure_lines`)
+    instead of a fifth hand-written copy.
+
+    What it is: the caller said a form word (`glacial` / `anhydrous` / `aqueous` /
+    `浓` / `无水` …) and the record we answered from does NOT carry that word in its
+    name ⇒ **a substitution happened**. Prod measurement before the backend fix:
+    `glacial sulfuric acid` → 7664-93-9, `glacial ethanol` → 64-17-5,
+    `glacial sodium hydroxide` → 1310-73-2 — three chemically impossible things,
+    all answered from the parent record with not one word of disclosure.
+
+    🔴 It is NOT `physical_form_disclosure` — do not merge the two and do not pick one.
+    That one is driven by the **record** ("the SDS we hold describes the aqueous form");
+    this one is driven by the **difference between the query and the matched name**
+    ("you asked for anhydrous; we answered from the record called 'hydrofluoric acid'").
+    Both can be true at once and they do not contradict each other.
+
+    🔴 The wording is rendered backend-side (`note`, 5 languages, single source in the
+    i18n catalog) — do NOT re-phrase it here or a second, unversioned copy starts
+    drifting. Same red line as `_precursor_disclosure_block` / `_no_hazard_basis_block`.
+    Note that zh/ja/de/id carry their own inline `**` around the negation, so the note is
+    emitted bare: wrapping it again renders `**A**B**C**` and emphasises exactly the
+    wrong half (the bug `_form_disclosure_lines` documents).
+
+    🔴 A non-dict entry must not take down the whole safety answer — same guard, and
+    same reason, as `_precursor_disclosure_block` / `_unresolved_block`: this block runs
+    before any result rendering, so an AttributeError here would replace the answer the
+    user asked for with a tool error, which is strictly worse than the missing disclosure.
+
+    🔴 **天花板：渲染进 TextContent ≠ 用户读到**（CI-592 / CI-523 实测，`_no_hazard_basis_block`
+    的 docstring 有完整论证）。这个 block 让披露**有机会**到达，不保证到达 ⇒ 别把它
+    写成「披露已到达用户」。
+    """
+    entries = data.get("query_form_disclosures") or []
+    if not entries:
+        return []
+    lines = [
+        "**⚠️ A form/grade qualifier you specified is NOT in the name of the record "
+        "we answered from — the answer below is for the parent compound.**",
+    ]
+    bad = [e for e in entries if not isinstance(e, dict)]
+    entries = [e for e in entries if isinstance(e, dict)]
+    for e in bad:
+        lines.append(f"- {e} (unrecognised disclosure entry — reported verbatim)")
+    for e in entries:
+        # 🔴 后端保证 `note` 在（`query_form_disclosure` 是 `{**match, "note": ...}`），
+        # 但缺失时**必须仍然说出发生了替换**：这里 fall back 成结构化字段自己拼一句最小
+        # 事实，而不是静默跳过——静默跳过正是本票要修的那个 bug 本身。
+        note = e.get("note")
+        if note:
+            lines.append(f"- ⚠️ {note}")
+        else:
+            lines.append(
+                f"- ⚠️ **{e.get('chemical', 'Unknown')}**: you specified "
+                f"'{e.get('form', 'a form')}', but we answered from the record for "
+                f"{e.get('matched', 'the parent compound')} "
+                f"(CAS {e.get('cas', 'n/a')})."
+            )
     lines.append("")
     return lines
 
@@ -4430,6 +4570,8 @@ async def batch_safety_check(
         if data.get("unresolved"):
             sections.extend(_unresolved_block(data, trailing_newline=True))
         sections.extend(_rejected_products_block(data))
+        # 🔴 CI-842：同上两个工具——身份先于内容。
+        sections.extend(_query_form_disclosure_block(data))
         sections.extend(_precursor_disclosure_block(data))
         sections.extend(_no_hazard_basis_block(data))
 
