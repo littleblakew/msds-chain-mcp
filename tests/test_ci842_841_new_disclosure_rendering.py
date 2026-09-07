@@ -27,6 +27,10 @@ CI-470/CI-666 `no_hazard_basis` · CI-360 `insufficient_reason`）：后端加�
 | 🔴 **反向**：`query_form_disclosures` 为空时也印抬头 | 红 | 红（`test_silent_when_nothing_to_say`） |
 | 🔴 **反向**：指令里加一句 "we have no data, please upload" | 红 | 红（`test_directive_never_asserts_absence`） |
 | 同第 1 行，只跑 `get_emergency_response`（6 个端点里唯一返回裸 dict 的） | 红 | 红 |
+| 🔴 M9 删掉 `grounded_only` 闸 | 红 | 红（2 条） |
+| 🔴 M10 **闸还在、调用点不传 `intent`**（完美空跑） | 红 | 红 |
+| M11 mixing-order 兜底不拼那三块披露 | 红 | 红 |
+| M12 截断时头句照旧承诺「下面那条答案」 | 红 | 红 |
 """
 import asyncio
 
@@ -304,3 +308,106 @@ def test_quick_result_carries_the_key_into_structured_content():
     # 🔴 属性名是 snake_case `structured_content`（pydantic 字段名）。camelCase 那个
     # 会抛 AttributeError 而不是返回 None —— CI-242 记过同一族的 41 处。
     assert res.structured_content["unchecked_intents"] == []
+
+
+# ---------------------------------------------------------------------------
+# 🔴 CI-869 review 抓到的三条（全部先在代码里核实过，不是照单收）
+# ---------------------------------------------------------------------------
+
+def test_grounded_only_turn_gets_no_directive():
+    """🔴 拒答回合（RAI 内容过滤）里**不许**发这条指令。
+
+    后端 `_SKIP_INTENT_BLOCK_ON = {"grounded_only"}` 故意跳过散文块、而**结构化字段
+    照常给全量**，理由是它自己写的：「本块说的是『这一问没查，请单独再问一次』——
+    而我们刚刚整条拒绝了这次请求，等于邀请用户把我们刚拒掉的那半重新问一遍」。
+    本仓这条指令把文本面变成了「经模型改写的消费者」⇒ 不加闸就正好落进那个坑。
+
+    ⚠️ 别照抄 `_unchecked_directive` 的无条件形状：化学品那半后端**三条路径都拼**，
+    intent 这半刻意只有两条。**不对称是有意的。**
+    """
+    assert server._unchecked_intents_directive(
+        ["first_aid_guidance"], "grounded_only") == ""
+    # 反向：别的 intent 照发（否则这道闸就是把功能整个关掉）
+    assert "first_aid_guidance" in server._unchecked_intents_directive(
+        ["first_aid_guidance"], "ppe")
+    # intent 缺失（老后端 / 非 quick-chat 载荷）不许静默吞掉披露
+    assert "first_aid_guidance" in server._unchecked_intents_directive(
+        ["first_aid_guidance"], None)
+
+
+def test_quick_result_actually_passes_intent_through():
+    """🔴 上一条只测函数本身。**闸装在函数里而调用点不传 intent ＝ 一个完美的空跑**
+    ——两种写法在「拒答回合有没有指令」上完全不同形，而单测函数那条都绿。
+    `intent` 确实在后端 quick-chat 的响应模型里（`QuickChatResponse.intent: str`），
+    所以 `data.get("intent")` 不是恒 None。
+    """
+    payload = {"answer": "I can't assist with that.", "tool_results": [],
+               "documents": [], "intent": "grounded_only",
+               "unchecked_intents": ["first_aid_guidance"]}
+    text = server._quick_result(payload).content[0].text
+    assert "[unchecked-question]" not in text, text
+    # 结构化那侧仍要拿得到事实（后端刻意分开的那一半）
+    assert server._quick_result(payload).structured_content[
+        "unchecked_intents"] == ["first_aid_guidance"]
+
+
+def test_mixing_order_grounded_fallback_renders_the_disclosures():
+    """🔴 `_direct_compat` 有**两个**调用点，兜底这条路自己拼 `lines`。
+
+    这条路正是危险配对最常走的（CI-613：RAI 误伤残留非零，`check_mixing_order`
+    被拒答就落到这里）⇒ 漏在这里的失败形态是「完整的规则引擎结论 + 答的是母体记录
+    + 零披露」，就是 CI-842 要修的那个 Prod 事故本身。
+    三块一起测：`precursor` / `no_hazard_basis` 在这条路上此前也一直缺。
+    """
+    compat = {
+        "pairs": [{"chem1": "glacial ethanol", "chem2": "water",
+                   "level": "compatible", "reason": "no known reaction",
+                   "source": "rule_engine"}],
+        "unresolved": [], "documents": [],
+        "query_form_disclosures": [ENTRY],
+        "precursor_disclosure": [{"chemical": "glacial ethanol", "cas": "64-17-5",
+                                  "list_name": "EU 273/2004 Cat 3",
+                                  "statement": "Listed as a regulated precursor."}],
+        "no_hazard_basis": [{"query": "water", "cas": "7732-18-5",
+                             "reason_en": "That record carries no hazard data."}],
+    }
+
+    async def _fake_quick(*_a, **_k):
+        return {"intent": "rejected", "answer": "I can't assist with that.",
+                "tool_results": []}
+
+    async def _fake_compat(*_a, **_k):
+        return compat
+
+    o1, o2 = server._quick_chat, server._direct_compat
+    server._quick_chat, server._direct_compat = _fake_quick, _fake_compat
+    try:
+        res = __import__("asyncio").run(
+            server.check_mixing_order("glacial ethanol", "water"))
+        text = res.content[0].text
+    finally:
+        server._quick_chat, server._direct_compat = o1, o2
+
+    assert NOTE_EN in text, f"query_form 披露丢了：\n{text}"
+    assert "Listed as a regulated precursor." in text, f"precursor 丢了：\n{text}"
+    assert "carries no hazard data" in text, f"no_hazard_basis 丢了：\n{text}"
+    # 披露必须在结论之前——读到结论之后才看到披露就晚了
+    assert text.index(NOTE_EN) < text.index("no known reaction"), text
+
+
+def test_truncated_batch_header_does_not_promise_an_answer_below():
+    """🔴 后端**在 12 个的截断闸之前**算这份披露，而 `batch_safety_check` 收 20 个
+    ⇒ 被点名的那个可以是**根本没进分析**的那个，此时「下面那条答案」不存在。
+    同 `_precursor_disclosure_block` 记过的那条：头句不许承诺一份可能不在的答案。
+    """
+    payload = {**BATCH, "truncated": True,
+               "chemicals": [{"name": "acetone"}]}
+    out = _run(server.batch_safety_check, "_direct_batch", payload,
+               ["glacial ethanol", "acetone"])
+    assert NOTE_EN in out, out
+    assert "the answer below is for the parent compound" not in out, out
+    assert "may name a chemical that was not analysed" in out, out
+    # 反向：没截断时仍要说「下面那条答案」（别把话说没了）
+    plain = _run(server.batch_safety_check, "_direct_batch", BATCH,
+                 ["glacial ethanol", "acetone"])
+    assert "the answer below is for the parent compound" in plain, plain

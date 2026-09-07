@@ -431,7 +431,8 @@ def _quick_result(data: dict) -> CallToolResult:
     # for ask_chemical_safety while the (short, link-last) direct tools did.
     # 🔴 CI-841 的指令拼在 `unchecked` **之前** ⇒ 渲染出来在它上面，与后端两个确定性块
     # 的相对顺序一致（「这一问没查」比「这几个化学品没查」更靠近用户要的那件事）。
-    text = (_unchecked_intents_directive(data.get("unchecked_intents"))
+    text = (_unchecked_intents_directive(data.get("unchecked_intents"),
+                                        data.get("intent"))
             + _unchecked_directive(data.get("unchecked"))
             + answer + _format_sds_documents(documents)
             + _format_tool_results(tool_results))
@@ -512,19 +513,33 @@ _UNCHECKED_INTENTS_DIRECTIVE = (
 )
 
 
-def _unchecked_intents_directive(unchecked_intents) -> str:
+# 🔴 CI-869 review：与后端 `quick_engine._SKIP_INTENT_BLOCK_ON` **同一条策略的第二处拼写**。
+# 后端在拒答回合（RAI 内容过滤）里**故意**把散文块跳过、而把结构化字段照常给全量，
+# 它的注释写死了理由：「本块说的是『这一问没查，请单独再问一次』——而我们刚刚整条拒绝了
+# 这次请求，等于邀请用户把我们刚拒掉的那半重新问一遍」，并明说两者分开是为了让
+# **不经模型改写的消费者**仍拿得到事实。
+# 🔴 **本仓这条指令恰恰把文本面变成了「经模型改写的消费者」** ⇒ 不加这道闸，
+# 初版就是在拒答回合里叫模型请用户把刚被拒的那半再问一次。
+# ⚠️ **别照抄 `_unchecked_directive` 的无条件形状**：化学品那半后端三条路径都拼
+# （「别对这几个下任何结论」在拒答回合同样成立），intent 这半刻意只有两条 —— 不对称是有意的。
+# 🔴 这是策略的第二份拼写，会漂：后端改了 `_SKIP_INTENT_BLOCK_ON` 这里不会红。
+# `test_grounded_only_turn_gets_no_directive` 钉住当前取值；后端改那个 frozenset 的人请一起改这里。
+_SKIP_INTENT_DIRECTIVE_ON = frozenset({"grounded_only"})
+
+
+def _unchecked_intents_directive(unchecked_intents, intent: str | None = None) -> str:
     """把后端的 `unchecked_intents` 渲染成给客户端模型的显式指令。空/缺失 ⇒ 空串。
 
     三态与 `_unchecked_directive` 逐字相同（`[]`＝算过没有；`None`＝这一轮没算；
     键缺失＝老后端，本仓与后端各自发布、版本会错开），**两者都渲染成空串**，
     区分留在 structuredContent 里。不重复论证，见那个函数。
 
-    🔴 这里念的是**后端已经本地化过的 intent 显示名**（`quick_engine._INTENT_DISPLAY`），
-    不是 intent 的内部标识符——后端 `_render_unchecked_intents` 已经翻过一次。
-    ⚠️ 但**载荷里的 `unchecked_intents` 是内部标识符**（`first_aid_guidance` 这类），
-    确定性那段本地化文案只在 `answer` 里。所以这条指令念出来的是标识符：它面向的是
-    模型不是用户，模型据此去 `answer` 里找那段已本地化的话，**用户可见的措辞仍单源在后端**。
+    🔴 **载荷里的 `unchecked_intents` 是内部标识符**（`first_aid_guidance` 这类），
+    本地化只发生在后端构造 `answer` 的时候（`_render_unchecked_intents`）。所以这条指令
+    念出来的是标识符：它面向的是**模型不是用户**，用户可见的措辞仍单源在后端的 `answer` 里。
     """
+    if intent in _SKIP_INTENT_DIRECTIVE_ON:
+        return ""
     if not isinstance(unchecked_intents, list):
         return ""
     names = [str(n) for n in unchecked_intents if isinstance(n, str) and n.strip()]
@@ -3025,10 +3040,22 @@ def _query_form_disclosure_block(data: dict) -> list[str]:
     entries = data.get("query_form_disclosures") or []
     if not entries:
         return []
+    # 🔴 后端**在 12 个的截断闸之前**算这份披露（`_resolve_all` → 闸，`direct_api.py`
+    # 那段注释写死了理由：被丢掉的物质用户确实提交过）。而 `batch_safety_check` 收 20 个
+    # ⇒ **被披露点名的那个可以是根本没进分析的那个**，此时「下面那条答案」并不存在。
+    # 同 `_precursor_disclosure_block` 记过的那条：头句不许承诺一份可能不在的答案。
     lines = [
+        "**⚠️ A form/grade qualifier you specified is NOT in the name of the record "
+        "we answered from — we answered from the parent compound's record.**"
+        if data.get("truncated") else
         "**⚠️ A form/grade qualifier you specified is NOT in the name of the record "
         "we answered from — the answer below is for the parent compound.**",
     ]
+    if data.get("truncated"):
+        lines.append(
+            "(This disclosure is computed on everything you submitted, before the "
+            "batch size limit — so it may name a chemical that was not analysed at all.)"
+        )
     bad = [e for e in entries if not isinstance(e, dict)]
     entries = [e for e in entries if isinstance(e, dict)]
     for e in bad:
@@ -3775,6 +3802,19 @@ async def _mixing_order_grounded_fallback(
         lines.append(_MIXING_ORDER_UNAVAILABLE)
     if data.get("unresolved"):
         lines.extend(_unresolved_block(data))
+    # 🔴 CI-869 review 抓到：`_direct_compat` 有**两个**调用点，本函数是第二个。
+    # 它自己拼 `lines`，所以 `check_chemical_compatibility` 那边挂上的三块披露在这条路上
+    # 全部丢失——而这条路正是危险配对最常走的（CI-613：RAI 误伤残留非零，
+    # `check_mixing_order` 一旦被拒答就落到这里）。失败形态：用户拿到一份完整的规则引擎
+    # 结论，答的是母体记录，零披露 —— 正是 CI-842 要修的那个 Prod 事故本身。
+    # ⚠️ `precursor` / `no_hazard_basis` 在这条路上**此前也一直缺**（CI-553 / CI-666 的
+    # 同一个漏，只是没人从这个入口走过）⇒ 一并补上，别只补自己这一票的那块。
+    disclosures = (_query_form_disclosure_block(data)
+                   + _precursor_disclosure_block(data)
+                   + _no_hazard_basis_block(data))
+    if disclosures:
+        # 排在最前：这三块说的都是「下面这些字是关于什么的 / 凭什么」，读到结论之后才看到就晚了。
+        lines = disclosures + lines
     return {"answer": "\n".join(lines), "tool_results": [], "documents": data.get("documents", [])}
 
 
