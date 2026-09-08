@@ -1168,15 +1168,78 @@ def _detail_text(res: "httpx.Response", limit: int = 400) -> str:
     return f"backend gave no machine-readable reason (HTTP {res.status_code})"
 
 
+# 🔴 CI-868：鉴权失败必须变成**可行动的一句话 + 一条给模型的禁令**。
+#
+# 事故（2026-09-07 08:28 UTC，Blake 在 chatgpt.com）：core 打后端 401，
+# 而这里当时直接 `raise_for_status()` ⇒ 调用方拿到
+# `HTTPStatusError: Client error '401 Unauthorized' for url 'https://msds-chain-backend-prod…'`。
+# 三个问题一次犯全：
+#   ① **不可行动** —— 模型看不出这是「你的授权失效了」还是「我们坏了」，
+#      于是它做了最糟的那件事：**转去用自身知识回答相容性**，末尾才轻描淡写一句免责。
+#      ⇒ 光把失败暴露出来不够，**必须显式禁止它替我们回答**（同 `_UNCHECKED_DIRECTIVE` 的形状：
+#      [[CI-567]] 实测过，光把正确内容放进载荷不够，是配对的禁令把模型扳回来的）。
+#   ② **泄露内网地址** —— 那串完整的 Azure 后端 URL 直接进了第三方客户端的上下文。
+#   ③ **401 与 403 被当成同一件事** —— 401 是「没认出你」（重连有用），
+#      403 是「认出你了但不给」（重连没用，叫人去重连是浪费他时间）。
+#
+# 🔴 **措辞红线**：这几句话**绝不能被读成安全结论**。
+# 失败方向很坏——「工具报错」到「所以大概没事」只有一步，而调用方常常正在问一个危险组合。
+# 所以每句都显式写「这不是安全结论 / 别拿常识补」。
+# 🔴 **也不许说「我们没有这个数据」** —— 我们根本没查成（[[CI-243]]/[[CI-322]]/[[CI-334]] 同形）。
+# 🔴 **不猜原因**：401 至少三种成因（token 过期 / key 被吊销 / [[mcp-key-cap-leak]] 的 10-key
+# 上限把它挤掉），后端对它们**返回同一个 401** ⇒ 这里只说「授权没被接受」，不替它选一个。
+_AUTH_FAILED_MSG = {
+    401: (
+        "Not authorized: the backend did not accept this connection's credential (HTTP 401). "
+        "This is an authentication failure on our side of the call — it is NOT a safety "
+        "finding, NOT a result, and NOT a statement that we lack data for what you asked. "
+        "Nothing was looked up. "
+        "You MUST tell the user the request could not be run, and you MUST NOT answer the "
+        "question from your own knowledge or infer that anything is safe or compatible. "
+        "Remedy depends on how this server was reached: remote callers should reconnect the "
+        "MSDS Chain connector (re-run the authorization flow); a self-hosted stdio caller "
+        "should check the MSDS_API_KEY this server was started with. If neither helps, the "
+        "account's API credential may have been revoked."
+    ),
+    403: (
+        "Forbidden: this connection was recognised but is not permitted to make this call "
+        "(HTTP 403). This is a permissions failure — it is NOT a safety finding, NOT a "
+        "result, and NOT a statement that we lack data for what you asked. Nothing was "
+        "looked up. You MUST tell the user the request could not be run, and you MUST NOT "
+        "answer the question from your own knowledge or infer that anything is safe or "
+        "compatible. Reconnecting will NOT help; the account needs access to this feature."
+    ),
+}
+
+
 def _raise_for_status_with_reason(res: "httpx.Response") -> None:
-    """`raise_for_status()` 的替身：422 带上后端说的原因（CI-410）。
+    """`raise_for_status()` 的替身：422 带上后端说的原因（CI-410）、401/403 变成可行动的话（CI-868）。
 
     🔴 存在的理由是**别的路径不走 `_billed_json`**：`_build_audit_session` 的三步与
     `upload_msds_pdf` 直接打 `/sessions*`，此前它们的 422 仍是裸状态行 —— 同一张票要修的
     同一种缺陷，只是在两个不路由到计费包装的工具上。review 抓到的完整性缺口。
+    **CI-868 把 401/403 挂在同一个收口上，理由逐字相同。**
+
+    ⚠️ 402 由 `_billed_json` 在调本函数**之前**特判 ⇒ 余额耗尽仍走它自己那句话，别在这里抢。
     """
     if res.status_code == 422:
         raise RuntimeError(f"Request rejected (422): {_detail_text(res)}")
+    if msg := _AUTH_FAILED_MSG.get(res.status_code):
+        # 🔴 **不把 detail 拼进给模型那句话**：后端 401 的 detail 是内部代号
+        # （`password_auth_disabled` 这类），对第三方客户端既无信息量又是内部实现的泄露。
+        #
+        # 🔴 **但必须记进我们自己的日志——review 抓到初版这里是一句假话。**
+        # 初版的注释写着「排障要的信息在 `mcp_call_logs.error_message` 里」，而实际上：
+        # ①这里既不记也不留，RuntimeError 只带固定样板；②`_error_text` 把 `str(e)` 截到 500,
+        # 而 401 那段样板本身就 593 字符 ⇒ 那一列存的是**被截断的禁令、零后端信号**。
+        # 更糟的是方向：[[CI-868]] 的根因至今未定，而能把「token 过期 / key 吊销 /
+        # 10-key 上限挤掉」分开的**唯一线索就是这个 `detail`** —— 初版把它在唯一看得见它的
+        # 地方丢掉了。**这是「注释描述意图、代码做另一件事」的又一例。**
+        # ⚠️ 记的是 `_detail_text` 抽出来的 `detail`，**不是原始响应体**
+        # （[[ps-leaks-credentials-from-command-lines]] 的同族红线仍然适用）。
+        logger.warning("auth_failed status=%s detail=%s",
+                       res.status_code, _detail_text(res))
+        raise RuntimeError(msg)
     res.raise_for_status()
 
 
@@ -4394,7 +4457,22 @@ async def upload_msds_pdf(
         if pdf_source.startswith("http://") or pdf_source.startswith("https://"):
             async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as dl:
                 resp = await dl.get(pdf_source)
-                _raise_for_status_with_reason(resp)
+                # 🔴 **这条 URL 是调用方给的、指向别人的主机 ⇒ 绝不能走
+                # `_raise_for_status_with_reason`**（[[CI-868]] review 抓到）。
+                # 那个函数里的 401/403 话术断言的是**我们自己账号的授权状态**；供应商门户
+                # 的 403（Cloudflare / 需登录 / 签名链接过期）会因此收到一句
+                # 「你的 MSDS Chain 账号没有权限，重连也没用」—— **自信、具体、而且错**，
+                # 正是本票要消灭的那种失败，只是换了个地方发生。
+                # ⚠️ 而且它比改之前**更差**：裸 `raise_for_status()` 虽然不友好，
+                # 至少带着那个外部 URL，成因还追得回来。
+                # 🔴 这里说清「是源站拒绝的，不是我们」，并且**不给任何关于我们账号的建议**。
+                if resp.status_code >= 400:
+                    raise RuntimeError(
+                        f"Could not download that URL (HTTP {resp.status_code} from the "
+                        f"source host, not from MSDS Chain). The link may require a login, "
+                        f"be expired, or be blocked by the host. Ask the user for a direct "
+                        f"PDF link, or have them upload the file contents instead."
+                    )
                 pdf_bytes = resp.content
                 # Derive filename from URL path
                 url_path = pdf_source.rstrip("/").split("?")[0]
