@@ -26,6 +26,9 @@ core 打后端 `/api/v2/compatibility/check` 拿到 401（网关侧 `auth:"ok"`�
 | M5 把 500 也塞进去（把「后端挂了」说成「你没授权」） | 红 | 红 |
 | 🔴 M6 **反向**：删掉禁令那两句、只留「401 未授权」 | 红 | 红 |
 | 🔴 M7 **反向**：把「NOT a statement that we lack data」改成「we have no data for this」 | 红 | 红 |
+| 🔴 M8 review 后补：`upload_msds_pdf` 的外部 URL 分支改回 `_raise_for_status_with_reason` | 红 | 红 |
+| M9 review 后补：去掉 `logger.warning("auth_failed"…)` | 红 | 红 |
+| M10 review 后补：401 措辞去掉 `MSDS_API_KEY` 那半 | 红 | 红 |
 """
 import asyncio
 
@@ -201,3 +204,82 @@ def test_paths_that_skip_billed_json_also_get_it(monkeypatch):
     finally:
         set_caller_credential(None)
     assert "reconnect the MSDS Chain connector" in str(exc.value), str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# 🔴 review 抓到的三条（全部先回代码核实再改）
+# ---------------------------------------------------------------------------
+
+def test_external_url_403_is_not_blamed_on_our_account(monkeypatch, caplog):
+    """🔴 **本轮最贵的一条**：`upload_msds_pdf` 也调 `_raise_for_status_with_reason`，
+    但它那次调用打的是**调用方给的、指向别人主机**的 URL。
+
+    供应商门户的 403（Cloudflare / 需登录 / 签名链接过期）会因此收到
+    「你的 MSDS Chain 账号没有权限，重连也没用」——**自信、具体、而且错**，
+    正是本票要消灭的那种失败，只是换了个地方发生。而且它比改之前**更差**：
+    裸 `raise_for_status()` 至少带着那个外部 URL，成因还追得回来。
+    [[feedback-safety-fix-made-it-worse]]
+    """
+    set_caller_credential("sk-msds-test")
+    try:
+        monkeypatch.setattr(server.httpx, "AsyncClient", _client_returning(_Resp(403)))
+        # 🔴 用例第一版假设它**返回**一段文字，实际是**抛出** —— 两者在「消息内容对不对」
+        # 上完全同形，只有跑起来才分得开。判据仍打在调用方最终看到的那段字上。
+        with pytest.raises(Exception) as exc:
+            asyncio.run(server.upload_msds_pdf(
+                pdf_source="https://supplier.example.com/sds/acetone.pdf"))
+    finally:
+        set_caller_credential(None)
+    text = str(exc.value)
+    assert "from the source host, not from MSDS Chain" in text, text
+    # 🔴 三条都不许出现：它们全是关于**我们账号**的断言
+    assert "Reconnecting will NOT help" not in text, text
+    assert "reconnect the MSDS Chain connector" not in text, text
+    assert "not permitted to make this call" not in text, text
+
+
+def test_external_url_401_also_not_blamed_on_our_account(monkeypatch):
+    """同上，401 那半（基本认证的链接）。两个状态码各测一次——
+    只测一个的话，另一个的分支被改回去时这份守卫是绿的。"""
+    set_caller_credential("sk-msds-test")
+    try:
+        monkeypatch.setattr(server.httpx, "AsyncClient", _client_returning(_Resp(401)))
+        # 🔴 用例第一版假设它**返回**一段文字，实际是**抛出** —— 两者在「消息内容对不对」
+        # 上完全同形，只有跑起来才分得开。判据仍打在调用方最终看到的那段字上。
+        with pytest.raises(Exception) as exc:
+            asyncio.run(server.upload_msds_pdf(
+                pdf_source="https://supplier.example.com/sds/acetone.pdf"))
+    finally:
+        set_caller_credential(None)
+    text = str(exc.value)
+    assert "from the source host, not from MSDS Chain" in text, text
+    assert "reconnect" not in text.lower(), text
+
+
+def test_backend_detail_is_logged_even_though_it_is_not_told_to_the_model(monkeypatch, caplog):
+    """🔴 初版那句注释是**假话**：它写着「排障要的信息在 `mcp_call_logs.error_message` 里」，
+    而实际上这里既不记也不留，且 401 样板本身 593 字符 > `_error_text` 的 500 上限
+    ⇒ 那一列存的是**被截断的禁令、零后端信号**。
+
+    方向尤其坏：CI-868 的根因至今未定，而能把「token 过期 / key 吊销 / 10-key 上限挤掉」
+    分开的**唯一线索就是这个 `detail`**——初版把它在唯一看得见它的地方丢掉了。
+    ⚠️ 记的是抽出来的 `detail`，**不是原始响应体**。
+    """
+    import logging
+    with caplog.at_level(logging.WARNING, logger="msds_mcp"):
+        text = _tool_error_text(monkeypatch, 401, {"detail": "invalid_api_key"})
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "auth_failed" in logged and "invalid_api_key" in logged, logged
+    assert "status=401" in logged, logged
+    # 反向：仍然不许告诉模型
+    assert "invalid_api_key" not in text, text
+
+
+def test_401_remedy_covers_self_hosted_stdio_callers(monkeypatch):
+    """🔴 本 server 也服务 stdio 自托管调用方（直接设 `MSDS_API_KEY`）——
+    他们**没有 connector、也没有授权流可以重跑**。初版无条件叫人「重连 connector」，
+    等于让他们去做一件对他们不存在的事。
+    """
+    text = _tool_error_text(monkeypatch, 401)
+    assert "MSDS_API_KEY" in text, text
+    assert "reconnect the MSDS Chain connector" in text, "远程那半也要留着"

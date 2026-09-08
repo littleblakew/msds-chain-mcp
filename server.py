@@ -1196,8 +1196,10 @@ _AUTH_FAILED_MSG = {
         "Nothing was looked up. "
         "You MUST tell the user the request could not be run, and you MUST NOT answer the "
         "question from your own knowledge or infer that anything is safe or compatible. "
-        "Ask the user to reconnect the MSDS Chain connector (re-run the authorization flow); "
-        "if reconnecting does not help, the account's API credential may have been revoked."
+        "Remedy depends on how this server was reached: remote callers should reconnect the "
+        "MSDS Chain connector (re-run the authorization flow); a self-hosted stdio caller "
+        "should check the MSDS_API_KEY this server was started with. If neither helps, the "
+        "account's API credential may have been revoked."
     ),
     403: (
         "Forbidden: this connection was recognised but is not permitted to make this call "
@@ -1223,10 +1225,20 @@ def _raise_for_status_with_reason(res: "httpx.Response") -> None:
     if res.status_code == 422:
         raise RuntimeError(f"Request rejected (422): {_detail_text(res)}")
     if msg := _AUTH_FAILED_MSG.get(res.status_code):
-        # 🔴 **不附 `_detail_text(res)`**：后端 401 的 detail 是内部代号
-        # （`password_auth_disabled` 这类），对第三方客户端既无信息量又是内部实现的泄露；
-        # 而排障要的信息在我们自己的日志里（`mcp_call_logs.error_message` + 网关日志），
-        # 不在给模型的那句话里。
+        # 🔴 **不把 detail 拼进给模型那句话**：后端 401 的 detail 是内部代号
+        # （`password_auth_disabled` 这类），对第三方客户端既无信息量又是内部实现的泄露。
+        #
+        # 🔴 **但必须记进我们自己的日志——review 抓到初版这里是一句假话。**
+        # 初版的注释写着「排障要的信息在 `mcp_call_logs.error_message` 里」，而实际上：
+        # ①这里既不记也不留，RuntimeError 只带固定样板；②`_error_text` 把 `str(e)` 截到 500,
+        # 而 401 那段样板本身就 593 字符 ⇒ 那一列存的是**被截断的禁令、零后端信号**。
+        # 更糟的是方向：[[CI-868]] 的根因至今未定，而能把「token 过期 / key 吊销 /
+        # 10-key 上限挤掉」分开的**唯一线索就是这个 `detail`** —— 初版把它在唯一看得见它的
+        # 地方丢掉了。**这是「注释描述意图、代码做另一件事」的又一例。**
+        # ⚠️ 记的是 `_detail_text` 抽出来的 `detail`，**不是原始响应体**
+        # （[[ps-leaks-credentials-from-command-lines]] 的同族红线仍然适用）。
+        logger.warning("auth_failed status=%s detail=%s",
+                       res.status_code, _detail_text(res))
         raise RuntimeError(msg)
     res.raise_for_status()
 
@@ -4445,7 +4457,22 @@ async def upload_msds_pdf(
         if pdf_source.startswith("http://") or pdf_source.startswith("https://"):
             async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as dl:
                 resp = await dl.get(pdf_source)
-                _raise_for_status_with_reason(resp)
+                # 🔴 **这条 URL 是调用方给的、指向别人的主机 ⇒ 绝不能走
+                # `_raise_for_status_with_reason`**（[[CI-868]] review 抓到）。
+                # 那个函数里的 401/403 话术断言的是**我们自己账号的授权状态**；供应商门户
+                # 的 403（Cloudflare / 需登录 / 签名链接过期）会因此收到一句
+                # 「你的 MSDS Chain 账号没有权限，重连也没用」—— **自信、具体、而且错**，
+                # 正是本票要消灭的那种失败，只是换了个地方发生。
+                # ⚠️ 而且它比改之前**更差**：裸 `raise_for_status()` 虽然不友好，
+                # 至少带着那个外部 URL，成因还追得回来。
+                # 🔴 这里说清「是源站拒绝的，不是我们」，并且**不给任何关于我们账号的建议**。
+                if resp.status_code >= 400:
+                    raise RuntimeError(
+                        f"Could not download that URL (HTTP {resp.status_code} from the "
+                        f"source host, not from MSDS Chain). The link may require a login, "
+                        f"be expired, or be blocked by the host. Ask the user for a direct "
+                        f"PDF link, or have them upload the file contents instead."
+                    )
                 pdf_bytes = resp.content
                 # Derive filename from URL path
                 url_path = pdf_source.rstrip("/").split("?")[0]
