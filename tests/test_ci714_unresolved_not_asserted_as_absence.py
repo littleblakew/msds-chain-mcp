@@ -183,3 +183,84 @@ def test_no_renderer_claims_absence_from_the_database():
         + "\n".join(hits)
         + "\n\n用 `_unresolved_boolean_note()`；确实有别的产出者就加进 _ALLOWED_LINES 并写清理由。"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# CI-714 后端那半上 Prod 之后：能说出「为什么」就别只说通用那句
+#
+# 🔴 变异记录（两侧各造，都实测过）：
+#   D「该红」：把 `_unresolved_reason_note` 里取 detail 的那段删掉（恒回退到通用句）
+#       → test_*_renders_the_per_case_reason 两条红。红的理由对：载荷里带着逐案原因，
+#       而模型读到的文本里没有它 —— 与 CI-714 原本要修的形状同族，只是换了一层。
+#   E「不该红」：把回退整个删掉（`unresolved_detail` 缺席时返回空串）
+#       → test_*_falls_back_when_the_backend_did_not_send_a_reason 红。
+#       这一侧防的是「为了用上新字段而把旧路径说没了」——后端只在一条路上给这个键，
+#       缺席**会被频繁走到**，退化成空串等于该说的不说。
+#   F「该红」：把语言选择写死成 `reason_en` → test_*_per_case_reason_follows_language 红。
+#
+# 🔴 为什么断言的是「逐案原因逐字出现」而不是「文本变长了/不等于通用句」：
+#   后者对一个返回**另一句**假话的实现同样为真（空结果集让 `!=` 成立的同族）。
+
+_REASON_EN = "We did not search for this input: it is not a well-formed CAS number."
+_REASON_ZH = "我们没有搜索这个输入：它不是一个格式正确的 CAS 号。"
+
+EMERGENCY_UNRESOLVED_WITH_REASON = {
+    **EMERGENCY_UNRESOLVED,
+    "unresolved_detail": {"query": "71-43", "code": "malformed_cas",
+                          "reason": _REASON_ZH, "reason_en": _REASON_EN},
+}
+
+COMPLIANCE_UNRESOLVED_WITH_REASON = {
+    **COMPLIANCE_UNRESOLVED,
+    "unresolved_detail": {"query": "71-43", "code": "malformed_cas",
+                          "reason": _REASON_ZH, "reason_en": _REASON_EN},
+}
+
+
+def test_emergency_response_renders_the_per_case_reason():
+    txt = _run(server.get_emergency_response, "_direct_emergency",
+               EMERGENCY_UNRESOLVED_WITH_REASON, "71-43", "spill")
+    assert _REASON_EN in txt, f"载荷里带着逐案原因，模型读到的文本里没有它：\n{txt}"
+    _assert_no_absence_claim(txt)
+    assert "general guidance" in txt.lower()   # 别让「说得更准」把该说的挤掉
+
+
+def test_regulatory_compliance_renders_the_per_case_reason():
+    txt = _run(server.check_regulatory_compliance, "_direct_compliance",
+               COMPLIANCE_UNRESOLVED_WITH_REASON, ["71-43"])
+    assert _REASON_EN in txt, f"载荷里带着逐案原因，模型读到的文本里没有它：\n{txt}"
+    _assert_no_absence_claim(txt)
+
+
+def test_emergency_response_falls_back_when_the_backend_did_not_send_a_reason():
+    """🔴 缺席是常态不是边缘：后端只在走 `resolve_cas_and_detail_or_miss` 那条路上给它。
+
+    缺席的成因至少两种（走了别的分支 / 后端回滚），两者在这里完全同形 ⇒ 老实回退，
+    既不告警也不据此推断后端版本。
+    """
+    txt = _run(server.get_emergency_response, "_direct_emergency",
+               EMERGENCY_UNRESOLVED, "71-43", "spill")     # 无 unresolved_detail
+    assert server._unresolved_boolean_note("en") in txt, (
+        f"没有逐案原因时必须回退到通用那句，不能什么都不说：\n{txt}")
+    _assert_no_absence_claim(txt)
+
+
+def test_per_case_reason_follows_language():
+    """zh 调用方拿中文那半，别把 `reason_en` 发给他。"""
+    payload = EMERGENCY_UNRESOLVED_WITH_REASON
+    assert server._unresolved_reason_note(payload, "zh") == _REASON_ZH
+    assert server._unresolved_reason_note(payload, "en") == _REASON_EN
+
+
+def test_unresolved_detail_of_the_wrong_shape_does_not_crash():
+    """🔴 后端在 `direct_emergency_response` 上点名警告过本仓：这类载荷的 `unresolved`
+    是 **bool**，接进 `_unresolved_block` 会 `', '.join(bool)` 直接 TypeError。
+
+    这里钉的是「渲染器对形状不合预期的 detail 要退回通用句，而不是抛异常」——
+    多化学品端点的 `unresolved_detail` 是**列表**，哪天有人把两条路接到一起就会撞上。
+    """
+    payload = {**EMERGENCY_UNRESOLVED,
+               "unresolved_detail": [{"query": "x", "reason_en": "list shape"}]}
+    assert server._unresolved_reason_note(payload, "en") == server._unresolved_boolean_note("en")
+    txt = _run(server.get_emergency_response, "_direct_emergency", payload, "71-43", "spill")
+    _assert_no_absence_claim(txt)
