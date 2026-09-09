@@ -1475,6 +1475,31 @@ def _unresolved_boolean_note(lang: str | None = None) -> str:
                                         _UNRESOLVED_BOOLEAN_NOTE["en"])
 
 
+def _unresolved_reason_note(data: dict, lang: str | None = None) -> str:
+    """CI-714 的 MCP 半边：后端能说出「为什么」时就说逐案那句，说不出才回退到通用句。
+
+    上游（growth）把 `/api/v2/compliance` 与 `/api/v2/emergency-response` 的未解析分支
+    从「只有一个布尔」升级成带 `unresolved_detail`（`describe_unresolved_i18n` 的产物，
+    形状 `{query, code, reason, reason_en}`）。这里只做**取用**，不新造披露口径。
+
+    🔴 **别把这类载荷接进 `_unresolved_block`** —— 它对 `data["unresolved"]` 做
+    `', '.join(...)`，而单化学品端点的 `unresolved` 是 **bool**，会直接 TypeError。
+    这条是后端在 `direct_emergency_response` 的注释里点名写给本仓的（那处危险早于这个
+    新键，实测带不带 `unresolved_detail` 都一样崩），**别"顺手统一"成一个渲染器**。
+
+    🔴 **回退不是可选项，而且它会被频繁走到**：后端只在走 `resolve_cas_and_detail_or_miss`
+    的那条路上给这个键。缺席的成因至少两种（走了别的分支 / 后端回滚），而两者
+    **在这里完全同形** ⇒ 不为缺席告警，也不据此推断后端版本，老实回退。
+    """
+    detail = data.get("unresolved_detail")
+    if isinstance(detail, dict):
+        key = "reason" if _normalize_lang(lang or LANG) == "zh" else "reason_en"
+        reason = (detail.get(key) or "").strip()
+        if reason:
+            return reason
+    return _unresolved_boolean_note(lang)
+
+
 def _format_regulatory_lists(data: dict, chemical: str, lang: str | None = None) -> str:
     """Render `/api/v2/regulatory-lists` (CI-523). Pure function so the three
     branches below are testable without a backend.
@@ -2162,7 +2187,7 @@ async def check_regulatory_compliance(
                 # （`direct_compliance`: `{chemical, cas: None, region_results: [],
                 # summary_level: "unknown", unresolved: True}`），没有任何原因。
                 # 把它渲染成 "Not found in database" 是同一句我们无权说的话。
-                lines.append(f"### {chemical}\n- **Status:** {_unresolved_boolean_note()}\n")
+                lines.append(f"### {chemical}\n- **Status:** {_unresolved_reason_note(data)}\n")
                 continue
             lines.append(f"### {data.get('chemical', chemical)} (CAS: {data.get('cas', 'N/A')})")
             lines.append(f"- **Overall compliance level:** {data.get('summary_level', 'unknown')}")
@@ -2482,9 +2507,10 @@ async def get_emergency_response(
             # **逐字相同** ⇒ 模型据此对付费用户断言我们没有这份数据。同族 [[CI-770]]/[[CI-413]]。
             # 措辞照抄后端 `unresolved_detail.reason_en` 已经在用的那半句（"This is not a
             # statement that…"），不新造披露口径。
-            # ⚠️ 这条路的载荷今天**只有** `{unresolved: true, data_source: general}` —— 说得出
-            # 「为什么」要等后端也发 reason（CI-714 的后端那半）。在那之前先别说假话。
-            lines.append(f"\n**Note:** {_unresolved_boolean_note(lang)} "
+            # ✅ CI-714 后端那半已上 Prod：载荷现在可能带 `unresolved_detail`
+            # （裸 dict，不是列表），于是这里能说出**逐案**的原因而不只是通用那句。
+            # 缺席时仍回退到通用句 —— 见 `_unresolved_reason_note` 的 docstring。
+            lines.append(f"\n**Note:** {_unresolved_reason_note(data, lang)} "
                          "Showing general guidance only.")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
