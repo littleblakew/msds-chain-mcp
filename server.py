@@ -432,7 +432,8 @@ def _quick_result(data: dict) -> CallToolResult:
     # 🔴 CI-841 的指令拼在 `unchecked` **之前** ⇒ 渲染出来在它上面，与后端两个确定性块
     # 的相对顺序一致（「这一问没查」比「这几个化学品没查」更靠近用户要的那件事）。
     text = (_unchecked_intents_directive(data.get("unchecked_intents"),
-                                        data.get("intent"))
+                                        data.get("intent"),
+                                        data.get("unchecked_intents_prose_suppressed"))
             + _unchecked_directive(data.get("unchecked"))
             + answer + _format_sds_documents(documents)
             + _format_tool_results(tool_results))
@@ -522,12 +523,21 @@ _UNCHECKED_INTENTS_DIRECTIVE = (
 # 初版就是在拒答回合里叫模型请用户把刚被拒的那半再问一次。
 # ⚠️ **别照抄 `_unchecked_directive` 的无条件形状**：化学品那半后端三条路径都拼
 # （「别对这几个下任何结论」在拒答回合同样成立），intent 这半刻意只有两条 —— 不对称是有意的。
-# 🔴 这是策略的第二份拼写，会漂：后端改了 `_SKIP_INTENT_BLOCK_ON` 这里不会红。
-# `test_grounded_only_turn_gets_no_directive` 钉住当前取值；后端改那个 frozenset 的人请一起改这里。
+# 🔴 **CI-874：这里不再是主判据，是 fallback。** 后端现在直接把它的决定放进载荷
+# （`unchecked_intents_prose_suppressed`，trust 2026-09-09 Prod 实调确认），主路径消费那个字段
+# ⇒ 后端改 `_SKIP_INTENT_BLOCK_ON` 时本仓自动跟上，不再是两处各拼一份的漂移源。
+#
+# 🔴 **契约①：字段缺席 ⇒ 回退到下面这个 frozenset，绝不默认「照发」。**
+# 缺席是**常态不是罕见**——`run_quick` 有 6 条裸 `return` 路径不经过那个字段，
+# 且本仓与后端各自发布、版本必然错开。默认照发＝在拒答回合里叫模型请用户把刚被拒的那半再问一次。
+# 🔴 **契约②：这不是完全收敛，只是「主路径单源 + fallback」。** 只要 fallback 还在，
+# 这个 frozenset 就仍是一份副本、仍会漂——只是漂的影响面从「全部回合」缩到「不带字段的那些回合」。
+# **别把这段注释删掉当作已经收敛了。**
 _SKIP_INTENT_DIRECTIVE_ON = frozenset({"grounded_only"})
 
 
-def _unchecked_intents_directive(unchecked_intents, intent: str | None = None) -> str:
+def _unchecked_intents_directive(unchecked_intents, intent: str | None = None,
+                                prose_suppressed: object = None) -> str:
     """把后端的 `unchecked_intents` 渲染成给客户端模型的显式指令。空/缺失 ⇒ 空串。
 
     三态与 `_unchecked_directive` 逐字相同（`[]`＝算过没有；`None`＝这一轮没算；
@@ -538,7 +548,13 @@ def _unchecked_intents_directive(unchecked_intents, intent: str | None = None) -
     本地化只发生在后端构造 `answer` 的时候（`_render_unchecked_intents`）。所以这条指令
     念出来的是标识符：它面向的是**模型不是用户**，用户可见的措辞仍单源在后端的 `answer` 里。
     """
-    if intent in _SKIP_INTENT_DIRECTIVE_ON:
+    # CI-874：后端说了算；它没说（字段缺席 / 不是 bool）才回退到本仓那份 frozenset。
+    # 🔴 `is None` 不能写成 falsy 判断——`False` 是后端一个**有内容的回答**（「我没压制」），
+    # 而 falsy 会把它和「没回答」揉成一个，正好抹掉这次改动的全部意义。
+    suppressed = prose_suppressed if isinstance(prose_suppressed, bool) else None
+    if suppressed is None:
+        suppressed = intent in _SKIP_INTENT_DIRECTIVE_ON
+    if suppressed:
         return ""
     if not isinstance(unchecked_intents, list):
         return ""
@@ -2849,8 +2865,18 @@ async def get_audit_report(session_id: Annotated[str | None, Field(
                 )
             if res.status_code == 404:
                 return f"Session `{session_id}` not found."
-            _raise_for_status_with_reason(res)
-            relative = res.json()["url"]
+            # 🔴 CI-892：此前这里是 `_raise_for_status_with_reason(res)` + `res.json()["url"]`,
+            # 也就是**唯一一个不走计费响应处理的取值型工具**（`_billed_json` 的另外 19 个
+            # 调用点它一个都不在）。今天这条路后端零扣费所以无害，但 CI-892 要让报告收
+            # 10 credits（web 走 `/report/generate` 已经在扣，MCP 走 `signed-url` 没扣，
+            # 2026-09-09 Prod 实测），那一刻它会变成**扣钱且零提示**，且余额耗尽时
+            # `_raise_for_status_with_reason` 不处理 402 ⇒ 落到裸 `raise_for_status()`,
+            # 用户拿到一句 `Client error '402 Payment Required'`。
+            # 🔴 **本仓先于后端上是有意的、也是安全的**：后端今天不发 usage header ⇒
+            # `_parse_usage` 空 ⇒ `_with_usage` 是 no-op，402 也还不会发生。等后端开收费时
+            # 这条通道已经是好的，不用两个仓卡时序。
+            billed = _billed_json(res)
+            relative = billed["url"]
 
         full_url = relative if str(relative).startswith("http") else f"{API_URL}{relative}"
         lines = [f"**Signed report URL** (valid ~5 min):\n{full_url}\n"]
@@ -2873,7 +2899,9 @@ async def get_audit_report(session_id: Annotated[str | None, Field(
                 "report on that session."
             )
         lines.append("Open in a browser or `curl -O` to download the PDF.")
-        return CallToolResult(
+        # CI-892: 与另外 19 个取值型工具一致——`_with_usage` 在文本尾部补 `💳` 那行、
+        # 并把 `usage` 放进 structuredContent。后端没计量时它自己 no-op。
+        return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content={
                 "session_id": session_id,
@@ -2883,7 +2911,7 @@ async def get_audit_report(session_id: Annotated[str | None, Field(
                 "chemicals": built_from_recent or None,
                 "chemicals_not_in_report": not_in_report or None,
             },
-        )
+        ), billed)
     finally:
         # 🔴 把「走的是哪条路径」记下来：这次改动要回答的正是「零参调用有没有被用起来」，
         # 两条路径记成同一个形状的话，下一轮读日志的人读不出答案。

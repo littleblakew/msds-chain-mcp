@@ -335,6 +335,64 @@ def test_grounded_only_turn_gets_no_directive():
         ["first_aid_guidance"], None)
 
 
+def test_backend_field_decides_and_absence_falls_back():
+    """🔴 CI-874：主判据是后端的 `unchecked_intents_prose_suppressed`，本仓那个
+    frozenset 降级成 fallback。四种输入分开钉，因为它们**两两同形**：
+
+    · 字段 `True`  ⇒ 不发（哪怕 intent 是个照发的 intent）—— 后端说了算
+    · 字段 `False` ⇒ 照发（哪怕 intent 落在 `_SKIP_INTENT_DIRECTIVE_ON` 里）
+      ——**这一条是整次改动的意义所在**：`False` 是后端一个有内容的回答，
+      写成 falsy 判断会把它和「没回答」揉成一个，改动当场退化成 no-op 而**测试全绿**。
+    · 字段缺席   ⇒ 回退到 frozenset（契约①：缺席是常态，绝不默认照发）
+    · 字段是垃圾 ⇒ 当缺席处理，不是当 True 也不是当 False
+    """
+    intents = ["first_aid_guidance"]
+
+    # 后端说压制了 ⇒ 不发，即便 intent 本身是照发的那种
+    assert server._unchecked_intents_directive(intents, "ppe", True) == ""
+
+    # 🔴 后端说没压制 ⇒ 照发，即便 intent 落在 fallback 的黑名单里。
+    # 反向变异：把 `is None` 写成 `if not prose_suppressed:` ⇒ 本行必红。
+    assert "first_aid_guidance" in server._unchecked_intents_directive(
+        intents, "grounded_only", False)
+
+    # 字段缺席 ⇒ 回退到本仓那份 frozenset（两个方向都要测，否则「回退」可能是「全关」）
+    assert server._unchecked_intents_directive(intents, "grounded_only", None) == ""
+    assert "first_aid_guidance" in server._unchecked_intents_directive(
+        intents, "ppe", None)
+
+    # 非 bool 的垃圾值当缺席处理 —— 不是当真值（会静默吞掉披露）
+    for junk in ("true", 1, 0, {}, []):
+        assert server._unchecked_intents_directive(intents, "ppe", junk) != "", junk
+        assert server._unchecked_intents_directive(intents, "grounded_only", junk) == "", junk
+
+
+def test_quick_result_actually_passes_the_new_field_through():
+    """🔴 与下面那条同一个道理：**闸改在函数里而调用点不传新字段 ＝ 完美的空跑**。
+
+    这次尤其像——不传的话回退到旧判断，行为与改动前**逐字相同**，
+    所有旧测试继续全绿，而这次改动一个字都没生效。
+    反向变异：把 `_quick_result` 里那个第三参数删掉 ⇒ 本条必红。
+    """
+    # 后端说没压制、intent 是 grounded_only ⇒ 只有真的透传了字段才会发指令
+    res = server._quick_result({
+        "answer": "a", "tool_results": [], "documents": [],
+        "unchecked_intents": ["first_aid_guidance"],
+        "intent": "grounded_only",
+        "unchecked_intents_prose_suppressed": False,
+    })
+    assert "[unchecked-question]" in res.content[0].text, res.content[0].text
+
+    # 反过来：后端说压制了 ⇒ 不发，即便 intent 照发
+    res2 = server._quick_result({
+        "answer": "a", "tool_results": [], "documents": [],
+        "unchecked_intents": ["first_aid_guidance"],
+        "intent": "ppe",
+        "unchecked_intents_prose_suppressed": True,
+    })
+    assert "[unchecked-question]" not in res2.content[0].text, res2.content[0].text
+
+
 def test_quick_result_actually_passes_intent_through():
     """🔴 上一条只测函数本身。**闸装在函数里而调用点不传 intent ＝ 一个完美的空跑**
     ——两种写法在「拒答回合有没有指令」上完全不同形，而单测函数那条都绿。
