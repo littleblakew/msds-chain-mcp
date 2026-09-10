@@ -30,10 +30,18 @@ class _Resp:
         self.status_code = status
         self.headers = headers or {}
 
+    # 🔴 reason phrase 由状态码算出来，**不许写死 "Payment Required"**。
+    # `test_exhausted_balance_gets_the_actionable_message` 拿「`Payment Required`
+    # 没漏进消息」当「裸状态行没泄露」的判词；写死的话，这个替身将来被复用到
+    # 500/503 时会**替一个非 402 的状态伪造出那句话**，判词就不再是它自称的意思了。
+    # （review 抓到的，成立。）
     def raise_for_status(self):
         if self.status_code >= 400:
+            reason = {402: "Payment Required", 403: "Forbidden",
+                      404: "Not Found", 500: "Internal Server Error"}.get(
+                          self.status_code, "Error")
             raise RuntimeError(
-                f"Client error '{self.status_code} Payment Required' for url ...")
+                f"Client error '{self.status_code} {reason}' for url ...")
 
     def json(self):
         return self._p
