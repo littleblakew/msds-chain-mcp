@@ -431,7 +431,12 @@ def _quick_result(data: dict) -> CallToolResult:
     # for ask_chemical_safety while the (short, link-last) direct tools did.
     # 🔴 CI-841 的指令拼在 `unchecked` **之前** ⇒ 渲染出来在它上面，与后端两个确定性块
     # 的相对顺序一致（「这一问没查」比「这几个化学品没查」更靠近用户要的那件事）。
-    text = (_unchecked_intents_directive(data.get("unchecked_intents"),
+    # 🔴 CI-978 的指令拼在**最前**：它说的是「下面那段更正不许丢」，而它要保护的
+    # 那段更正本身就在 `answer` 的开头 —— 指令离它越近，被重写时一起丢掉的概率越低
+    # （同 CI-89-followup 实测的「靠后的内容会被客户端模型丢掉」）。
+    text = (_attribution_override_directive(
+                data.get("unchecked_intent_attribution_overridden"))
+            + _unchecked_intents_directive(data.get("unchecked_intents"),
                                         data.get("intent"),
                                         data.get("unchecked_intents_prose_suppressed"))
             + _unchecked_directive(data.get("unchecked"))
@@ -562,6 +567,43 @@ def _unchecked_intents_directive(unchecked_intents, intent: str | None = None,
     if not names:
         return ""
     return _UNCHECKED_INTENTS_DIRECTIVE.format(names=", ".join(names))
+
+
+# 🔴 CI-978：后端的出口检查刚刚在 `answer` 开头拼了一条**确定性更正**
+# （「下面把 X 写成了来自 SDS 的样子，而本轮没为它跑过工具 ⇒ 那段没有出处」）。
+# 本仓这条指令的唯一作用是**不让它在重写中消失**。
+#
+# 🔴 **为什么后端确定性拼了还不够**：这条通道上 `answer` 要过**第三个模型**
+# （claude.ai / ChatGPT / Copilot 重写之后才到用户眼前），后端的确定性对它一个字
+# 都管不到。同仓已有 prod 实证：CI-89-followup 里靠后的 SDS 链接被客户端模型丢掉。
+# 先例与完整论证在 `_UNCHECKED_INTENTS_DIRECTIVE`（CI-592 / CI-567 / CI-869），不重复。
+#
+# 🔴 **只说「别丢」，不复述更正的内容**：更正里点了哪些意图的名，那是后端按 `lang`
+# 本地化的用户可见措辞，单源在后端。本仓复述一份就是第二处拼写。
+#
+# 🔴 **不带 `_SKIP_INTENT_DIRECTIVE_ON` 那道闸**，与上面那条刻意不同：那道闸防的是
+# 「在拒答回合里邀请用户把刚被拒的那半再问一次」，而本条一个字的邀请都没有——
+# 它只说「上面那段更正不许丢」，在任何回合里都成立。
+_ATTRIBUTION_OVERRIDE_DIRECTIVE = (
+    "[attribution-correction] The answer below OPENS with a correction stating that part "
+    "of it was written as if it came from the SDS / our data, while NO tool was run for "
+    "that part in this turn.\n"
+    "That correction is ours and it is authoritative. You MUST keep it, in full, ABOVE "
+    "the content it corrects. You MUST NOT drop it when summarizing, MUST NOT soften it, "
+    "and MUST NOT re-attribute the corrected content to the SDS, to the tool results, or "
+    "to 'the data'.\n\n"
+)
+
+
+def _attribution_override_directive(overridden) -> str:
+    """后端说「这一轮更正过一次」时，配一条「别把那条更正丢掉」的指令。
+
+    🔴 **三态，与本文件其它指令同一条纪律**：`True` ⇒ 发；`False`（后端说没更正过）
+    与键缺失（老后端 —— 本仓与后端各自发布、版本必然错开）都 ⇒ 空串。
+    🔴 缺席时的默认必须是**不发**：凭空说一句「上面有更正」而 `answer` 里并没有，
+    等于让客户端模型去找一段不存在的文字，那是我们自己制造的幻觉源。
+    """
+    return _ATTRIBUTION_OVERRIDE_DIRECTIVE if overridden is True else ""
 
 
 # 后端没给 note 时的兜底文案（老后端、或将来新增的 reason）。键是机器可判的
