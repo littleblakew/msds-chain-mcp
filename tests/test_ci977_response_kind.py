@@ -19,6 +19,13 @@ r"""CI-977（本仓这一半）：把「这一轮我们给了什么」当成一�
 | `test_missing_intent_is_none_not_answered` | `return None` 改成 `return "answered"`（把「没算」写成一句肯定） |
 | `test_ask_chemical_safety_reports_the_kind` | `ask_chemical_safety` 的 `_log_intent(...)` 去掉 `response_kind=` 那个实参 |
 | `test_log_call_puts_it_on_the_wire` | `_log_call` 的 POST body 里删掉 `"response_kind"` 那一行 |
+
+🔴 **异步用例一律 `asyncio.run`，别用 `@pytest.mark.asyncio`**：本仓
+`requirements-dev.txt` 里**没有 pytest-asyncio**，而它可能恰好装在你本机的 venv 里
+⇒ 本机全绿、CI 的 deploy job 当场红（`async def functions are not natively supported`）。
+**2026-09-15 我就是这么把一次 Prod 部署堵掉的**，而仓里 `test_ppe_undetermined_rendering.py`
+顶部早就写着同一条——那是一段**只有搜 `pytest.mark.asyncio` 才看得见的散文**。
+⇒ 这次给它配了机械守卫：`test_ci977_no_unlisted_pytest_plugin.py`。
 """
 import asyncio
 import json
@@ -52,8 +59,7 @@ def test_missing_intent_is_none_not_answered(data):
     assert server._response_kind(data) is None
 
 
-@pytest.mark.asyncio
-async def test_ask_chemical_safety_reports_the_kind(monkeypatch):
+def test_ask_chemical_safety_reports_the_kind(monkeypatch):
     """打在**工具真实的 finally 路径**上，不是直接调 `_response_kind`。
 
     只测那个纯函数的话，「函数对了但没接上去」会全程绿 —— 而那正是这类改动最常见的
@@ -71,7 +77,7 @@ async def test_ask_chemical_safety_reports_the_kind(monkeypatch):
     monkeypatch.setattr(server, "_quick_chat", fake_quick_chat)
     monkeypatch.setattr(server, "_log_intent", fake_log_intent)
 
-    await server.ask_chemical_safety(question="给我乙酸乙酯的 16 章节 SDS")
+    asyncio.run(server.ask_chemical_safety(question="给我乙酸乙酯的 16 章节 SDS"))
 
     assert captured["tool_name"] == "ask_chemical_safety"
     assert captured["response_kind"] == "rejected"
@@ -79,8 +85,7 @@ async def test_ask_chemical_safety_reports_the_kind(monkeypatch):
     assert captured["success"] is True
 
 
-@pytest.mark.asyncio
-async def test_log_call_puts_it_on_the_wire(monkeypatch):
+def test_log_call_puts_it_on_the_wire(monkeypatch):
     """最后一跳：它得真的进 POST body。前面每一步都对、这一行漏了，同样什么都不会红。"""
     sent: dict = {}
 
@@ -100,7 +105,7 @@ async def test_log_call_puts_it_on_the_wire(monkeypatch):
             return _Resp()
 
     monkeypatch.setattr(server.httpx, "AsyncClient", lambda **kw: _Client())
-    await server._log_call("ask_chemical_safety", None, 12, True,
-                           response_kind="rejected")
+    asyncio.run(server._log_call("ask_chemical_safety", None, 12, True,
+                                 response_kind="rejected"))
     assert sent["response_kind"] == "rejected"
     assert sent["success"] is True
