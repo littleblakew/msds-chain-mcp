@@ -3376,11 +3376,28 @@ async def search_chemical_database(query: Annotated[str, Field(
                 # 却仍写着 "Found 10 result(s)"。模型完全看不出发生过截断。
                 # 所以按类别分别取：普通行 5 条的预算不变，无 CAS 行**单独保留名额**
                 # —— 它们是唯一带披露义务的一类，被截掉等于披露没发生。
+                # 🔴 CI-979: `match_type == "cas_mismatch"` 的行要单独留名额，且排最前。
+                # 那是**用户自己打进来的那个 CAS**，我们库里确实有这条记录，只是查询的
+                # 名字半边没能与它相互印证（后端 CI-210 的 display fallthrough）。后端把它
+                # **追加在结果末尾**（`rank=6`），并在 `chemical_resolver` 里写明这是个
+                # 呈现问题而非排序结论："a consuming UI should surface this row as a
+                # MISMATCH WARNING rather than as the weakest suggestion. The resolver
+                # cannot enforce that presentation."
+                # ⇒ 不留名额时它排在候选列表最后，`[:5]` 会把它整条切掉：屏幕上只剩一批
+                # 名字相近的**别的**物质，而用户逐字打进来的那个号一次都不出现。
+                # 🔴 排在最前 ≠ 升格成身份：它仍然不进判定（下面 `included_in_assessment`
+                # 显式 False），文案也必须说出「没能印证」这件事。
+                def _is_cas_mismatch(c: dict) -> bool:
+                    return (c.get("match_type") or "") == "cas_mismatch"
+
+                _mismatch = [c for c in chemicals if _is_cas_mismatch(c)]
                 _no_cas = [c for c in chemicals
-                           if (c.get("record_kind") or "") == "substance_no_cas"]
+                           if not _is_cas_mismatch(c)
+                           and (c.get("record_kind") or "") == "substance_no_cas"]
                 _ordinary = [c for c in chemicals
-                             if (c.get("record_kind") or "") != "substance_no_cas"]
-                shown = _ordinary[:5] + _no_cas[:3]
+                             if not _is_cas_mismatch(c)
+                             and (c.get("record_kind") or "") != "substance_no_cas"]
+                shown = _mismatch[:2] + _ordinary[:5] + _no_cas[:3]
                 omitted = len(chemicals) - len(shown)
                 lines = [f"Found {len(chemicals)} result(s) for '{query}':\n"]
                 struct_results = []
@@ -3393,7 +3410,27 @@ async def search_chemical_database(query: Annotated[str, Field(
                     # its GHS classification describes the whole formulation. Label it
                     # so the caller never reads it as a substance record.
                     kind = c.get("record_kind") or "substance"
-                    if kind == "substance_no_cas":
+                    if _is_cas_mismatch(c):
+                        # 🔴 CI-979 —— 措辞要同时容纳**两种**成因，因为后端这一条行
+                        # 对二者是同形的：①名字半边指向了别的已知物质（真矛盾）
+                        # ②名字半边什么也没印证（沉默，例如那个俗名不在别名表里）。
+                        # 说死成「你的名字和 CAS 互相矛盾」在②上是假话。
+                        # ⇒ 只陈述我们确实知道的那件事：这个 CAS 我们有、名字没印证上、
+                        # 这一行不参与任何判定，并给出**两个方向各自可执行的下一步**。
+                        lines.append(
+                            f"• **{name}** (CAS: {cas}) — ⚠️ this is the CAS number "
+                            f"you typed, and we DO hold a record for it. It is listed "
+                            f"separately because the name half of your query could not "
+                            f"be corroborated against it, so this row is NOT an "
+                            f"identified chemical: no hazard, compatibility or storage "
+                            f"verdict is computed from it. Two possibilities, and we "
+                            f"cannot tell them apart: the name is a synonym we do not "
+                            f"hold, or the CAS belongs to a different substance than "
+                            f"the name. Next step — if the CAS is the one on your "
+                            f"container, re-run the search with `{cas}` alone; "
+                            f"otherwise check the name against your source document."
+                        )
+                    elif kind == "substance_no_cas":
                         # CI-322 B2: a legitimately CAS-less substance (a newly
                         # synthesised building block that has never been assigned
                         # one). We DO hold its supplier SDS and its full GHS, so
@@ -3436,9 +3473,19 @@ async def search_chemical_database(query: Annotated[str, Field(
                         # on every row (True for ordinary substances) so a caller
                         # reading this field never has to infer exclusion from a
                         # missing key — absence and False must not look the same.
-                        "included_in_assessment": c.get(
-                            "included_in_assessment", kind == "substance"
+                        # 🔴 CI-979：`cas_mismatch` 行**必须**是 False。后端这条
+                        # 通道不返回 `included_in_assessment`，于是默认值
+                        # `kind == "substance"` 让它一直是 True —— 机器可读的那一面
+                        # 在说「这条已纳入判定」，与文本面和 `is_identity_grade_candidate`
+                        # 都相反。默认值那半照旧，不动其它行。
+                        "included_in_assessment": (
+                            False if _is_cas_mismatch(c) else c.get(
+                                "included_in_assessment", kind == "substance"
+                            )
                         ),
+                        # CI-979：把后端的 `match_type` 原样带出来，让调用方不必从
+                        # 文案里反推「这一行为什么长得不一样」。
+                        "match_type": c.get("match_type"),
                         **({"catalog_number": c.get("catalog_number"),
                             "ghs": c.get("ghs"),
                             "disclosure": c.get("disclosure")}
