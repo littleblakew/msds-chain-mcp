@@ -999,7 +999,8 @@ _call_log_post_failures = 0
 
 async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: int,
                     success: bool, error_message: str | None = None,
-                    input_params: str | None = None, response_text: str | None = None):
+                    input_params: str | None = None, response_text: str | None = None,
+                    response_kind: str | None = None):
     """Fire-and-forget: POST call record to backend.
 
     Never raises into the caller — a logging failure must not break the user's
@@ -1038,6 +1039,11 @@ async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: in
                     # CI-333：客户端真正读到的正文。后端在 CI-333/344 那版之前会静默
                     # 忽略这个字段（pydantic 默认 ignore extra），所以先发后存是安全的。
                     "response_text": response_text,
+                    # CI-977：这一轮我们给了什么（answered / rejected / redirected）。
+                    # 🔴 与 `success` 分开：一次 RAI 拒答在传输层是成功的 ⇒ 2026-09-07
+                    # 那次**误伤真实用户的拒答**记成 success=true，不在任何失败率里。
+                    # 老后端会静默忽略这个字段（pydantic 默认 ignore extra）⇒ 先发后存安全。
+                    "response_kind": response_kind,
                     "api_key": cred,
                 },
                 headers={**_headers(), **_log_secret_header()},
@@ -1078,7 +1084,8 @@ _log_slot: ContextVar[dict | None] = ContextVar("mcp_log_slot", default=None)
 
 def _log_intent(tool_name: str, chemicals: list[str] | None,
                 input_params: str | None = None, *,
-                success: bool = True, error_message: str | None = None) -> None:
+                success: bool = True, error_message: str | None = None,
+                response_kind: str | None = None) -> None:
     """工具声明：本次调用要记的身份 + **已脱敏的**入参（+ 可选的失败标记）。
 
     🔴 `success` 存在是因为**有些失败不抛异常**：quick-chat 超时被转成一句可读消息、
@@ -1090,7 +1097,8 @@ def _log_intent(tool_name: str, chemicals: list[str] | None,
     """
     _log_slot.set({"tool_name": tool_name, "chemicals": chemicals,
                    "input_params": input_params,
-                   "success": success, "error_message": error_message})
+                   "success": success, "error_message": error_message,
+                   "response_kind": response_kind})
 
 
 # CI-823：上限只**截断不拒绝**。写成 schema 的 `maxLength` 会让 pydantic 直接打回整次调用
@@ -1137,6 +1145,26 @@ def _cap(text: str) -> str:
     return text if len(text) <= _MAX_RESPONSE_LOG_CHARS else text[:_MAX_RESPONSE_LOG_CHARS] + "…[truncated]"
 
 
+# CI-977：后端 quick-chat 的 `intent` → 我们要记的那条事实。
+# 🔴 **判据从后端的载荷推导，不去猜回复正文**：拒答文案是 5 语种一张表，按文本认它
+# 就是 [[testing-unreliability-seven-forms]] 里那条「自由文本判据」——加一门语言、
+# 改一个字都会让它静默失配，而失配的方向是「看起来没有误伤」。
+#
+# 🔴 **三态**：`None` = 后端没给（老后端、或压根不经 quick-chat 的早退路径）⇒ 别填
+# `answered` 兜底，那会把「不知道」写成一句肯定。
+_RESPONSE_KIND_BY_INTENT = {"rejected": "rejected", "redirected": "redirected"}
+
+
+def _response_kind(data: dict | None) -> str | None:
+    """这一轮我们给了什么：`answered` / `rejected` / `redirected` / `None`（没算）。"""
+    if not isinstance(data, dict):
+        return None
+    intent = data.get("intent")
+    if not isinstance(intent, str) or not intent:
+        return None
+    return _RESPONSE_KIND_BY_INTENT.get(intent, "answered")
+
+
 def _reported(fn):
     """包在每个工具最内层：计时 / 成败 / 回复正文 / 上报，一处做完。
 
@@ -1165,6 +1193,12 @@ def _reported(fn):
                     slot["tool_name"], slot["chemicals"],
                     int((time.monotonic() - t0) * 1000), ok, err,
                     slot["input_params"], _response_text(result),
+                    # CI-977：工具没报就是 `None`（＝「这一轮没算」），**别在这里填
+                    # `answered` 兜底**——那会把「不经 quick-chat 的工具」和「真的答了」
+                    # 揉成一个桶，正是本票要拆开的那种同形。
+                    # 🔴 **关键字传参**：位置传参会让每个测试替身的签名都成为隐式契约，
+                    # 加一个参数就一次性打翻 10 条不相干的守卫（2026-09-15 实测）。
+                    response_kind=slot.get("response_kind"),
                 )
             _log_slot.reset(token)
     return wrapper
@@ -2318,7 +2352,8 @@ async def ask_chemical_safety(
     finally:
         _log_intent("ask_chemical_safety", _chemicals_from_response(data),
                         _json.dumps({"question": question}),
-                    success=success, error_message=error_msg)
+                    success=success, error_message=error_msg,
+                    response_kind=_response_kind(data))
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get PPE Recommendation", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
