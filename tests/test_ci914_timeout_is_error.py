@@ -127,6 +127,12 @@ def test_backend_4xx_sets_is_error(monkeypatch):
     assert res.is_error is True, f"422 被报成了成功：{_text(res)!r}"
     # 🔴 这一格**故意**只断言子串：4xx 走的是 `raise`（既有行为，不在本票范围），
     # 所以它的文字确实带着 `Tool.run()` 的英文前缀。拿逐字相等去卡它等于顺手改了另一条路。
+    #
+    # 🔴 **升级 `mcp` 之后这条红了，别当 flaky 删掉。** 依赖钉的是 `mcp>=2.0.0,<3`，
+    # 而实测 `2.2.0` 的 `Tool.run()` 不再把原异常文本 `{e}` 包进 `ToolError`
+    # （PR #50 第二轮 review 顺带量到的）⇒ 这条红 **＝ [[CI-410]] 的保证真的断了**：
+    # 「422 的原因要到达调用方」不再成立，模型又看不出是「化学品超过 24 个」还是参数名写错。
+    # 处置是去修那条路（把原因放进我们自己构造的 CallToolResult），不是放宽这条断言。
     assert "422" in _text(res), f"原因没到调用方手里：{_text(res)!r}"
 
 
