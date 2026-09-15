@@ -1411,6 +1411,31 @@ def _raise_for_status_with_reason(res: "httpx.Response") -> None:
     res.raise_for_status()
 
 
+# 🔴 CI-937：后端**故意**多给的一格，MCP 面不能透出去。
+# `preparation_disclosure_tail` 是安全披露**首句之后**那半段（CI-917① 为网页端加的：
+# 前端要「自己写首句 + 接着念其余」，此前它在客户端用正则剥第一句，而正文里的 `0.03%`
+# 被从**小数点**处切开、屏幕上印成 `03%`）。
+# 🔴 危害是**不对称**的：完整的 `preparation_disclosure` 带着浓度，而 tail **不带**
+# ⇒ 只印 tail 的消费者会**静默丢掉浓度**，正是 CI-917① 要消灭的那个失败。
+# MCP 面本来就拿得到完整那句，tail 对它零信息增量 ⇒ 删掉不减少任何东西。
+#
+# 🔴 **为什么在入口剥而不是在出口**：`structured_content=` 在本文件有 25 个构造点，
+# 实测 23 个工具里有 **15 个**会把它透出去（探针给每个容器都塞上这个键再全量调一遍）。
+# 挑其中几处改 ＝ 作用域手写 ⇒ 必漏。入口只有本函数 + 少数直接 `.json()` 的旁路，
+# 而旁路由守卫 `test_ci937_tail_not_exposed.py` 扫出来（它按 `list_tools()` 发现成员，
+# 新工具自动进来；变异＝往仓里加一个透传新工具看它红不红）。
+_TAIL_ONLY_KEYS = frozenset({"preparation_disclosure_tail"})
+
+
+def _drop_tail_keys(obj):
+    """递归剥掉 `_TAIL_ONLY_KEYS`。非容器原样返回；不改原对象。"""
+    if isinstance(obj, dict):
+        return {k: _drop_tail_keys(v) for k, v in obj.items() if k not in _TAIL_ONLY_KEYS}
+    if isinstance(obj, list):
+        return [_drop_tail_keys(v) for v in obj]
+    return obj
+
+
 def _billed_json(res: "httpx.Response") -> dict:
     """raise_for_status with a caller-friendly 402 (balance exhausted) message, then
     return the JSON body with any credit usage attached under `_usage`."""
@@ -1432,7 +1457,7 @@ def _billed_json(res: "httpx.Response") -> dict:
     # 不是哑失败（调用可见地失败了），但**不可行动**：模型看不出是"化学品超过 24 个"
     # 还是"参数名写错了"。同 CI-523 一族——信息在，只是没到达读它的人。
     _raise_for_status_with_reason(res)
-    data = res.json()
+    data = _drop_tail_keys(res.json())
     usage = _parse_usage(res)
     if usage and isinstance(data, dict):
         data["_usage"] = usage
