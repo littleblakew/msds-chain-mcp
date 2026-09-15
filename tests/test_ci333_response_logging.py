@@ -28,7 +28,10 @@ def logged(monkeypatch):
     calls: list[dict] = []
 
     async def _fake_log(tool_name, chemicals, duration_ms, success,
-                        error_message=None, input_params=None, response_text=None):
+                        error_message=None, input_params=None, response_text=None,
+                        response_kind=None):
+                        # CI-977：生产签名新增了 `response_kind`。替身不跟着加，
+                        # `_reported` 的 finally 会 TypeError ⇒ 表现成「一条日志都没发」。
         calls.append({"tool": tool_name, "success": success, "error": error_message,
                       "input_params": input_params, "response_text": response_text})
 

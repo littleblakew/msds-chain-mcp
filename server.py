@@ -431,7 +431,12 @@ def _quick_result(data: dict) -> CallToolResult:
     # for ask_chemical_safety while the (short, link-last) direct tools did.
     # 🔴 CI-841 的指令拼在 `unchecked` **之前** ⇒ 渲染出来在它上面，与后端两个确定性块
     # 的相对顺序一致（「这一问没查」比「这几个化学品没查」更靠近用户要的那件事）。
-    text = (_unchecked_intents_directive(data.get("unchecked_intents"),
+    # 🔴 CI-978 的指令拼在**最前**：它说的是「下面那段更正不许丢」，而它要保护的
+    # 那段更正本身就在 `answer` 的开头 —— 指令离它越近，被重写时一起丢掉的概率越低
+    # （同 CI-89-followup 实测的「靠后的内容会被客户端模型丢掉」）。
+    text = (_attribution_override_directive(
+                data.get("unchecked_intent_attribution_overridden"))
+            + _unchecked_intents_directive(data.get("unchecked_intents"),
                                         data.get("intent"),
                                         data.get("unchecked_intents_prose_suppressed"))
             + _unchecked_directive(data.get("unchecked"))
@@ -562,6 +567,43 @@ def _unchecked_intents_directive(unchecked_intents, intent: str | None = None,
     if not names:
         return ""
     return _UNCHECKED_INTENTS_DIRECTIVE.format(names=", ".join(names))
+
+
+# 🔴 CI-978：后端的出口检查刚刚在 `answer` 开头拼了一条**确定性更正**
+# （「下面把 X 写成了来自 SDS 的样子，而本轮没为它跑过工具 ⇒ 那段没有出处」）。
+# 本仓这条指令的唯一作用是**不让它在重写中消失**。
+#
+# 🔴 **为什么后端确定性拼了还不够**：这条通道上 `answer` 要过**第三个模型**
+# （claude.ai / ChatGPT / Copilot 重写之后才到用户眼前），后端的确定性对它一个字
+# 都管不到。同仓已有 prod 实证：CI-89-followup 里靠后的 SDS 链接被客户端模型丢掉。
+# 先例与完整论证在 `_UNCHECKED_INTENTS_DIRECTIVE`（CI-592 / CI-567 / CI-869），不重复。
+#
+# 🔴 **只说「别丢」，不复述更正的内容**：更正里点了哪些意图的名，那是后端按 `lang`
+# 本地化的用户可见措辞，单源在后端。本仓复述一份就是第二处拼写。
+#
+# 🔴 **不带 `_SKIP_INTENT_DIRECTIVE_ON` 那道闸**，与上面那条刻意不同：那道闸防的是
+# 「在拒答回合里邀请用户把刚被拒的那半再问一次」，而本条一个字的邀请都没有——
+# 它只说「上面那段更正不许丢」，在任何回合里都成立。
+_ATTRIBUTION_OVERRIDE_DIRECTIVE = (
+    "[attribution-correction] The answer below OPENS with a correction stating that part "
+    "of it was written as if it came from the SDS / our data, while NO tool was run for "
+    "that part in this turn.\n"
+    "That correction is ours and it is authoritative. You MUST keep it, in full, ABOVE "
+    "the content it corrects. You MUST NOT drop it when summarizing, MUST NOT soften it, "
+    "and MUST NOT re-attribute the corrected content to the SDS, to the tool results, or "
+    "to 'the data'.\n\n"
+)
+
+
+def _attribution_override_directive(overridden) -> str:
+    """后端说「这一轮更正过一次」时，配一条「别把那条更正丢掉」的指令。
+
+    🔴 **三态，与本文件其它指令同一条纪律**：`True` ⇒ 发；`False`（后端说没更正过）
+    与键缺失（老后端 —— 本仓与后端各自发布、版本必然错开）都 ⇒ 空串。
+    🔴 缺席时的默认必须是**不发**：凭空说一句「上面有更正」而 `answer` 里并没有，
+    等于让客户端模型去找一段不存在的文字，那是我们自己制造的幻觉源。
+    """
+    return _ATTRIBUTION_OVERRIDE_DIRECTIVE if overridden is True else ""
 
 
 # 后端没给 note 时的兜底文案（老后端、或将来新增的 reason）。键是机器可判的
@@ -957,7 +999,8 @@ _call_log_post_failures = 0
 
 async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: int,
                     success: bool, error_message: str | None = None,
-                    input_params: str | None = None, response_text: str | None = None):
+                    input_params: str | None = None, response_text: str | None = None,
+                    response_kind: str | None = None):
     """Fire-and-forget: POST call record to backend.
 
     Never raises into the caller — a logging failure must not break the user's
@@ -996,6 +1039,11 @@ async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: in
                     # CI-333：客户端真正读到的正文。后端在 CI-333/344 那版之前会静默
                     # 忽略这个字段（pydantic 默认 ignore extra），所以先发后存是安全的。
                     "response_text": response_text,
+                    # CI-977：这一轮我们给了什么（answered / rejected / redirected）。
+                    # 🔴 与 `success` 分开：一次 RAI 拒答在传输层是成功的 ⇒ 2026-09-07
+                    # 那次**误伤真实用户的拒答**记成 success=true，不在任何失败率里。
+                    # 老后端会静默忽略这个字段（pydantic 默认 ignore extra）⇒ 先发后存安全。
+                    "response_kind": response_kind,
                     "api_key": cred,
                 },
                 headers={**_headers(), **_log_secret_header()},
@@ -1036,7 +1084,8 @@ _log_slot: ContextVar[dict | None] = ContextVar("mcp_log_slot", default=None)
 
 def _log_intent(tool_name: str, chemicals: list[str] | None,
                 input_params: str | None = None, *,
-                success: bool = True, error_message: str | None = None) -> None:
+                success: bool = True, error_message: str | None = None,
+                response_kind: str | None = None) -> None:
     """工具声明：本次调用要记的身份 + **已脱敏的**入参（+ 可选的失败标记）。
 
     🔴 `success` 存在是因为**有些失败不抛异常**：quick-chat 超时被转成一句可读消息、
@@ -1048,7 +1097,8 @@ def _log_intent(tool_name: str, chemicals: list[str] | None,
     """
     _log_slot.set({"tool_name": tool_name, "chemicals": chemicals,
                    "input_params": input_params,
-                   "success": success, "error_message": error_message})
+                   "success": success, "error_message": error_message,
+                   "response_kind": response_kind})
 
 
 # CI-823：上限只**截断不拒绝**。写成 schema 的 `maxLength` 会让 pydantic 直接打回整次调用
@@ -1095,6 +1145,26 @@ def _cap(text: str) -> str:
     return text if len(text) <= _MAX_RESPONSE_LOG_CHARS else text[:_MAX_RESPONSE_LOG_CHARS] + "…[truncated]"
 
 
+# CI-977：后端 quick-chat 的 `intent` → 我们要记的那条事实。
+# 🔴 **判据从后端的载荷推导，不去猜回复正文**：拒答文案是 5 语种一张表，按文本认它
+# 就是 [[testing-unreliability-seven-forms]] 里那条「自由文本判据」——加一门语言、
+# 改一个字都会让它静默失配，而失配的方向是「看起来没有误伤」。
+#
+# 🔴 **三态**：`None` = 后端没给（老后端、或压根不经 quick-chat 的早退路径）⇒ 别填
+# `answered` 兜底，那会把「不知道」写成一句肯定。
+_RESPONSE_KIND_BY_INTENT = {"rejected": "rejected", "redirected": "redirected"}
+
+
+def _response_kind(data: dict | None) -> str | None:
+    """这一轮我们给了什么：`answered` / `rejected` / `redirected` / `None`（没算）。"""
+    if not isinstance(data, dict):
+        return None
+    intent = data.get("intent")
+    if not isinstance(intent, str) or not intent:
+        return None
+    return _RESPONSE_KIND_BY_INTENT.get(intent, "answered")
+
+
 def _reported(fn):
     """包在每个工具最内层：计时 / 成败 / 回复正文 / 上报，一处做完。
 
@@ -1123,6 +1193,12 @@ def _reported(fn):
                     slot["tool_name"], slot["chemicals"],
                     int((time.monotonic() - t0) * 1000), ok, err,
                     slot["input_params"], _response_text(result),
+                    # CI-977：工具没报就是 `None`（＝「这一轮没算」），**别在这里填
+                    # `answered` 兜底**——那会把「不经 quick-chat 的工具」和「真的答了」
+                    # 揉成一个桶，正是本票要拆开的那种同形。
+                    # 🔴 **关键字传参**：位置传参会让每个测试替身的签名都成为隐式契约，
+                    # 加一个参数就一次性打翻 10 条不相干的守卫（2026-09-15 实测）。
+                    response_kind=slot.get("response_kind"),
                 )
             _log_slot.reset(token)
     return wrapper
@@ -2276,7 +2352,8 @@ async def ask_chemical_safety(
     finally:
         _log_intent("ask_chemical_safety", _chemicals_from_response(data),
                         _json.dumps({"question": question}),
-                    success=success, error_message=error_msg)
+                    success=success, error_message=error_msg,
+                    response_kind=_response_kind(data))
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Get PPE Recommendation", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
@@ -3376,11 +3453,28 @@ async def search_chemical_database(query: Annotated[str, Field(
                 # 却仍写着 "Found 10 result(s)"。模型完全看不出发生过截断。
                 # 所以按类别分别取：普通行 5 条的预算不变，无 CAS 行**单独保留名额**
                 # —— 它们是唯一带披露义务的一类，被截掉等于披露没发生。
+                # 🔴 CI-979: `match_type == "cas_mismatch"` 的行要单独留名额，且排最前。
+                # 那是**用户自己打进来的那个 CAS**，我们库里确实有这条记录，只是查询的
+                # 名字半边没能与它相互印证（后端 CI-210 的 display fallthrough）。后端把它
+                # **追加在结果末尾**（`rank=6`），并在 `chemical_resolver` 里写明这是个
+                # 呈现问题而非排序结论："a consuming UI should surface this row as a
+                # MISMATCH WARNING rather than as the weakest suggestion. The resolver
+                # cannot enforce that presentation."
+                # ⇒ 不留名额时它排在候选列表最后，`[:5]` 会把它整条切掉：屏幕上只剩一批
+                # 名字相近的**别的**物质，而用户逐字打进来的那个号一次都不出现。
+                # 🔴 排在最前 ≠ 升格成身份：它仍然不进判定（下面 `included_in_assessment`
+                # 显式 False），文案也必须说出「没能印证」这件事。
+                def _is_cas_mismatch(c: dict) -> bool:
+                    return (c.get("match_type") or "") == "cas_mismatch"
+
+                _mismatch = [c for c in chemicals if _is_cas_mismatch(c)]
                 _no_cas = [c for c in chemicals
-                           if (c.get("record_kind") or "") == "substance_no_cas"]
+                           if not _is_cas_mismatch(c)
+                           and (c.get("record_kind") or "") == "substance_no_cas"]
                 _ordinary = [c for c in chemicals
-                             if (c.get("record_kind") or "") != "substance_no_cas"]
-                shown = _ordinary[:5] + _no_cas[:3]
+                             if not _is_cas_mismatch(c)
+                             and (c.get("record_kind") or "") != "substance_no_cas"]
+                shown = _mismatch[:2] + _ordinary[:5] + _no_cas[:3]
                 omitted = len(chemicals) - len(shown)
                 lines = [f"Found {len(chemicals)} result(s) for '{query}':\n"]
                 struct_results = []
@@ -3393,7 +3487,27 @@ async def search_chemical_database(query: Annotated[str, Field(
                     # its GHS classification describes the whole formulation. Label it
                     # so the caller never reads it as a substance record.
                     kind = c.get("record_kind") or "substance"
-                    if kind == "substance_no_cas":
+                    if _is_cas_mismatch(c):
+                        # 🔴 CI-979 —— 措辞要同时容纳**两种**成因，因为后端这一条行
+                        # 对二者是同形的：①名字半边指向了别的已知物质（真矛盾）
+                        # ②名字半边什么也没印证（沉默，例如那个俗名不在别名表里）。
+                        # 说死成「你的名字和 CAS 互相矛盾」在②上是假话。
+                        # ⇒ 只陈述我们确实知道的那件事：这个 CAS 我们有、名字没印证上、
+                        # 这一行不参与任何判定，并给出**两个方向各自可执行的下一步**。
+                        lines.append(
+                            f"• **{name}** (CAS: {cas}) — ⚠️ this is the CAS number "
+                            f"you typed, and we DO hold a record for it. It is listed "
+                            f"separately because the name half of your query could not "
+                            f"be corroborated against it, so this row is NOT an "
+                            f"identified chemical: no hazard, compatibility or storage "
+                            f"verdict is computed from it. Two possibilities, and we "
+                            f"cannot tell them apart: the name is a synonym we do not "
+                            f"hold, or the CAS belongs to a different substance than "
+                            f"the name. Next step — if the CAS is the one on your "
+                            f"container, re-run the search with `{cas}` alone; "
+                            f"otherwise check the name against your source document."
+                        )
+                    elif kind == "substance_no_cas":
                         # CI-322 B2: a legitimately CAS-less substance (a newly
                         # synthesised building block that has never been assigned
                         # one). We DO hold its supplier SDS and its full GHS, so
@@ -3436,9 +3550,19 @@ async def search_chemical_database(query: Annotated[str, Field(
                         # on every row (True for ordinary substances) so a caller
                         # reading this field never has to infer exclusion from a
                         # missing key — absence and False must not look the same.
-                        "included_in_assessment": c.get(
-                            "included_in_assessment", kind == "substance"
+                        # 🔴 CI-979：`cas_mismatch` 行**必须**是 False。后端这条
+                        # 通道不返回 `included_in_assessment`，于是默认值
+                        # `kind == "substance"` 让它一直是 True —— 机器可读的那一面
+                        # 在说「这条已纳入判定」，与文本面和 `is_identity_grade_candidate`
+                        # 都相反。默认值那半照旧，不动其它行。
+                        "included_in_assessment": (
+                            False if _is_cas_mismatch(c) else c.get(
+                                "included_in_assessment", kind == "substance"
+                            )
                         ),
+                        # CI-979：把后端的 `match_type` 原样带出来，让调用方不必从
+                        # 文案里反推「这一行为什么长得不一样」。
+                        "match_type": c.get("match_type"),
                         **({"catalog_number": c.get("catalog_number"),
                             "ghs": c.get("ghs"),
                             "disclosure": c.get("disclosure")}
