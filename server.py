@@ -645,6 +645,25 @@ def _format_sds_documents(documents: list[dict]) -> str:
             )
             if note:
                 entry += f" — {note}"
+        # 🔴 CI-365：**这份文件不是本次结论所引用的那一份**时必须说出来。
+        #
+        # 后端现在让附件跟着「结论的依据」走；取不到被引用那行的原件时（Prod ≈0.05%）
+        # 它退回文档侧选择，并把 `document_follows_citation=False` +
+        # `citation_divergence_note` 一起发下来。**那一句不渲染，降级就是静默的**——
+        # 用户看到标题「📄 Original SDS (click to verify)」下的一个链接，会拿它去核对
+        # 结论里那句「依据 X 家 SDS 第 7 节」，而它出自另一份文件。**比不给链接更坏**：
+        # 不给链接只是缺一步，给错链接是替一份没参与结论的文件背书。
+        # 这正是上面那条注释命名的「修了但没到达真正的消费者」，同一个函数里第二次。
+        #
+        # 🔴 三态，别写成 `if not doc.get("document_follows_citation")`：
+        # `None`（这条回答没有引用，绝大多数）会被那个写法一起命中，于是每一条普通结果
+        # 后面都挂一句「这不是依据」——把一句重要的警告变成噪声，人和模型都会学会忽略它。
+        if doc.get("document_follows_citation") is False:
+            divergence = doc.get("citation_divergence_note") or (
+                "This file is not the SDS the conclusion cited; do not treat it as "
+                "the basis for that conclusion."
+            )
+            entry += f" — ⚠️ {divergence}"
         lines.append(entry)
     return "\n".join(lines)
 
