@@ -72,9 +72,21 @@ def test_no_surface_anywhere_claims_we_hold_a_record():
     **只扫 backend 仓** ⇒ 跨不了仓，mcp 这处才活到今天（CI-679 票面写「一处」、实际七处，
     这是第八处）。按源码扫才能发现**将来新写的**第九处。
     变异方式＝**在仓里任何地方重新写下这句话**，不是改现有调用点。
+
+    🔴 **本条自己也栽过一次**（trust 2026-08-28 抓到）：初版读的是 `srv.__file__`，
+    **只扫 `server.py` 一个文件**，而名字承诺的是 "anywhere"。今天 `server.py` 恰好是
+    唯一渲染面，所以结论没错——但**渲染逻辑一旦拆出第二个模块，它照样绿**。
+    这与它要防的那个缺陷是**同一形状**（backend 的守卫跨不了仓、我这条跨不了文件）：
+    **清单的作用域是手写的**。已改成扫整个包。
     """
-    src = pathlib.Path(srv.__file__).read_text()
-    assert "record we hold" not in src, "又有人写回了那句「我们持有的那份记录…」"
+    repo = pathlib.Path(srv.__file__).parent
+    offenders = [
+        f.relative_to(repo) for f in repo.rglob("*.py")
+        if f.name != pathlib.Path(__file__).name
+        and ".venv" not in f.parts and "node_modules" not in f.parts
+        and "record we hold" in f.read_text(errors="ignore")
+    ]
+    assert not offenders, f"这些文件里又出现了那句「我们持有的那份记录…」：{offenders}"
 
 
 def test_insufficient_block_is_actually_rendered_not_just_worded_right():
