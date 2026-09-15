@@ -16,9 +16,13 @@ tail **不带** ⇒ 只印 tail 的消费者会**静默丢掉浓度**，正好�
    的形状：**替身在被测的那条性质上与真货不同形**。
 2. **成员自己发现**：按 `mcp.list_tools()` 全量扫，新工具自动进来。
    变异＝往仓里加一个透传后端载荷的新工具，它应当自动出现在覆盖里。
-3. **必须断言「真的跑到了几个」**，不只断言「没有泄漏」——参数不对时工具会抛异常，
-   而「全部抛掉了」与「一个都没漏」在只看 `leaks` 的守卫里完全同形
-   （[[green-run-that-executed-nothing]]）。
+3. **必须断言「真的跑到了几个」，而「跑到了」＝发出过 HTTP 请求，不是「没抛异常」。**
+   🔴 我第一版写的是 `len(ran) >= 20`，`ran` 数的是「没抛异常」——**而 SDK 对缺参数的调用
+   是「返回 `is_error` 结果」不是抛异常**，于是 5 个工具（当时 `_ARGS` 缺
+   `experiment_name` / `query` / `protocol_text` / `chemical_a`+`chemical_b` / `pdf_source`）
+   被计进覆盖面，并顺理成章地「没泄漏」。**那正是本条声称要防的形状，而我写的判据挡不住它**
+   （PR #53 的 review 抓到）。现在改成数 `_Client` 上的真实请求次数。
+   （[[green-run-that-executed-nothing]]）
 4. **阳性对照实测**（2026-09-15）：把 `_drop_tail_keys` 从 `_billed_json` 撤掉
    ⇒ 23 个工具里 **15 个**漏；带上 ⇒ **0 个**。
 """
@@ -48,11 +52,20 @@ _PAYLOAD = {
     "answer": "x", "url": "https://example.invalid/y.pdf", "session_id": "S1", **_ITEM,
 }
 
+# 🔴 这张表要**覆盖每个工具的全部必填参数**。漏一个的后果不是「那个工具没测到」，
+# 是更糟的一种：SDK 在参数校验阶段就返回一个 `is_error` 结果（**不抛异常**）
+# ⇒ 那个工具会被计进「跑过了」，并且理所当然地「没泄漏」。
+# PR #53 的 review 抓到的就是这个：5 个工具（create_audit_session / search_chemical_database /
+# validate_protocol_chemicals / check_mixing_order / upload_msds_pdf）一次 HTTP 都没发过。
 _ARGS = {
     "chemicals": ["acetone", "bleach"], "chemical": "acetone", "session_id": "S1",
     "question": "hazards?", "protocol": "mix a and b", "section": 4,
     "url": "https://example.invalid/y.pdf", "file_path": "/tmp/x.pdf",
     "region": "EU", "days": 7, "scenario": "spill",
+    # review 补齐的那 5 个工具的必填参数：
+    "experiment_name": "probe run", "query": "acetone", "protocol_text": "mix a then b",
+    "chemical_a": "acetone", "chemical_b": "bleach",
+    "pdf_source": "data:application/pdf;base64,JVBERi0xLjQK",
 }
 
 
@@ -67,12 +80,23 @@ class _Resp:
         pass
 
 
+_HTTP_HITS = {"n": 0}
+
+
 class _Client:
+    """记下**真的发出去过几次请求** —— 覆盖面的判据只能是这个，不能是「没抛异常」。"""
+
     def __init__(self, *a, **k): ...
     async def __aenter__(self): return self
     async def __aexit__(self, *a): return False
-    async def post(self, *a, **k): return _Resp()
-    async def get(self, *a, **k): return _Resp()
+
+    async def post(self, *a, **k):
+        _HTTP_HITS["n"] += 1
+        return _Resp()
+
+    async def get(self, *a, **k):
+        _HTTP_HITS["n"] += 1
+        return _Resp()
 
 
 @pytest.fixture(autouse=True)
@@ -88,29 +112,57 @@ def _harness(monkeypatch):
 
 
 def _call_every_tool():
-    leaked, ran = [], []
+    """返回 (真的打了后端的工具, 漏了 tail 的工具, 一次 HTTP 都没发的工具)。
+
+    🔴 **「跑过了」的判据是「发出过 HTTP 请求」，不是「没抛异常」。**
+    SDK 对缺参数的调用**返回** `is_error` 结果而不是抛异常 ⇒ 用 try/except 计数时，
+    一个从没走到 `_billed_json` 的工具会被计进覆盖面，还顺带「证明」了它不泄漏。
+    """
+    reached, leaked, never = [], [], []
     for tool in asyncio.run(server.mcp.list_tools()):
         fn = getattr(server, tool.name, None)
         if fn is None:
             continue
-        args = {p: _ARGS[p] for p, v in inspect.signature(fn).parameters.items()
-                if v.default is v.empty and p in _ARGS}
+        required = [p for p, v in inspect.signature(fn).parameters.items()
+                    if v.default is v.empty]
+        args = {p: _ARGS[p] for p in required if p in _ARGS}
+        before = _HTTP_HITS["n"]
         try:
             res = asyncio.run(server.mcp._handle_call_tool(
                 None, CallToolRequestParams(name=tool.name, arguments=args)))
         except Exception:
+            res = None
+        if _HTTP_HITS["n"] == before:
+            never.append((tool.name, [p for p in required if p not in _ARGS]))
             continue
-        ran.append(tool.name)
-        if res.structured_content is not None and "preparation_disclosure_tail" in str(
-                res.structured_content):
+        reached.append(tool.name)
+        if res is not None and res.structured_content is not None and (
+                "preparation_disclosure_tail" in str(res.structured_content)):
             leaked.append(tool.name)
-    return ran, leaked
+    return reached, leaked, never
+
+
+def test_every_tool_actually_reaches_the_backend():
+    """③ 覆盖面自检：每个工具都必须**真的发出过一次 HTTP 请求**。
+
+    🔴 这条是 PR #53 review 换来的。原来写的是 `len(ran) >= 20`，而 `ran` 数的是
+    「没抛异常」——SDK 对缺参数的调用是**返回** `is_error` 而不是抛，于是 5 个工具
+    （缺 `experiment_name` / `query` / `protocol_text` / `chemical_a`+`chemical_b` / `pdf_source`）
+    被计进覆盖面并「没泄漏」。**那正是本文件 docstring 第 3 条声称要防的形状，
+    而我写的判据挡不住它。**
+    🔴 这条对后面那两条也重要：`create_audit_session` / `get_audit_report` /
+    `search_chemical_database` / `upload_msds_pdf` 的 HTTP 调用**绕过 `_billed_json`**
+    ⇒ 入口那道剥对它们不生效。它们今天不漏只是因为 structuredContent 是按白名单手拼的；
+    哪天有人把原始载荷摊进去，只有这条覆盖面断言能让守卫真正看着它们。
+    """
+    reached, _, never = _call_every_tool()
+    assert not never, f"这些工具一次 HTTP 都没发（缺参数）：{never} —— 它们的『没泄漏』是假的"
+    assert len(reached) >= 20, f"只有 {len(reached)} 个工具打到后端：{reached}"
 
 
 def test_tail_never_reaches_structured_content():
-    ran, leaked = _call_every_tool()
-    # ③ 先断言覆盖面：全部抛异常时 `leaked` 也是空的，与「一个都没漏」同形
-    assert len(ran) >= 20, f"只跑到 {len(ran)} 个工具（{ran}）——覆盖面塌了，这一轮什么都没测"
+    reached, leaked, never = _call_every_tool()
+    assert not never, f"覆盖面有洞（见上一条）：{never}"
     assert not leaked, (
         f"这些工具把 preparation_disclosure_tail 透进了 structuredContent：{leaked}。"
         f"只印 tail 的消费者会静默丢掉浓度——完整的 preparation_disclosure 才带浓度。")
@@ -123,10 +175,10 @@ def test_the_full_disclosure_itself_is_still_delivered():
     （比如按前缀匹配 `preparation_disclosure*`），完整那句会一起消失，而那句**才是**
     带浓度的、CI-917① 真正要送达的东西。这条守的就是它。
     """
-    ran, _ = _call_every_tool()
-    assert ran, "一个工具都没跑到"
+    reached, _, _ = _call_every_tool()
+    assert reached, "一个工具都没跑到"
     delivered = []
-    for tool_name in ran:
+    for tool_name in reached:
         fn = getattr(server, tool_name)
         args = {p: _ARGS[p] for p, v in inspect.signature(fn).parameters.items()
                 if v.default is v.empty and p in _ARGS}
