@@ -740,14 +740,19 @@ _DIRECT_TIMEOUT_MSG = {
 # 成立。17 个被 `@_graceful_timeout` 包住的工具里有 **8 个根本不收 `chemicals`**
 # （`get_emergency_response` / `get_sds_document` / `get_audit_report` …）——对它们说这句话，
 # 就是 CI-915 要消灭的那种「听起来可行动、实际不适用」的建议，只是换了个地方犯。
+# 🔴 **2026-09-15 再订正一次**：第一版这句写的是「large batches are the usual cause」——
+# **那仍然是在猜**，证据只有回放里的一个数据点（20 个化学品 / 45.2 秒）。同一天在 Prod 真实面上
+# 重跑同样 20 个化学品**正常返回**了 ⇒ 批量与超时**相关但不决定**。
+# 「usual cause」这种因果断言配不上 n=1，而它正是 CI-915 要消灭的那类东西（只是轻一档）。
+# ⇒ 只留**可行动的条件建议**（「包含很多化学品的话可以拆小再试」），不说成因。
 # ⇒ 按**被包函数的签名**推导用哪一句，**不手写名单**：名单会腐化，签名不会
 # （新加一个收列表的工具自动拿到批量那句；守卫按同一条规则全量扫，见 tests/test_ci914_*）。
 _DIRECT_TIMEOUT_HINT_BATCH = {
-    "en": " If the request covered many chemicals, split it into smaller calls — large batches are the usual cause.",
-    "zh": "若这次查询包含很多化学品，请拆成更小的几次——批量过大是常见原因。",
-    "ja": "多くの化学品をまとめて問い合わせた場合は、小分けにしてください（大きなバッチが主な原因です）。",
-    "de": " Wenn die Anfrage viele Chemikalien umfasste, teilen Sie sie in kleinere Aufrufe auf — große Stapel sind die übliche Ursache.",
-    "id": " Jika permintaan mencakup banyak bahan kimia, pecah menjadi panggilan lebih kecil — batch besar adalah penyebab umumnya.",
+    "en": " If the request covered many chemicals, try splitting it into smaller calls.",
+    "zh": "若这次查询包含很多化学品，可以拆成更小的几次再试。",
+    "ja": "多くの化学品をまとめて問い合わせた場合は、小分けにして再度お試しください。",
+    "de": " Wenn die Anfrage viele Chemikalien umfasste, teilen Sie sie in kleinere Aufrufe auf.",
+    "id": " Jika permintaan mencakup banyak bahan kimia, coba pecah menjadi panggilan lebih kecil.",
 }
 
 
