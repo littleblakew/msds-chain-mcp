@@ -220,3 +220,35 @@ def test_batch_hint_only_goes_to_tools_that_take_a_list(monkeypatch, tool, takes
         assert hint not in text, (
             f"{tool} 不收化学品列表，却被告知「拆成更少的化学品」——"
             f"这正是 CI-915 那类不适用的建议：{text!r}")
+
+
+# ---------------------------------------------------------------- 文案能不能活着到调用方
+
+
+def test_no_bare_runtimeerror_reaches_the_caller():
+    """🔴 `server.py` 里不许再出现裸 `raise RuntimeError(...)` —— 用 `ToolReason`。
+
+    **机制**（2026-09-15，PR #50 合进 main 后 Deploy 红换来的）：SDK 的 `Tool.run()` 把异常分两类，
+    `ToolError` 子类＝「工具故意抛的」⇒ 文案随 `f"…: {exc}"` 保留；其它 `Exception` ＝「崩溃」
+    ⇒ **mcp 2.2.0 起只回 `f"Error executing tool {name}"`，我们写的原因全部丢掉**。
+    裸 `RuntimeError` 在 mcp 2.0.0 上**碰巧**带着文案，所以这个回归在旧版本上测不出来。
+
+    🔴 **判据打在解析出来的代码上，不是文件文本上**：注释、docstring、字符串里写
+    `raise RuntimeError` 都不该让这条红（本仓 [[my-own-guards-are-often-no-ops]]：
+    散文与代码混在一个平面，grep 分不清）。
+    🔴 **变异（两侧）**：把任意一处 `ToolReason` 改回 `RuntimeError` ⇒ 本条红；
+    只在注释里写下 `raise RuntimeError(...)` ⇒ 本条**必须仍绿**。
+    """
+    import ast
+    import inspect as _inspect
+
+    tree = ast.parse(_inspect.getsource(server))
+    offenders = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
+            fn = node.exc.func
+            if isinstance(fn, ast.Name) and fn.id == "RuntimeError":
+                offenders.append(node.lineno)
+    assert not offenders, (
+        f"server.py:{offenders} 抛了裸 RuntimeError —— 在 mcp>=2.2 上这些文案到不了调用方，"
+        f"改用 ToolReason（它同时是 ToolError 与 RuntimeError）")

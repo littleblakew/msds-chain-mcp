@@ -39,6 +39,7 @@ from contextvars import ContextVar
 import httpx
 from mcp.server import MCPServer
 from mcp.server.caching import CacheHint
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import Field
 from request_identity import caller_headers, get_caller_credential, set_caller_credential
@@ -829,7 +830,7 @@ async def _quick_chat(message: str, lang: str | None = None) -> dict:
     degrade to an actionable message rather than raising an opaque empty error.
     """
     if err := _require_api_key():
-        raise RuntimeError(err)
+        raise ToolReason(err)
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT_LLM) as client:
             res = await client.post(
@@ -1358,6 +1359,22 @@ _AUTH_FAILED_MSG = {
 }
 
 
+class ToolReason(ToolError, RuntimeError):
+    """我们**故意**抛给调用方、且带可读原因的错误（422 的字段原因、401/403 的重连指引…）。
+
+    🔴 为什么必须是 `ToolError` 的子类（2026-09-15，PR #50 合进 main 后 Deploy 红换来的）：
+    SDK 的 `Tool.run()` 把异常分成两类 ——
+    · `ToolError` ＝「工具故意抛的」⇒ 包成 `f"Error executing tool {name}: {exc}"`，**文案保留**
+    · 其它 `Exception` ＝「崩溃」⇒ **mcp 2.2.0 起只回 `f"Error executing tool {name}"`，文案丢掉**
+      （有意为之：别把服务端内部错误泄露给模型）
+    我们原来抛裸 `RuntimeError`，在 mcp 2.0.0 上碰巧带着文案，**在 2.2.0 上就没了**
+    ⇒ [[CI-410]] 的保证（422 的原因要到达调用方）静默失效，而依赖钉的是 `mcp>=2.0.0,<3`。
+    🔴 **同时继承 `RuntimeError` 是有意的**：仓里既有大量 `pytest.raises(RuntimeError)`
+    与调用方约定，换成纯 `ToolError` 会在一个与本问题无关的维度上制造破坏性改动。
+    🔴 **别改回裸 `RuntimeError`** —— 那个回归在 2.0.0 上测不出来（那正是它这次溜进 main 的原因）。
+    """
+
+
 def _raise_for_status_with_reason(res: "httpx.Response") -> None:
     """`raise_for_status()` 的替身：422 带上后端说的原因（CI-410）、401/403 变成可行动的话（CI-868）。
 
@@ -1369,7 +1386,7 @@ def _raise_for_status_with_reason(res: "httpx.Response") -> None:
     ⚠️ 402 由 `_billed_json` 在调本函数**之前**特判 ⇒ 余额耗尽仍走它自己那句话，别在这里抢。
     """
     if res.status_code == 422:
-        raise RuntimeError(f"Request rejected (422): {_detail_text(res)}")
+        raise ToolReason(f"Request rejected (422): {_detail_text(res)}")
     if msg := _AUTH_FAILED_MSG.get(res.status_code):
         # 🔴 **不把 detail 拼进给模型那句话**：后端 401 的 detail 是内部代号
         # （`password_auth_disabled` 这类），对第三方客户端既无信息量又是内部实现的泄露。
@@ -1385,7 +1402,7 @@ def _raise_for_status_with_reason(res: "httpx.Response") -> None:
         # （[[ps-leaks-credentials-from-command-lines]] 的同族红线仍然适用）。
         logger.warning("auth_failed status=%s detail=%s",
                        res.status_code, _detail_text(res))
-        raise RuntimeError(msg)
+        raise ToolReason(msg)
     res.raise_for_status()
 
 
@@ -1404,7 +1421,7 @@ def _billed_json(res: "httpx.Response") -> dict:
                 msg += f" Remaining: {float(bal):g} credits."
             except (TypeError, ValueError):
                 pass
-        raise RuntimeError(msg + " Top up at msdschain.lagentbot.com to continue.")
+        raise ToolReason(msg + " Top up at msdschain.lagentbot.com to continue.")
     # CI-410：pydantic 把「为什么不合法」放在响应体的 `detail` 里，而这条错误路径此前
     # 从不读它 ⇒ 调用方只拿到 `Client error '422 Unprocessable Entity' for url …`。
     # 不是哑失败（调用可见地失败了），但**不可行动**：模型看不出是"化学品超过 24 个"
@@ -4699,7 +4716,7 @@ async def upload_msds_pdf(
                 # 至少带着那个外部 URL，成因还追得回来。
                 # 🔴 这里说清「是源站拒绝的，不是我们」，并且**不给任何关于我们账号的建议**。
                 if resp.status_code >= 400:
-                    raise RuntimeError(
+                    raise ToolReason(
                         f"Could not download that URL (HTTP {resp.status_code} from the "
                         f"source host, not from MSDS Chain). The link may require a login, "
                         f"be expired, or be blocked by the host. Ask the user for a direct "
