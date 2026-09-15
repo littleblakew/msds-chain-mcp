@@ -380,10 +380,13 @@ def test_regulatory_explicit_regions_no_disclosure(monkeypatch):
 # CI-55: a direct/v2 tool (batch_safety_check et al.) that hits a client read-timeout
 # must surface an **actionable** message, never the opaque `Error executing tool …:`
 # (httpx.ReadTimeout stringifies to "").
-# 🔴 CI-914 改了**载体**、没改这条要求：那句话现在由 `raise RuntimeError(msg)` 带出来，
-# 不再是 `return msg` —— 因为 `return` 会让 MCP 的 `isError` 位为 False，等于告诉客户端
-# 「调用成功了」。CI-55 要的是「消息非空且可行动」，**它与 isError 无关**，两者可以同时满足。
-# ⇒ 下面三条改成断言 `pytest.raises` 里那段文字，判据逐字还是 CI-55 那几个词。
+# 🔴 CI-914 改了**载体**、没改这条要求：那句话现在由
+# `CallToolResult(content=[...], is_error=True)` 带出来，不再是裸 `return msg`
+# —— 裸 return 会让 `isError` 为 False，等于告诉客户端「调用成功了」。
+# ⚠️ **也不是 `raise`**：抛出去会被 `Tool.run()` 包成英文前缀 `Error executing tool …`，
+# 粘在五个语种前面（PR #50 的 review 抓到）。CI-55 要的是「消息非空且可行动」，
+# 与 isError 无关，两者可以同时满足。
+# ⇒ 下面三条断言 `CallToolResult` 里那段文字，判据逐字还是 CI-55 那几个词。
 # `isError` 那一位本身由 tests/test_ci914_timeout_is_error.py 守（打在 `_handle_call_tool` 层）。
 # ---------------------------------------------------------------------------
 
@@ -395,9 +398,9 @@ def _timeout_direct():
 
 def test_batch_safety_check_timeout_is_graceful(monkeypatch):
     monkeypatch.setattr(server, "_direct_batch", _timeout_direct())
-    with pytest.raises(RuntimeError) as exc:      # CI-914：载体是异常，不是返回值
-        asyncio.run(server.batch_safety_check(["acetone", "bleach"]))
-    text = str(exc.value)
+    res = asyncio.run(server.batch_safety_check(["acetone", "bleach"]))
+    assert res.is_error is True, "超时被报成了成功（CI-914）"
+    text = res.content[0].text
     assert text.strip(), "timeout answer must not be empty"
     low = text.lower()
     assert "retry" in low or "try again" in low or "重试" in text or "timed out" in low
@@ -525,10 +528,9 @@ def test_get_chemical_alternatives_timeout_logs_failure(monkeypatch):
     log_fn, captured = _capture_log_call()
     monkeypatch.setattr(server, "_log_call", log_fn)
 
-    with pytest.raises(RuntimeError) as exc:   # CI-914：超时现在抛，`isError` 才会是 True
-        asyncio.run(server.get_chemical_alternatives("acetone"))
+    res = asyncio.run(server.get_chemical_alternatives("acetone"))
 
-    assert str(exc.value).strip()   # 仍是可读的重试话术，不是不透明空错误
+    assert res.is_error is True and res.content[0].text.strip()   # 仍是可读的重试话术，不是不透明空错误
     assert captured[0]["success"] is False
     assert captured[0]["error_message"], "超时被记成了无原因的失败（CI-250 的形状）"
 
@@ -576,10 +578,9 @@ def test_check_regulatory_lists_timeout_logs_failure(monkeypatch):
     log_fn, captured = _capture_log_call()
     monkeypatch.setattr(server, "_log_call", log_fn)
 
-    with pytest.raises(RuntimeError) as exc:   # CI-914：超时现在抛，`isError` 才会是 True
-        asyncio.run(server.check_regulatory_lists("formaldehyde"))
+    res = asyncio.run(server.check_regulatory_lists("formaldehyde"))
 
-    assert str(exc.value).strip()  # the graceful retry message, not an opaque error
+    assert res.is_error is True and res.content[0].text.strip()  # the graceful retry message, not an opaque error
     assert captured[0]["success"] is False
     assert captured[0]["error_message"], "超时被记成了无原因的失败（CI-250 的形状）"
 

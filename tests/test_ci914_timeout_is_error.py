@@ -10,11 +10,12 @@
 只断言「超时 ⇒ True」会漏掉**误伤方向** —— 把正常返回也标成错误，
 那种回归在只测超时的守卫下完全是绿的。
 
-🔴 **反向变异（实测过，别信这段话，自己再跑一遍）**：
-把 `_graceful_timeout` 里的 `raise RuntimeError(...)` 改回 `return ...`
-⇒ `test_timeout_sets_is_error` 红（`is_error` 变 False）、另外两条仍绿。
-把 `_DIRECT_TIMEOUT_MSG["en"]` 里加回 "just after a deploy"
-⇒ `test_timeout_text_does_not_guess_a_cause` 红。
+🔴 **反向变异（三个方向，实测过；别信这段话，自己再跑一遍）**：
+① 把返回改成 `return msg` ⇒ 超时那组红（`is_error` 变 False）
+② 把返回改成 `raise RuntimeError(msg)` ⇒ 超时那组红（文字被加上英文前缀 `Error executing tool …`）
+   —— **这个方向是 PR #50 的 review 挖出来的，第一版实现就栽在这里**
+③ 在 `_DIRECT_TIMEOUT_MSG["en"]` 里加回 "just after a deploy" ⇒ 文案那条红
+④ 只改散文（注释/docstring）⇒ 全绿（守卫不该被散文影响）
 
 📌 用 `get_storage_guidance` 是因为**它就是 2026-09-11 回放里真超时的那个工具**
 （20 个化学品 / 45.2 秒 / `is_error=False`），不是随手挑的。
@@ -42,9 +43,9 @@ def _cred(monkeypatch):
     set_caller_credential(None)
 
 
-def _call():
+def _call(**extra):
     """走线上那条路：`_handle_call_tool` 才是产出 `is_error` 的那一层。"""
-    params = CallToolRequestParams(name=_TOOL, arguments=_ARGS)
+    params = CallToolRequestParams(name=_TOOL, arguments={**_ARGS, **extra})
     return asyncio.run(server.mcp._handle_call_tool(None, params))
 
 
@@ -88,19 +89,28 @@ def test_normal_return_is_not_flagged_as_error(monkeypatch):
     assert res.is_error is False, f"把正常返回标成了错误：{_text(res)!r}"
 
 
-def test_timeout_sets_is_error(monkeypatch):
-    """② 超时 ⇒ `is_error` 必须是 True。
+@pytest.mark.parametrize("lang", ["en", "zh", "ja", "de", "id"])
+def test_timeout_sets_is_error_and_keeps_the_text_verbatim(monkeypatch, lang):
+    """② 超时 ⇒ `is_error` 必须是 True，**且文字逐字是我们写的那句**。
 
-    这是本票的正题：此前这里 `return` 一句「超时了请重试」⇒ 对客户端就是
-    「调用成功，下面是结果」，而**消费它的是模型**，最可能把这句话当答案往下用。
+    两条性质缺一不可，而它们各自对应一种改错的方式：
+    · `return msg` ⇒ 位变成 False（本票的原始缺陷）
+    · `raise RuntimeError(msg)` ⇒ 位是对的，但 `Tool.run()` 会包成
+      `ToolError("Error executing tool {name}: …")` —— **英文硬编码前缀**粘在五个语种前面，
+      正是 CI-55 要消灭的那种样板。
+
+    🔴 **断言必须是逐字相等，不能是子串**。PR #50 第一版就是 `raise`，而当时这条写的是
+    `assert "timed out" in text` ⇒ **前缀在探针输出里印着，测试也绿着，没有任何东西报警**。
+    子串断言的粒度比它要保证的性质粗一档，这就是本仓 [[green-run-that-executed-nothing]]。
     """
     async def _timeout(*a, **kw):
         raise httpx.ReadTimeout("")
 
     monkeypatch.setattr(server, "_direct_storage", _timeout)
-    res = _call()
+    res = _call(lang=lang)
     assert res.is_error is True, f"超时被报成了成功：{_text(res)!r}"
-    assert "timed out" in _text(res), f"错误里没有那句可读的话：{_text(res)!r}"
+    assert _text(res) == server._DIRECT_TIMEOUT_MSG[lang], (
+        f"{lang} 的超时文字不是逐字那句（多半是被 ToolError 加了英文前缀）：{_text(res)!r}")
 
 
 def test_backend_4xx_sets_is_error(monkeypatch):
@@ -112,6 +122,8 @@ def test_backend_4xx_sets_is_error(monkeypatch):
              "type": "too_long"}]}, 422)))
     res = _call()
     assert res.is_error is True, f"422 被报成了成功：{_text(res)!r}"
+    # 🔴 这一格**故意**只断言子串：4xx 走的是 `raise`（既有行为，不在本票范围），
+    # 所以它的文字确实带着 `Tool.run()` 的英文前缀。拿逐字相等去卡它等于顺手改了另一条路。
     assert "422" in _text(res), f"原因没到调用方手里：{_text(res)!r}"
 
 

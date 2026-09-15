@@ -747,12 +747,19 @@ def _graceful_timeout(fn):
     ⇒ 调用方只看到 `Error executing tool <name>: `）。**那个目标由「消息非空」达成，
     不需要把失败伪装成成功** —— 而初版是 `return` 那句话。
 
-    🔴 CI-914：`return` 让 MCP 协议的 `isError` 位是 `False`，对调用方就是
+    🔴 CI-914：原来 `return` 那句话让 MCP 协议的 `isError` 位是 `False`，对调用方就是
     「这次调用成功了，下面是结果」，而结果是一句「超时了请重试」。**消费它的是模型**，
-    最可能把这句话当正常答案往下用，不走重试。⇒ 改成 `raise RuntimeError(msg)`，
-    与同仓 4xx 的惯例逐字一致（`_raise_for_status_with_reason` 对 401/403/422 就是这么做的），
-    文本原样保留（它对人是友好的）。
-    🔴 **别改回 `return`**：判据不是「文案好不好」，是「`isError` 位对不对」。
+    最可能把这句话当正常答案往下用，不走重试。
+
+    🔴 **修法是返回 `CallToolResult(is_error=True)`，不是 `raise`** —— 这一步是 PR #50 的
+    review 换来的，值得逐字记下：**工具体里抛出去的异常会被 `Tool.run()` 包成
+    `ToolError(f"Error executing tool {name}: {e}")`**（`mcp/server/mcpserver/tools/base.py:181`），
+    而那个前缀是**英文硬编码**的 —— 它会粘在五个语种每一句话前面，且正是 CI-55 当初要
+    消灭的那种样板。「`raise` 与同仓 4xx 惯例一致」这个理由**听起来对、实际让文案更差**。
+    ⇒ 两条性质要同时满足：**位是 `True`** 且 **文字逐字是 `_DIRECT_TIMEOUT_MSG` 那句**。
+    🔴 **别改回 `return msg`（位会变假），也别改成 `raise`（文字会被加英文前缀）。**
+    守卫 `tests/test_ci914_timeout_is_error.py` 对这两个方向各有一条，断言是**逐字相等**
+    不是子串 —— 子串断言正是当初没看见那个前缀的原因。
     """
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
@@ -761,7 +768,13 @@ def _graceful_timeout(fn):
         except httpx.TimeoutException:
             # 超时话术也跟调用方的语言走（`lang` 是关键字参数时才取得到；取不到就用服务端默认）
             lg = kwargs.get("lang") or LANG
-            raise RuntimeError(_DIRECT_TIMEOUT_MSG.get(lg, _DIRECT_TIMEOUT_MSG["en"]))
+            msg = _DIRECT_TIMEOUT_MSG.get(lg, _DIRECT_TIMEOUT_MSG["en"])
+            # 🔴 **不是 `raise`**：工具体里抛出去的异常会被 `Tool.run()` 包成
+            # `ToolError(f"Error executing tool {name}: {e}")` —— 那个前缀是**英文硬编码的**，
+            # 会粘在五个语种的每一句前面，而且正是 CI-55 要消灭的那种样板。
+            # （2026-09-15 PR #50 的 review 抓到；我自己的探针输出里其实印着它，没看见。）
+            # ⇒ 直接返回一个 `is_error=True` 的结果：位是对的，文字逐字保留。
+            return CallToolResult(content=[TextContent(type="text", text=msg)], is_error=True)
     return wrapper
 
 
