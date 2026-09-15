@@ -721,21 +721,39 @@ def _headers() -> dict[str, str]:
 # data → upload the MSDS), a direct-tool timeout is transient service slowness, so
 # the graceful answer is retry-oriented. Applied as a wrapper so all direct tools
 # share one behavior. NEVER assert safety here.
+# 🔴 CI-915：这句话**不许猜成因**。原文写的是「常见于刚部署后」，而实测那次超时
+# （20 个化学品、45.2 秒）当天最后一次部署已在几小时之前 —— 真实成因是**这一次查询很重**。
+# 误导性诊断比没有诊断更贵：它让用户重试同一个必然再超时的查询，也让排查的人先去翻
+# 空无一物的部署记录。⇒ 只说**观察到的事实**（超时了）与**可行动的两条路**（重试 / 拆小），
+# 别把负载问题说成部署抖动。参照点：同一份回放里 4–5 个化学品的查询 5–7 秒返回。
 _DIRECT_TIMEOUT_MSG = {
-    "en": "This safety check timed out — the service was briefly slow (often just after a deploy). "
-          "Please try again in a moment.",
-    "zh": "本次安全检查超时——服务短暂变慢（常见于刚部署后）。请稍候重试。",
-    "ja": "この安全チェックはタイムアウトしました。サービスが一時的に遅くなっています（デプロイ直後によく発生）。少し待ってから再度お試しください。",
-    "de": "Diese Sicherheitsprüfung hat das Zeitlimit überschritten — der Dienst war kurz langsam "
-          "(oft direkt nach einem Deployment). Bitte versuchen Sie es gleich erneut.",
-    "id": "Pemeriksaan keselamatan ini melebihi batas waktu — layanan sempat lambat (sering terjadi "
-          "tepat setelah deploy). Silakan coba lagi sebentar.",
+    "en": "This safety check timed out. Try again, or split the request into fewer chemicals per "
+          "call — large batches are the usual cause.",
+    "zh": "本次安全检查超时。请重试，或把一次查询拆成更少的化学品——批量过大是常见原因。",
+    "ja": "この安全チェックはタイムアウトしました。再試行するか、1 回の問い合わせの化学品数を"
+          "減らしてください（大きなバッチが主な原因です）。",
+    "de": "Diese Sicherheitsprüfung hat das Zeitlimit überschritten. Bitte erneut versuchen oder die "
+          "Anfrage auf weniger Chemikalien pro Aufruf aufteilen — große Stapel sind die übliche Ursache.",
+    "id": "Pemeriksaan keselamatan ini melebihi batas waktu. Coba lagi, atau pecah permintaan menjadi "
+          "lebih sedikit bahan kimia per panggilan — batch besar adalah penyebab umumnya.",
 }
 
 
 def _graceful_timeout(fn):
-    """Wrap a direct-tool coroutine so a client read-timeout returns an actionable
-    retry message instead of raising an opaque empty error (CI-55)."""
+    """Wrap a direct-tool coroutine so a client read-timeout surfaces as an **errored**
+    tool result carrying an actionable message.
+
+    CI-55 建这层是为了干掉不透明的空错误（`httpx.ReadTimeout` 字符串化成 `""`
+    ⇒ 调用方只看到 `Error executing tool <name>: `）。**那个目标由「消息非空」达成，
+    不需要把失败伪装成成功** —— 而初版是 `return` 那句话。
+
+    🔴 CI-914：`return` 让 MCP 协议的 `isError` 位是 `False`，对调用方就是
+    「这次调用成功了，下面是结果」，而结果是一句「超时了请重试」。**消费它的是模型**，
+    最可能把这句话当正常答案往下用，不走重试。⇒ 改成 `raise RuntimeError(msg)`，
+    与同仓 4xx 的惯例逐字一致（`_raise_for_status_with_reason` 对 401/403/422 就是这么做的），
+    文本原样保留（它对人是友好的）。
+    🔴 **别改回 `return`**：判据不是「文案好不好」，是「`isError` 位对不对」。
+    """
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
         try:
@@ -743,7 +761,7 @@ def _graceful_timeout(fn):
         except httpx.TimeoutException:
             # 超时话术也跟调用方的语言走（`lang` 是关键字参数时才取得到；取不到就用服务端默认）
             lg = kwargs.get("lang") or LANG
-            return _DIRECT_TIMEOUT_MSG.get(lg, _DIRECT_TIMEOUT_MSG["en"])
+            raise RuntimeError(_DIRECT_TIMEOUT_MSG.get(lg, _DIRECT_TIMEOUT_MSG["en"]))
     return wrapper
 
 
