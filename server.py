@@ -1277,7 +1277,13 @@ def _parse_usage(res: "httpx.Response") -> dict | None:
     try:
         return {
             "cost": float(cost),
-            "balance": float(res.headers.get("X-Msds-Credits-Balance", "-1")),
+            # 🔴 CI-904：**缺 header 时是 `None`，不是 `-1`**。原来默认 `-1`，而 `_usage_line`
+            # 把 `bal < 0` 当「订阅」哨兵 ⇒ 同一个取值编码了两件事：「订阅，没扣费」与
+            # 「我不知道余额」。后者会被说成前者，于是一次真的扣了 10 credits 的调用
+            # 逐字印出 `Included in your plan (no credits deducted).`
+            # 🔴 说错的方向**对用户有利 ⇒ 不会被投诉发现**，只能靠守卫。
+            "balance": (None if res.headers.get("X-Msds-Credits-Balance") is None
+                        else float(res.headers["X-Msds-Credits-Balance"])),
             "reason": res.headers.get("X-Msds-Credits-Reason", ""),
         }
     except (TypeError, ValueError):
@@ -1466,13 +1472,17 @@ def _billed_json(res: "httpx.Response") -> dict:
 
 def _usage_line(usage: dict) -> str:
     """Human-readable one-liner appended to a metered tool's text output."""
-    bal = usage.get("balance", -1)
+    bal = usage.get("balance")
     reason = usage.get("reason", "")
     cost = usage.get("cost", 0) or 0
-    if reason == "subscription" or bal < 0:
+    # 🔴 CI-904：「订阅」只由 `reason` 说了算。余额未知时**什么都别声称**——
+    # 尤其别说「no credits deducted」，那一句在 cost>0 时是**假话**，且假在对用户有利那侧。
+    if reason == "subscription":
         return "\n\n---\n💳 Included in your plan (no credits deducted)."
     head = (f"This call used {cost:g} credits" if cost > 0
             else "Free lookup (0 credits)")
+    if bal is None or bal < 0:
+        return f"\n\n---\n💳 {head}."
     return f"\n\n---\n💳 {head} · Balance: {bal:g} credits remaining."
 
 
@@ -2366,10 +2376,12 @@ async def check_regulatory_compliance(
         _usage_cost = 0.0
         _usage_bal = None
         _usage_reason = ""
+        _saw_usage = False
         for chemical in chemicals:
             data = await _direct_compliance(chemical, effective_regions)
             _u = data.pop("_usage", None)  # strip internal key from stored per-chemical result
             if _u:
+                _saw_usage = True
                 _usage_cost += _u.get("cost", 0) or 0
                 _usage_bal = _u.get("balance")
                 _usage_reason = _u.get("reason", "")
@@ -2386,8 +2398,11 @@ async def check_regulatory_compliance(
             lines.append(f"- **Overall compliance level:** {data.get('summary_level', 'unknown')}")
             lines.extend(_format_region_results(data.get("region_results", [])))
             lines.append("")
+        # 🔴 CI-904：判据是「**这轮有没有被计量**」，不是「余额拿到没有」。
+        # 原来写 `if _usage_bal is not None`——余额 header 缺失时（现在是 `None`）
+        # 会把**整条用量行吞掉**，而那次调用其实是扣了钱的。
         _usage = ({"cost": _usage_cost, "balance": _usage_bal, "reason": _usage_reason}
-                  if _usage_bal is not None else None)
+                  if _saw_usage else None)
         return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content={
