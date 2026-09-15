@@ -92,18 +92,11 @@ TIMEOUT = 15.0        # single-chemical / pure-lookup v2 endpoints — fast, no 
 # authoritative record), which is DB-bound but still linear in component count.
 # A single-chemical lookup does one resolution and is flat.
 #
-# Prod evidence (mcp_call_logs, all-time through 2026-07-26) — "hit 15s" means
-# duration_ms ≈ 15,0xx, i.e. pinned to this client ceiling, NOT a backend 5xx:
-#   get_chemical_risk_warnings      6/25 hit 15s (24%)  max 15,027  p90 15,024
-#   get_storage_guidance            1/7  hit 15s        max 15,022  p90  9,303
-#   get_transport_classification    1/2  hit 15s        max 15,018  p90 13,857
-#   batch_safety_check (was 45s)   27/38 ≥14.5s         max 45,026  p90 31,251
-# vs. the single-chemical / lookup tools, which are nowhere near the ceiling:
-#   search_chemical_database        0/41 hit 15s        max  8,800  p90  5,696
-#   get_sds_section                 0/39 hit 15s        max  1,499  p90    372
-# CI-176: a real user (2nd-deepest by call volume, credits to spare) hit the
-# 15s wall twice on get_chemical_risk_warnings for a 5-component excipient
-# formulation and never came back — a product failure, not a quota failure.
+# The budgets below were set from measured call latency, not from a guess. The
+# distinguishing signal is `duration_ms` pinned at the client ceiling (≈15,0xx)
+# rather than a backend 5xx: multi-component tools reach it, single-chemical and
+# lookup tools stay an order of magnitude below it. A multi-component call that
+# dies at the ceiling is a product failure, not a quota failure — see CI-176.
 #
 # ∴ raise ONLY the multi-component tools. Deliberately NOT raised for
 # single-chemical/lookup tools (_direct_sds_section, _direct_sds_document,
@@ -230,7 +223,7 @@ mcp = MCPServer(
 # ChatGPT/Claude 里用中文问，拿到的安全答复是英文的。不是检测错了，是根本没有检测，
 # AI 也没有地方可以表达。它正在用那个语言对话，它最清楚要什么语言。
 #
-# 🔴 **后端今天只真的支持 en 和 zh**（2026-08-15 逐语言实测，别信下面 `LANG` 那行注释
+# 🔴 **后端今天只真的支持 en 和 zh**（逐语言实测过，别信下面 `LANG` 那行注释
 # 曾经写的 `en|zh|ja|de|id`——那是愿望不是事实）。v2 端点的行为是**二元**的：
 # `lang == "en"` → 英文，**其他任何值**（`ja`/`de`/`id`/`fr`/`zh-CN`/空串）→ **中文**；
 # quick-chat 同样（`lang=ja` 实测返回 343 个汉字、零假名）。
@@ -531,7 +524,7 @@ _UNCHECKED_INTENTS_DIRECTIVE = (
 # ⚠️ **别照抄 `_unchecked_directive` 的无条件形状**：化学品那半后端三条路径都拼
 # （「别对这几个下任何结论」在拒答回合同样成立），intent 这半刻意只有两条 —— 不对称是有意的。
 # 🔴 **CI-874：这里不再是主判据，是 fallback。** 后端现在直接把它的决定放进载荷
-# （`unchecked_intents_prose_suppressed`，trust 2026-09-09 Prod 实调确认），主路径消费那个字段
+# （`unchecked_intents_prose_suppressed`，实调确认过），主路径消费那个字段
 # ⇒ 后端改 `_SKIP_INTENT_BLOCK_ON` 时本仓自动跟上，不再是两处各拼一份的漂移源。
 #
 # 🔴 **契约①：字段缺席 ⇒ 回退到下面这个 frozenset，绝不默认「照发」。**
@@ -740,7 +733,7 @@ _DIRECT_TIMEOUT_MSG = {
 # 成立。17 个被 `@_graceful_timeout` 包住的工具里有 **8 个根本不收 `chemicals`**
 # （`get_emergency_response` / `get_sds_document` / `get_audit_report` …）——对它们说这句话，
 # 就是 CI-915 要消灭的那种「听起来可行动、实际不适用」的建议，只是换了个地方犯。
-# 🔴 **2026-09-15 再订正一次**：第一版这句写的是「large batches are the usual cause」——
+# 🔴 **订正过一次**：第一版这句写的是「large batches are the usual cause」——
 # **那仍然是在猜**，证据只有回放里的一个数据点（20 个化学品 / 45.2 秒）。同一天在 Prod 真实面上
 # 重跑同样 20 个化学品**正常返回**了 ⇒ 批量与超时**相关但不决定**。
 # 「usual cause」这种因果断言配不上 n=1，而它正是 CI-915 要消灭的那类东西（只是轻一档）。
@@ -801,7 +794,7 @@ def _graceful_timeout(fn):
             # 🔴 **不是 `raise`**：工具体里抛出去的异常会被 `Tool.run()` 包成
             # `ToolError(f"Error executing tool {name}: {e}")` —— 那个前缀是**英文硬编码的**，
             # 会粘在五个语种的每一句前面，而且正是 CI-55 要消灭的那种样板。
-            # （2026-09-15 PR #50 的 review 抓到；我自己的探针输出里其实印着它，没看见。）
+            # （review 抓到的；探针输出里其实一直印着它。）
             # ⇒ 直接返回一个 `is_error=True` 的结果：位是对的，文字逐字保留。
             return CallToolResult(content=[TextContent(type="text", text=msg)], is_error=True)
     return wrapper
@@ -1100,8 +1093,8 @@ async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: in
                     # 忽略这个字段（pydantic 默认 ignore extra），所以先发后存是安全的。
                     "response_text": response_text,
                     # CI-977：这一轮我们给了什么（answered / rejected / redirected）。
-                    # 🔴 与 `success` 分开：一次 RAI 拒答在传输层是成功的 ⇒ 2026-09-07
-                    # 那次**误伤真实用户的拒答**记成 success=true，不在任何失败率里。
+                    # 🔴 与 `success` 分开：一次 RAI 拒答在传输层是成功的 ⇒ 会被记成
+                    # success=true、不进任何失败率，而它对用户就是一次没被回答的提问。
                     # 老后端会静默忽略这个字段（pydantic 默认 ignore extra）⇒ 先发后存安全。
                     "response_kind": response_kind,
                     "api_key": cred,
@@ -1257,7 +1250,7 @@ def _reported(fn):
                     # `answered` 兜底**——那会把「不经 quick-chat 的工具」和「真的答了」
                     # 揉成一个桶，正是本票要拆开的那种同形。
                     # 🔴 **关键字传参**：位置传参会让每个测试替身的签名都成为隐式契约，
-                    # 加一个参数就一次性打翻 10 条不相干的守卫（2026-09-15 实测）。
+                    # 加一个参数就会一次性打翻一批不相干的守卫。
                     response_kind=slot.get("response_kind"),
                 )
             _log_slot.reset(token)
@@ -1328,10 +1321,8 @@ def _detail_text(res: "httpx.Response", limit: int = 400) -> str:
 
 # 🔴 CI-868：鉴权失败必须变成**可行动的一句话 + 一条给模型的禁令**。
 #
-# 事故（2026-09-07 08:28 UTC，Blake 在 chatgpt.com）：core 打后端 401，
-# 而这里当时直接 `raise_for_status()` ⇒ 调用方拿到
-# `HTTPStatusError: Client error '401 Unauthorized' for url 'https://msds-chain-backend-prod…'`。
-# 三个问题一次犯全：
+# 失败形状：core 打后端拿到 401，而这里当时直接 `raise_for_status()` ⇒ 调用方拿到一个
+# 裸的 `HTTPStatusError`，正文里还带着我们后端的完整 URL。三个问题一次犯全：
 #   ① **不可行动** —— 模型看不出这是「你的授权失效了」还是「我们坏了」，
 #      于是它做了最糟的那件事：**转去用自身知识回答相容性**，末尾才轻描淡写一句免责。
 #      ⇒ 光把失败暴露出来不够，**必须显式禁止它替我们回答**（同 `_UNCHECKED_DIRECTIVE` 的形状：
@@ -1373,7 +1364,7 @@ _AUTH_FAILED_MSG = {
 class ToolReason(ToolError, RuntimeError):
     """我们**故意**抛给调用方、且带可读原因的错误（422 的字段原因、401/403 的重连指引…）。
 
-    🔴 为什么必须是 `ToolError` 的子类（2026-09-15，PR #50 合进 main 后 Deploy 红换来的）：
+    🔴 为什么必须是 `ToolError` 的子类：
     SDK 的 `Tool.run()` 把异常分成两类 ——
     · `ToolError` ＝「工具故意抛的」⇒ 包成 `f"Error executing tool {name}: {exc}"`，**文案保留**
     · 其它 `Exception` ＝「崩溃」⇒ **mcp 2.2.0 起只回 `f"Error executing tool {name}"`，文案丢掉**
@@ -1515,7 +1506,7 @@ def _strip_usage(data: dict) -> dict:
 # CI-342：structuredContent 从「白名单」翻成「透传 + 显式挡掉的键」
 # ---------------------------------------------------------------------------
 # 旧写法是逐字段手抄的 dict：后端往响应里加字段，我们**不会带上，也不会报错**，
-# 客户端侧就是「这个字段不存在」。实测丢掉的（2026-08-15，真调后端 + 真调工具做的差集）：
+# 客户端侧就是「这个字段不存在」。实测丢掉的（真调后端 + 真调工具做的差集）：
 #   顶层 `unresolved_detail`（compat / risk / batch）——`unresolved` 只给了名字，
 #     而**为什么没解析出来**的机器可读 `code` 全在这个键里
 #   `compat.pairs[]` / `batch.compatibility.pairs[]` 丢 `cas_a`/`cas_b`/`citation`/
@@ -2031,7 +2022,7 @@ def _insufficient_lines(item: dict, what: str) -> list[str]:
     说清「判不了」、说清「这不是低危结论」、明确禁止模型用常识补空。
     """
     reason = item.get("insufficient_reason")
-    # 🔴 **主句不许声称我们持有一份记录**（CI-679 的第八处，trust 2026-08-28 定）。
+    # 🔴 **主句不许声称我们持有一份记录**（CI-679 同族的一处）。
     # 旧句是「the SDS record **we hold for this substance** parsed no hazard data」，
     # 而三个消费者（storage / emergency / waste）的「判不了」**都有两种成因**：
     # `direct_service` 里 `resolved`（有 CAS）与 `has_canonical`（另查一次）是**独立判断**，
@@ -2653,7 +2644,7 @@ async def get_emergency_response(
         note = data.get("provenance_note")
         if note:
             lines.append(f"*Provenance: {note}*\n")
-        # 🔴 CI-567：物质级规程条目单独成段并排在最前。事故形状（2026-08-18 Prod 实调）：
+        # 🔴 CI-567：物质级规程条目单独成段并排在最前。失败形状：
         # 它们混在 immediate_actions 里、没有任何标记，而通用 [Hxxx] 行数量多篇幅大 ⇒
         # 模型拿通用行的数字把物质级那条改写掉（HF 的「立刻涂钙剂」被降级成
         # 「告知医护人员以便他们提供」＝延迟解毒）。标题里写死「不要用通用指引替换」。
@@ -2712,7 +2703,7 @@ async def get_emergency_response(
             # 🔴 CI-714：此前这里写死「Chemical not found in database」——一句**我们无权说的话**。
             # `unresolved: true` 只说明身份没解析出来，成因可以是「我们压根没搜」（畸形 CAS）、
             # 「有一级没跑成」、「名字与 CAS 互相矛盾所以拒答」，其中只有一种是「库里没有」。
-            # 实测（2026-09-03，打 Prod）：`71-43`（我们**没有**搜索过）与一个乱码串拿到的这行
+            # 实测：`71-43`（我们**没有**搜索过）与一个乱码串拿到的这行
             # **逐字相同** ⇒ 模型据此对付费用户断言我们没有这份数据。同族 [[CI-770]]/[[CI-413]]。
             # 措辞照抄后端 `unresolved_detail.reason_en` 已经在用的那半句（"This is not a
             # statement that…"），不新造披露口径。
@@ -3003,9 +2994,9 @@ async def get_audit_report(session_id: Annotated[str | None, Field(
 
         if not session_id:
             # CI-174: the report used to be reachable only through a session id the
-            # caller never had. Measured on Prod (2026-08-16): the "call
-            # create_audit_session if you want a signed report" hint has been on
-            # batch_safety_check since the day it shipped — 60 external calls,
+            # caller never had. Measured: the "call create_audit_session if you
+            # want a signed report" hint has been on batch_safety_check since the
+            # day it shipped — over every external call it has seen,
             # 6 external users, ZERO sessions created. So the missing piece was not
             # another hint, it was this step. Build the session from what they have
             # already analysed instead of asking them to say it again.
@@ -3062,7 +3053,7 @@ async def get_audit_report(session_id: Annotated[str | None, Field(
             # 也就是**唯一一个不走计费响应处理的取值型工具**（`_billed_json` 的另外 19 个
             # 调用点它一个都不在）。今天这条路后端零扣费所以无害，但 CI-892 要让报告收
             # 10 credits（web 走 `/report/generate` 已经在扣，MCP 走 `signed-url` 没扣，
-            # 2026-09-09 Prod 实测），那一刻它会变成**扣钱且零提示**，且余额耗尽时
+            # 实测过），那一刻它会变成**扣钱且零提示**，且余额耗尽时
             # `_raise_for_status_with_reason` 不处理 402 ⇒ 落到裸 `raise_for_status()`,
             # 用户拿到一句 `Client error '402 Payment Required'`。
             # 🔴 **本仓先于后端上是有意的、也是安全的**：后端今天不发 usage header ⇒
@@ -3847,7 +3838,7 @@ async def get_sds_section(
             # 🔴 CI-714：这一支此前写死「Chemical not found in database.」，而**载荷里已经带着
             # 真话**：`no_section_text_note` 说的是「身份没能解析到 CAS —— 这不是「无危害」的
             # 结论」。旧写法把它整个短路掉了，正是下面 CI-408 那段注释在防的事，只是那段注释
-            # 管不到这条 early branch。实测 2026-09-03：`71-43`（没搜过）与乱码串输出逐字相同。
+            # 管不到这条 early branch。实测：`71-43`（没搜过）与乱码串输出逐字相同。
             # 🔴 只有当那条 note 确实是**为这个成因**写的才用它（review 抓到）：
             # `no_section_text_note` 由 `no_section_text_reason` 决定，三种取值里另外
             # 两种（`no_sections_parsed` / `section_not_present`）说的是「我们持有这份
@@ -4359,7 +4350,7 @@ def _deprecated_version_args_note(ignored: list[str], from_version, to_version,
     🔴 `compared` 必须由调用方按**它自己分支的那个条件**（`has_newer`）传进来，
     不许在这里拿 `from_version`/`to_version` 的真假去猜：后端可以返回
     `has_newer=True` 而版本号为空，那时表头照样印 `Version None → None`，
-    而这里会得出「什么都没比」——**一条自相矛盾的回复**（2026-09-04 review 实测复现）。
+    而这里会得出「什么都没比」——**一条自相矛盾的回复**（review 实测复现过）。
     """
     names = " / ".join(f"`{n}`" for n in ignored)
     head = (f"⚠️ {names} was supplied but is no longer supported, and was ignored."
@@ -4420,16 +4411,16 @@ async def compare_sds_versions(
             cannot be compared. Supplying them adds an explicit note to the reply saying
             the request was not honoured; they never change what is compared.
     """
-    # CI-848：这两个参数 2026-06-08（`2f59164`，改走 /api/v2 直连）被删掉，但**外部客户端
-    # 拿的是工具面的快照**——ChatGPT 应用目录条目至今仍列着它们（2026-09-03 实测，快照停在
-    # 2026-05-22~06-08）。旧客户端照旧传，而 pydantic 对多余入参**静默丢弃**：用户要求
-    # 「比较 v3 和 v5」，拿到的是「最近两版」的对比，一份看起来完全正常的答案。这比报错贵得多，
-    # 且发生在外部调用量第二高的工具上。⇒ 收回来当**已弃用**接住，只为把静默损失变成显式披露。
+    # CI-848：这两个参数在改走 `/api/v2` 直连时被删掉，但**外部客户端拿的是工具面的快照**，
+    # 目录型分发渠道上的那份可能长期落后于我们发布的版本。旧客户端照旧传这两个参数，
+    # 而 pydantic 对多余入参**静默丢弃**：用户要求「比较 v3 和 v5」，拿到的是「最近两版」的
+    # 对比 —— 一份看起来完全正常的答案。这比报错贵得多。
+    # ⇒ 收回来当**已弃用**接住，只为把静默损失变成显式披露。
     # 🔴 别拿它去实现任意版本对比——那是另一件事，要改后端。
     # 🔴 类型是 `Any` 且判据只看「有没有给」，故意的：这两个参数**唯一的职责是不让旧客户端失败**。
     # 收窄成 `str` 会把 `{"version_old": null}`（旧客户端填未用字段的常见写法）变成
     # ValidationError ⇒ 改之前它被静默丢弃、调用还能成功，改之后整条失败——
-    # 那正好打在这个改动要保护的那批人身上（2026-09-04 review 实测复现）。
+    # 那正好打在这个改动要保护的那批人身上（review 实测复现过）。
     ignored = [n for n, v in (("version_old", version_old), ("version_new", version_new))
                if v is not None and str(v).strip() != ""]
 
@@ -4490,13 +4481,11 @@ async def compare_sds_versions(
 # CI-169: upload_msds_pdf resolves `pdf_source` on the machine running THIS
 # server. For the hosted core that is our container — never the caller's laptop
 # and never the client's sandbox — so os.path.isfile() can only ever fail for a
-# remote client. Prod evidence: our deepest user called upload_msds_pdf twice on
-# 2026-07-26 (10:20, 10:21) and landed here both times — duration_ms=0, zero rows
-# in demo.msds_records, and (before this fix) success=t with an empty
-# error_message, so the failure was invisible to us and unexplained to him.
-# CI-101 telemetry says 100% of remote MCP traffic is chatgpt.com, i.e. this was
-# the entire contribution path for every remote user. The reply must therefore
-# name the constraint and give a next step the caller can actually take.
+# remote client, i.e. for the callers this path exists to serve. Before this fix
+# the call landed here silently: it did no work, wrote nothing, and still reported
+# success with an empty error_message — invisible on our side and unexplained on
+# the caller's. The reply must therefore name the constraint and give a next step
+# the caller can actually take. Background: CI-101 / CI-169.
 #
 # The remaining gap (this pass): a public HTTPS URL is *also* something a
 # remote client rarely has — a PDF the user just uploaded into ChatGPT/claude.ai
@@ -5130,7 +5119,7 @@ async def check_regulatory_lists(chemical: Chemical, lang: Lang = None, intent: 
         #      paraphrased away or dropped. Five identical calls returned
         #      174/722/2588/2592/2599 characters.
         # Now it calls the deterministic endpoint and renders it. Same decision as
-        # the 2026-04-22 Direct Service Layer switch; this tool was simply missed.
+        # the Direct Service Layer switch; this tool was not migrated with the rest.
         # 🔴 Keep the credential requirement the old path had. `_quick_chat` calls
         # `_require_api_key()`; the `_direct_*` helpers do not, so switching endpoints
         # would silently turn this into an anonymous, unattributed lookup — and per

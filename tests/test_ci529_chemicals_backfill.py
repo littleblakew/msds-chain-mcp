@@ -1,8 +1,8 @@
 """CI-529：四个工具在调用日志里把 `chemicals` 记成 NULL ⇒ 按化学品聚合时它们是盲的。
 
-Prod 实测（2026-08-15）：`upload_msds_pdf` 的行 `input_params`/`response_text` 都有值、
+Prod 实测：`upload_msds_pdf` 的行 `input_params`/`response_text` 都有值、
 `chemicals` 为 0。问题**可以**从 `input_params` 复现（[[CI-344]] 已解决），缺的只是聚合维度。
-2026-08-16 起这不再只是「口径不全」——[[CI-174]] 的报告范围就是按 `chemicals` 取的，
+ 起这不再只是「口径不全」——[[CI-174]] 的报告范围就是按 `chemicals` 取的，
 `validate_protocol_chemicals`（最该进报告的一种调用）因此**进不了报告**。
 
 🔴 判据全部打在 **`_log_call` 实际收到的 `chemicals` 参数**上，不是「函数返回了什么」：

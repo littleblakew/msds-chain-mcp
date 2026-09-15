@@ -63,7 +63,7 @@ def test_no_surface_anywhere_claims_we_hold_a_record():
     """🔴 CI-679 第八处：**整个仓**不许再出现「我们持有的那份记录…」这句主句。
 
     **我一开始写反了**：原来这里钉的是「emergency/waste 必须保留旧主句」，前提是
-    「它们的判不了只有一种成因」。trust 2026-08-28 推翻了它，我回代码核实成立——
+ 「它们的判不了只有一种成因」。trust 推翻了它，我回代码核实成立——
     `direct_service` 里 `resolved`（有 CAS）与 `has_canonical`（另查一次）是**独立判断**，
     `/emergency-response` 只在 `not resolved` 时早返回 ⇒ **三个面都会走到「有 CAS、无
     canonical 行」那条**，旧主句对它是假话。⇒ 那条测试钉的是**事故契约**，已删。
@@ -73,12 +73,12 @@ def test_no_surface_anywhere_claims_we_hold_a_record():
     这是第八处）。按源码扫才能发现**将来新写的**第九处。
     变异方式＝**在仓里任何地方重新写下这句话**，不是改现有调用点。
 
-    🔴 **本条自己也栽过一次**（trust 2026-08-28 抓到）：初版读的是 `srv.__file__`，
+ 🔴 **本条自己也栽过一次**（trust 抓到）：初版读的是 `srv.__file__`，
     **只扫 `server.py` 一个文件**，而名字承诺的是 "anywhere"。今天 `server.py` 恰好是
     唯一渲染面，所以结论没错——但**渲染逻辑一旦拆出第二个模块，它照样绿**。
     这与它要防的那个缺陷是**同一形状**（backend 的守卫跨不了仓、我这条跨不了文件）：
     **清单的作用域是手写的**。已改成扫整个包。
-    """
+"""
     repo = pathlib.Path(srv.__file__).parent
     offenders = [
         f.relative_to(repo) for f in repo.rglob("*.py")

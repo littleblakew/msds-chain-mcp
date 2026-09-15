@@ -1,8 +1,7 @@
 """CI-868：鉴权失败必须是一句可行动的话 + 一条给模型的禁令，不是一个不透明的工具错误。
 
-**事故**（2026-09-07 08:28 UTC，Blake 在 chatgpt.com，`ua=openai-mcp/1.0.0`）：
-core 打后端 `/api/v2/compatibility/check` 拿到 401（网关侧 `auth:"ok"`、`/oauth/token` 200
-⇒ 断层在「网关认了客户端」与「它注入给后端的 per-user 凭证」之间，**根因另查**）。
+**失败形状**：core 打后端拿到 401，而网关侧那一跳是成功的
+⇒ 断层在「网关认了客户端」与「它注入给后端的 per-user 凭证」之间（**根因另查，见私有票**）。
 此处当时直接 `raise_for_status()` ⇒ 调用方拿到
 `HTTPStatusError: Client error '401 Unauthorized' for url 'https://msds-chain-backend-prod…'`。
 

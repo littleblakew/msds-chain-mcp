@@ -135,13 +135,13 @@ def test_no_sds_source_label_when_nothing_was_read():
 def test_a_real_sds_backed_result_still_gets_its_source_label():
     """🔴 正向锚点 —— 没有这条，「把标签功能整个删掉」也能全绿。
 
-    2026-08-08 实测：把 `sds_backed` 分支改成返回空字符串，本文件 4 条测试**一条都不红**。
+ 实测：把 `sds_backed` 分支改成返回空字符串，本文件 4 条测试**一条都不红**。
     也就是说此前这套测试只能证明「不该标的没标」，无法证明「该标的标了」——
     一个恒返回空的实现可以骗过它。
 
     这是本仓反复记录的形态（`my-own-guards-are-often-no-ops`）：修一个方向的错误时，
     必须同时钉住反方向，否则「修复」和「把功能删掉」在测试眼里一模一样。
-    """
+"""
     backed = {
         "results": [{
             "chemical_name": "Acetone", "cas": "67-64-1",

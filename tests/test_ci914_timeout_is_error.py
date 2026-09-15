@@ -17,7 +17,7 @@
 ③ 在 `_DIRECT_TIMEOUT_MSG["en"]` 里加回 "just after a deploy" ⇒ 文案那条红
 ④ 只改散文（注释/docstring）⇒ 全绿（守卫不该被散文影响）
 
-📌 用 `get_storage_guidance` 是因为**它就是 2026-09-11 回放里真超时的那个工具**
+📌 用 `get_storage_guidance` 是因为**它就是 回放里真超时的那个工具**
 （20 个化学品 / 45.2 秒 / `is_error=False`），不是随手挑的。
 """
 import asyncio

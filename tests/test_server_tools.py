@@ -1412,7 +1412,7 @@ def test_upload_missing_local_file_message_is_actionable(monkeypatch, tmp_path):
     assert "https" in low and "msdschain.lagentbot.com" in low
     assert "url" in low
     # 🔴 CI-174：**必须先给 base64 这条路**。它是 CI-169 专为这个场景做的能力，也是唯一
-    # 不用离开对话、不用求用户配合的路；而在 2026-08-16 之前这条消息只说「去找个 URL」和
+    # 不用离开对话、不用求用户配合的路；而这条消息一度只说「去找个 URL」和
     # 「去网页传」——把已经做好的能力藏在了工具描述里，而模型在失败那一刻读的是这段文字。
     # Prod 实测：唯一那个外部用户三次尝试**全部**是本地路径，三次都撞这条消息。
     assert "base64" in low, f"失败消息没给出 base64 这条路：{res!r}"

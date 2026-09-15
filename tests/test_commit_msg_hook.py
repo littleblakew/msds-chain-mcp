@@ -6,7 +6,7 @@
 
 🔴 **本仓比 msds-chain 更危险，这是这道闸被移植过来的全部理由**：那边 CI 静默不跑
    还有 promote gate 在 `develop→main` 兜住；**本仓 push `main` 即部署、没有 promote
-   gate** ⇒ 静默不跑＝**静默不发布**。2026-08-31 在 `msds-chain-gateway` 真实发生过：
+ gate** ⇒ 静默不跑＝**静默不发布**。 在 `msds-chain-gateway` 真实发生过：
    merge commit 正文里解释「为什么这次不加那个令牌」⇒ 整轮 CI 不跑，push 成功、
    远端有 sha、零报错，而 Prod 镜像停在上一版。**发现它只能靠「main 变了但镜像
    tag 没变」**——没有任何东西会报错。

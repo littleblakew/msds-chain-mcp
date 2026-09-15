@@ -1,6 +1,6 @@
 r"""守卫：测试**用到的 pytest 插件**必须在 `requirements-dev.txt` 里声明。
 
-2026-09-15 我用 `@pytest.mark.asyncio` 写了两个用例，**本机 522 passed**、
+ 我用 `@pytest.mark.asyncio` 写了两个用例，**本机 522 passed**、
 CI 的 `deploy` job 当场红（`Failed: async def functions are not natively supported`）
 ⇒ **把一次 Prod 部署堵在了「Run tests」这一步**。
 根因：本仓 `requirements-dev.txt` 只有 `pytest`，而 pytest-asyncio 恰好装在我本机的 venv 里。
@@ -17,7 +17,7 @@ locally …, and failed the deploy job」）。**我没看见它** —— 那是
 
 | 守卫 | 把什么改回去会让它红 |
 |---|---|
-| `test_no_test_uses_an_undeclared_pytest_plugin` | 在任意测试文件里加一个 `@pytest.mark.asyncio`（＝重演 2026-09-15 那次） |
+| `test_no_test_uses_an_undeclared_pytest_plugin` | 在任意测试文件里加一个 `@pytest.mark.asyncio`（＝重演那次事故） |
 | `test_the_guard_can_actually_see_marks` | 把 `_marks_in_tests` 的扫描目标改成匹配不到任何东西（阳性对照：**守卫自己得先能看见 mark**，否则它在空集上恒绿） |
 """
 import ast

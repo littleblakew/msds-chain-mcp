@@ -1,6 +1,6 @@
 """CI-493：合规结果有**两个轴**，渲染层不能把它们念成一句话。
 
-事故原文（2026-08-13 Prod 实测，2026-08-16 复现仍在）：苯查 US 返回
+失败形状（实测复现过）：苯查 US 返回
 `status=compliant`，唯一证据是一条 OSHA 暴露限值；清单没加载的法域返回肯定的
 `not_listed`（"CAS X not found in CN regulatory lists"）——用户读作**可以进口**。
 
