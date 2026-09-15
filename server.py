@@ -23,6 +23,7 @@ from __future__ import annotations
 import base64
 import binascii
 import functools
+import inspect
 import json
 import json as _json
 import logging
@@ -727,16 +728,34 @@ def _headers() -> dict[str, str]:
 # 空无一物的部署记录。⇒ 只说**观察到的事实**（超时了）与**可行动的两条路**（重试 / 拆小），
 # 别把负载问题说成部署抖动。参照点：同一份回放里 4–5 个化学品的查询 5–7 秒返回。
 _DIRECT_TIMEOUT_MSG = {
-    "en": "This safety check timed out. Try again, or split the request into fewer chemicals per "
-          "call — large batches are the usual cause.",
-    "zh": "本次安全检查超时。请重试，或把一次查询拆成更少的化学品——批量过大是常见原因。",
-    "ja": "この安全チェックはタイムアウトしました。再試行するか、1 回の問い合わせの化学品数を"
-          "減らしてください（大きなバッチが主な原因です）。",
-    "de": "Diese Sicherheitsprüfung hat das Zeitlimit überschritten. Bitte erneut versuchen oder die "
-          "Anfrage auf weniger Chemikalien pro Aufruf aufteilen — große Stapel sind die übliche Ursache.",
-    "id": "Pemeriksaan keselamatan ini melebihi batas waktu. Coba lagi, atau pecah permintaan menjadi "
-          "lebih sedikit bahan kimia per panggilan — batch besar adalah penyebab umumnya.",
+    "en": "This safety check timed out. Please try again in a moment.",
+    "zh": "本次安全检查超时。请稍候重试。",
+    "ja": "この安全チェックはタイムアウトしました。少し待ってから再度お試しください。",
+    "de": "Diese Sicherheitsprüfung hat das Zeitlimit überschritten. Bitte versuchen Sie es gleich erneut.",
+    "id": "Pemeriksaan keselamatan ini melebihi batas waktu. Silakan coba lagi sebentar.",
 }
+
+# 🔴 第二条也是 CI-915（PR #50 第二轮 review 抓到）：「拆成更少的化学品」只对**收列表的那些工具**
+# 成立。17 个被 `@_graceful_timeout` 包住的工具里有 **8 个根本不收 `chemicals`**
+# （`get_emergency_response` / `get_sds_document` / `get_audit_report` …）——对它们说这句话，
+# 就是 CI-915 要消灭的那种「听起来可行动、实际不适用」的建议，只是换了个地方犯。
+# ⇒ 按**被包函数的签名**推导用哪一句，**不手写名单**：名单会腐化，签名不会
+# （新加一个收列表的工具自动拿到批量那句；守卫按同一条规则全量扫，见 tests/test_ci914_*）。
+_DIRECT_TIMEOUT_HINT_BATCH = {
+    "en": " If the request covered many chemicals, split it into smaller calls — large batches are the usual cause.",
+    "zh": "若这次查询包含很多化学品，请拆成更小的几次——批量过大是常见原因。",
+    "ja": "多くの化学品をまとめて問い合わせた場合は、小分けにしてください（大きなバッチが主な原因です）。",
+    "de": " Wenn die Anfrage viele Chemikalien umfasste, teilen Sie sie in kleinere Aufrufe auf — große Stapel sind die übliche Ursache.",
+    "id": " Jika permintaan mencakup banyak bahan kimia, pecah menjadi panggilan lebih kecil — batch besar adalah penyebab umumnya.",
+}
+
+
+def _timeout_message(lang: str, *, batch: bool) -> str:
+    """超时话术＝通用那句（+ 只对收列表的工具附加的批量提示）。"""
+    base = _DIRECT_TIMEOUT_MSG.get(lang, _DIRECT_TIMEOUT_MSG["en"])
+    if not batch:
+        return base
+    return base + _DIRECT_TIMEOUT_HINT_BATCH.get(lang, _DIRECT_TIMEOUT_HINT_BATCH["en"])
 
 
 def _graceful_timeout(fn):
@@ -761,6 +780,10 @@ def _graceful_timeout(fn):
     守卫 `tests/test_ci914_timeout_is_error.py` 对这两个方向各有一条，断言是**逐字相等**
     不是子串 —— 子串断言正是当初没看见那个前缀的原因。
     """
+    # 这个工具收不收化学品**列表**，决定要不要给「拆小一点」的建议。
+    # 在装饰时算一次（`functools.wraps` 会让 `signature()` 穿透到真正的函数签名）。
+    _takes_batch = "chemicals" in inspect.signature(fn).parameters
+
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
         try:
@@ -768,7 +791,7 @@ def _graceful_timeout(fn):
         except httpx.TimeoutException:
             # 超时话术也跟调用方的语言走（`lang` 是关键字参数时才取得到；取不到就用服务端默认）
             lg = kwargs.get("lang") or LANG
-            msg = _DIRECT_TIMEOUT_MSG.get(lg, _DIRECT_TIMEOUT_MSG["en"])
+            msg = _timeout_message(lg, batch=_takes_batch)
             # 🔴 **不是 `raise`**：工具体里抛出去的异常会被 `Tool.run()` 包成
             # `ToolError(f"Error executing tool {name}: {e}")` —— 那个前缀是**英文硬编码的**，
             # 会粘在五个语种的每一句前面，而且正是 CI-55 要消灭的那种样板。

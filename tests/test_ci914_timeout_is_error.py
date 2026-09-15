@@ -109,7 +109,10 @@ def test_timeout_sets_is_error_and_keeps_the_text_verbatim(monkeypatch, lang):
     monkeypatch.setattr(server, "_direct_storage", _timeout)
     res = _call(lang=lang)
     assert res.is_error is True, f"超时被报成了成功：{_text(res)!r}"
-    assert _text(res) == server._DIRECT_TIMEOUT_MSG[lang], (
+    # `get_storage_guidance` 收列表 ⇒ 期望值是「通用句 + 批量提示」，用生产那个函数算，
+    # 但 `batch=True` 是本测试**独立**断言的（工具签名里确实有 `chemicals`），不是抄它的判断。
+    expected = server._timeout_message(lang, batch=True)
+    assert _text(res) == expected, (
         f"{lang} 的超时文字不是逐字那句（多半是被 ToolError 加了英文前缀）：{_text(res)!r}")
 
 
@@ -147,3 +150,67 @@ def test_timeout_text_does_not_guess_a_cause():
 
     # 而且必须留下一条**可行动**的路，否则「不猜成因」会退化成一句废话
     assert len(server._DIRECT_TIMEOUT_MSG) == 5, "语种少了——文案是逐语言写的，别只改英文"
+
+
+# ---------------------------------------------------------------- CI-915 第二条
+
+
+def _wrapped_tools():
+    """**自己发现成员**：扫出所有被 `@_graceful_timeout` 包住的工具，别手写名单。
+
+    手写名单会腐化——新加一个工具没人回来改它，而守卫会一直是绿的
+    （本仓 [[my-own-guards-are-often-no-ops]]：`CI-420` 那道守卫就是这么漏掉 10 个成员的）。
+    **变异方式＝往 `server.py` 里加一个新的 `@_graceful_timeout` 工具，看这条会不会跟着覆盖它。**
+    """
+    import inspect
+    import re
+    src = inspect.getsource(server)
+    out = []
+    for name, params in re.findall(r"@_graceful_timeout\n(?:@\w+\n)*async def (\w+)\(([^)]*)\)", src):
+        out.append((name, "chemicals" in params))
+    assert len(out) >= 15, f"扫描面塌了，只找到 {len(out)} 个工具——正则跟代码脱钩了"
+    return out
+
+
+def _args_for(name: str) -> dict:
+    sig = __import__("inspect").signature(getattr(server, name))
+    args = {}
+    for pname, p in sig.parameters.items():
+        if p.default is not p.empty:
+            continue
+        # 🔴 给**两个**化学品：`check_chemical_compatibility` / `batch_safety_check` 在打后端之前
+        # 先校验「至少 2 个」，只给 1 个的话请求根本走不到超时那条路 ——
+        # 测试会「绿着但什么都没测」，而那正是本文件要防的形状。
+        args[pname] = ["acetone", "bleach"] if pname == "chemicals" else "acetone"
+    return args
+
+
+@pytest.mark.parametrize("tool,takes_batch", _wrapped_tools())
+def test_batch_hint_only_goes_to_tools_that_take_a_list(monkeypatch, tool, takes_batch):
+    """CI-915 第二条：「拆成更少的化学品」只能发给**收列表**的工具。
+
+    17 个被包住的工具里有 8 个根本不收 `chemicals`（`get_emergency_response` /
+    `get_sds_document` / `get_audit_report` …）。对它们说这句话，就是 CI-915 要消灭的那种
+    **听起来可行动、实际不适用**的建议，只是换了个地方犯——PR #50 第二轮 review 抓到。
+
+    🔴 判据按**签名**推导，与实现用的是同一条规则但**各自独立计算**；
+    覆盖面由 `_wrapped_tools()` 全量扫出来，新工具自动进来。
+    """
+    async def _timeout(*a, **kw):
+        raise httpx.ReadTimeout("")
+
+    for helper in [n for n in dir(server) if n.startswith("_direct_")] + ["_quick_chat"]:
+        monkeypatch.setattr(server, helper, _timeout)
+
+    params = CallToolRequestParams(name=tool, arguments={**_args_for(tool), "lang": "en"})
+    res = asyncio.run(server.mcp._handle_call_tool(None, params))
+    text = _text(res)
+    assert res.is_error is True, f"{tool} 超时被报成了成功：{text!r}"
+
+    hint = server._DIRECT_TIMEOUT_HINT_BATCH["en"].strip()
+    if takes_batch:
+        assert hint in text, f"{tool} 收列表却没拿到拆小建议：{text!r}"
+    else:
+        assert hint not in text, (
+            f"{tool} 不收化学品列表，却被告知「拆成更少的化学品」——"
+            f"这正是 CI-915 那类不适用的建议：{text!r}")
