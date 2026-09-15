@@ -23,6 +23,7 @@ from __future__ import annotations
 import base64
 import binascii
 import functools
+import inspect
 import json
 import json as _json
 import logging
@@ -721,21 +722,68 @@ def _headers() -> dict[str, str]:
 # data → upload the MSDS), a direct-tool timeout is transient service slowness, so
 # the graceful answer is retry-oriented. Applied as a wrapper so all direct tools
 # share one behavior. NEVER assert safety here.
+# 🔴 CI-915：这句话**不许猜成因**。原文写的是「常见于刚部署后」，而实测那次超时
+# （20 个化学品、45.2 秒）当天最后一次部署已在几小时之前 —— 真实成因是**这一次查询很重**。
+# 误导性诊断比没有诊断更贵：它让用户重试同一个必然再超时的查询，也让排查的人先去翻
+# 空无一物的部署记录。⇒ 只说**观察到的事实**（超时了）与**可行动的两条路**（重试 / 拆小），
+# 别把负载问题说成部署抖动。参照点：同一份回放里 4–5 个化学品的查询 5–7 秒返回。
 _DIRECT_TIMEOUT_MSG = {
-    "en": "This safety check timed out — the service was briefly slow (often just after a deploy). "
-          "Please try again in a moment.",
-    "zh": "本次安全检查超时——服务短暂变慢（常见于刚部署后）。请稍候重试。",
-    "ja": "この安全チェックはタイムアウトしました。サービスが一時的に遅くなっています（デプロイ直後によく発生）。少し待ってから再度お試しください。",
-    "de": "Diese Sicherheitsprüfung hat das Zeitlimit überschritten — der Dienst war kurz langsam "
-          "(oft direkt nach einem Deployment). Bitte versuchen Sie es gleich erneut.",
-    "id": "Pemeriksaan keselamatan ini melebihi batas waktu — layanan sempat lambat (sering terjadi "
-          "tepat setelah deploy). Silakan coba lagi sebentar.",
+    "en": "This safety check timed out. Please try again in a moment.",
+    "zh": "本次安全检查超时。请稍候重试。",
+    "ja": "この安全チェックはタイムアウトしました。少し待ってから再度お試しください。",
+    "de": "Diese Sicherheitsprüfung hat das Zeitlimit überschritten. Bitte versuchen Sie es gleich erneut.",
+    "id": "Pemeriksaan keselamatan ini melebihi batas waktu. Silakan coba lagi sebentar.",
+}
+
+# 🔴 第二条也是 CI-915（PR #50 第二轮 review 抓到）：「拆成更少的化学品」只对**收列表的那些工具**
+# 成立。17 个被 `@_graceful_timeout` 包住的工具里有 **8 个根本不收 `chemicals`**
+# （`get_emergency_response` / `get_sds_document` / `get_audit_report` …）——对它们说这句话，
+# 就是 CI-915 要消灭的那种「听起来可行动、实际不适用」的建议，只是换了个地方犯。
+# ⇒ 按**被包函数的签名**推导用哪一句，**不手写名单**：名单会腐化，签名不会
+# （新加一个收列表的工具自动拿到批量那句；守卫按同一条规则全量扫，见 tests/test_ci914_*）。
+_DIRECT_TIMEOUT_HINT_BATCH = {
+    "en": " If the request covered many chemicals, split it into smaller calls — large batches are the usual cause.",
+    "zh": "若这次查询包含很多化学品，请拆成更小的几次——批量过大是常见原因。",
+    "ja": "多くの化学品をまとめて問い合わせた場合は、小分けにしてください（大きなバッチが主な原因です）。",
+    "de": " Wenn die Anfrage viele Chemikalien umfasste, teilen Sie sie in kleinere Aufrufe auf — große Stapel sind die übliche Ursache.",
+    "id": " Jika permintaan mencakup banyak bahan kimia, pecah menjadi panggilan lebih kecil — batch besar adalah penyebab umumnya.",
 }
 
 
+def _timeout_message(lang: str, *, batch: bool) -> str:
+    """超时话术＝通用那句（+ 只对收列表的工具附加的批量提示）。"""
+    base = _DIRECT_TIMEOUT_MSG.get(lang, _DIRECT_TIMEOUT_MSG["en"])
+    if not batch:
+        return base
+    return base + _DIRECT_TIMEOUT_HINT_BATCH.get(lang, _DIRECT_TIMEOUT_HINT_BATCH["en"])
+
+
 def _graceful_timeout(fn):
-    """Wrap a direct-tool coroutine so a client read-timeout returns an actionable
-    retry message instead of raising an opaque empty error (CI-55)."""
+    """Wrap a direct-tool coroutine so a client read-timeout surfaces as an **errored**
+    tool result carrying an actionable message.
+
+    CI-55 建这层是为了干掉不透明的空错误（`httpx.ReadTimeout` 字符串化成 `""`
+    ⇒ 调用方只看到 `Error executing tool <name>: `）。**那个目标由「消息非空」达成，
+    不需要把失败伪装成成功** —— 而初版是 `return` 那句话。
+
+    🔴 CI-914：原来 `return` 那句话让 MCP 协议的 `isError` 位是 `False`，对调用方就是
+    「这次调用成功了，下面是结果」，而结果是一句「超时了请重试」。**消费它的是模型**，
+    最可能把这句话当正常答案往下用，不走重试。
+
+    🔴 **修法是返回 `CallToolResult(is_error=True)`，不是 `raise`** —— 这一步是 PR #50 的
+    review 换来的，值得逐字记下：**工具体里抛出去的异常会被 `Tool.run()` 包成
+    `ToolError(f"Error executing tool {name}: {e}")`**（`mcp/server/mcpserver/tools/base.py:181`），
+    而那个前缀是**英文硬编码**的 —— 它会粘在五个语种每一句话前面，且正是 CI-55 当初要
+    消灭的那种样板。「`raise` 与同仓 4xx 惯例一致」这个理由**听起来对、实际让文案更差**。
+    ⇒ 两条性质要同时满足：**位是 `True`** 且 **文字逐字是 `_DIRECT_TIMEOUT_MSG` 那句**。
+    🔴 **别改回 `return msg`（位会变假），也别改成 `raise`（文字会被加英文前缀）。**
+    守卫 `tests/test_ci914_timeout_is_error.py` 对这两个方向各有一条，断言是**逐字相等**
+    不是子串 —— 子串断言正是当初没看见那个前缀的原因。
+    """
+    # 这个工具收不收化学品**列表**，决定要不要给「拆小一点」的建议。
+    # 在装饰时算一次（`functools.wraps` 会让 `signature()` 穿透到真正的函数签名）。
+    _takes_batch = "chemicals" in inspect.signature(fn).parameters
+
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
         try:
@@ -743,7 +791,13 @@ def _graceful_timeout(fn):
         except httpx.TimeoutException:
             # 超时话术也跟调用方的语言走（`lang` 是关键字参数时才取得到；取不到就用服务端默认）
             lg = kwargs.get("lang") or LANG
-            return _DIRECT_TIMEOUT_MSG.get(lg, _DIRECT_TIMEOUT_MSG["en"])
+            msg = _timeout_message(lg, batch=_takes_batch)
+            # 🔴 **不是 `raise`**：工具体里抛出去的异常会被 `Tool.run()` 包成
+            # `ToolError(f"Error executing tool {name}: {e}")` —— 那个前缀是**英文硬编码的**，
+            # 会粘在五个语种的每一句前面，而且正是 CI-55 要消灭的那种样板。
+            # （2026-09-15 PR #50 的 review 抓到；我自己的探针输出里其实印着它，没看见。）
+            # ⇒ 直接返回一个 `is_error=True` 的结果：位是对的，文字逐字保留。
+            return CallToolResult(content=[TextContent(type="text", text=msg)], is_error=True)
     return wrapper
 
 
