@@ -1,8 +1,8 @@
 """CI-848：`compare_sds_versions` 的两个已弃用参数必须被**显式披露**，不能静默丢弃。
 
-背景：`version_old`/`version_new` 2026-06-08 随「改走 /api/v2 直连」被删，
-但外部客户端拿的是**工具面快照**——2026-09-03 实测 ChatGPT 应用目录条目至今仍列着它们
-（那份快照停在 2026-05-22~06-08）。旧客户端照旧传，pydantic 对多余入参**静默丢弃**：
+背景：`version_old`/`version_new` 随「改走 /api/v2 直连」被删，
+但外部客户端拿的是**工具面快照**——实测过，目录型渠道上的那份可能长期仍列着它们。
+旧客户端照旧传，pydantic 对多余入参**静默丢弃**：
 用户要「比较 v3 和 v5」，拿到「最近两版」的对比，**一份看起来完全正常的答案**。
 这发生在外部调用量第二高的工具上（169 次）。
 
@@ -12,7 +12,7 @@
 （claude.ai 连接器**只拿得到这一面**）。只验其中一面的话，另一面的用户什么也看不到，
 而测试照样绿——本仓 [[fix-never-reaches-the-real-consumer]] 那个形状。
 
-🔬 **变异（2026-09-04 实跑，四个，结果照抄实测）**：
+🔬 **变异（四个，实跑过，结果照抄实测）**：
 - 删 `lines.append(f"\\n{note}")`（has_newer 分支的文本披露）⇒ **只红 1 条**，正是那一支的
   文本用例。**两个分支的文本是两处独立写入点**，所以一处坏掉不会连累另一处——粒度对了。
 - 删 `text = f"{text}\\n\\n{note}"`（no-newer 分支的文本披露）⇒ 只红另外那一条。
@@ -89,7 +89,7 @@ def test_no_note_when_not_supplied(call, payload):
     assert "deprecated_parameters_note" not in sc
 
 
-# ---- 以下两条来自 2026-09-04 的 review，各自钉住一个被抓到的真缺陷 ----
+# ---- 以下两条来自 review，各自钉住一个被抓到的真缺陷 ----
 
 def test_note_never_contradicts_the_comparison_printed_above_it(call):
     """后端可以返回 `has_newer=True` 而版本号为空：表头照印 `Version None → None`，

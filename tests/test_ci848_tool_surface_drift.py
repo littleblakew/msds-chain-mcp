@@ -3,8 +3,8 @@
 背景（细节在 `docs/pm/tickets/CI-848.md`，这里只留判据）：ChatGPT 的应用目录条目在提交时
 `Scan Tools` 拍一份工具面快照，官方原话「Published plugins do not update those skills live」；
 claude.ai 在**添加连接器**时拍一份。两边都不会在我们改了工具之后通知任何人。
-2026-09-03 实测：ChatGPT 目录条目停在一份 2026-05-22~07-25 的快照上，`lang` / `search_msds_online`
-对它完全不存在，而 `authorize_start` 100% 来自 chatgpt.com ⇒ 那是**主力通路**。
+实测过：目录型渠道上的那份快照可能长期落后于我们发布的工具面——后来加的参数与工具
+对它完全不存在。而这类渠道正是主力通路，所以「过期」不是小事（口径与数字在私有票里）。
 
 **本守卫的契约**：`published_tool_surface.json` ＝上一次有人看过并接受的工具面。
 工具面一变就红，逼一次显式决定（更新基线 + 判断要不要重交上架条目）。
@@ -13,9 +13,9 @@ breaking 是「已连接的旧客户端此刻就在坏，而其中一种坏法�
 
 🔬 **变异（两侧都造，做过就记下来，否则这个守卫默认当不存在）**：
 - 危险侧：给 `get_storage_guidance` 删掉 `lang` → `test_no_drift_against_baseline` 红，
-  且分类进 breaking。2026-09-03 实跑过（改 server.py 真跑，不是只喂构造数据）。
+ 且分类进 breaking。 实跑过（改 server.py 真跑，不是只喂构造数据）。
 - 安全侧：给 `get_storage_guidance` 加一个可选参数 `foo` → 同样红，但分类进 additive。
-  2026-09-03 实跑过。**这一侧不能省**：只造「该红的」测不出分类是不是恒为 breaking。
+ 实跑过。**这一侧不能省**：只造「该红的」测不出分类是不是恒为 breaking。
 - 空跑侧：`test_extraction_is_not_a_noop` 防「schema 字段改名 ⇒ 每个工具都提取出空集合、
   于是永远没有漂移」——那种失败形态和「一切正常」完全同形。
 """

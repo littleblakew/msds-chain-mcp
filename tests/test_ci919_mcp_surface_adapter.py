@@ -39,7 +39,7 @@ def _red(body, run_all):
     return sorted(k for k, v in run_all(body).items() if v)
 
 
-# 真实 Prod 载荷的形状（按 2026-09-11 实调的**形状**手写，🔴 取值换成合成夹具——原始那个 CAS 来自真实语料，按 CI-906 红线不进公开仓）
+# 真实 Prod 载荷的形状（按 实调的**形状**手写，🔴 取值换成合成夹具——原始那个 CAS 来自真实语料，按 CI-906 红线不进公开仓）
 REAL = {
     "results": [{"chemical_name": "acetone",
                  "cas": "67-64-1", "storage_class": "general",

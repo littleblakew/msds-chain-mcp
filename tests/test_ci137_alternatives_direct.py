@@ -1,7 +1,7 @@
 """CI-137：`get_chemical_alternatives` 不再走 quick-chat 的三轮 LLM。
 
-Prod 实测（2026-08-16，近 30 天 `mcp_call_logs.duration_ms`）：走 quick-chat 的工具
-p50 **7–11 秒**，`/api/v2` 直连的 0.3–0.4 秒，**中间没有过渡带**。而后端
+实测过：走 quick-chat 的工具 p50 是秒级、`/api/v2` 直连是百毫秒级，
+**中间没有过渡带**（量的过程与数字在私有票里）。而后端
 `agent/tools/chemical_substitution.py` 早就是确定性实现（curated 替代表 + `resolve_cas`
 + GHS 风险比较，**全文件零 LLM 引用**）——同 [[CI-523]] 一族：信息在，这条通道没去拿。
 

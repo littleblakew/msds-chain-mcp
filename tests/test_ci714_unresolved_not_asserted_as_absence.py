@@ -6,7 +6,7 @@
 「Chemical not found in database」——**一句我们无权说的话**：`unresolved` 的成因里只有一种
 是「库里没有」，其余是「畸形输入所以我们压根没搜」「有一级没跑成」「名字与 CAS 矛盾所以拒答」。
 
-**实测（2026-09-03，本地 import server 打 Prod）**：`71-43`（一个 CAS 片段，后端明确
+**实测（本地 import server 打 Prod）**：`71-43`（一个 CAS 片段，后端明确
 「did NOT search by it」）与 `zzqqxk-not-a-chemical`（真的一份记录都没有）拿到的那行
 **逐字相同** ⇒ 模型据此对付费用户断言我们没有这份数据。同族 [[CI-770]] / [[CI-413]]，
 以及 [[CI-587]]「守卫只护住结构化、散文照样断言未收录」。
@@ -37,7 +37,7 @@ _FORBIDDEN = (
     "not in our database",
 )
 
-# 后端在这条路上今天只给得出这两个键（2026-09-03 实测 Prod 载荷）。
+# 后端在这条路上今天只给得出这两个键（实测 Prod 载荷）。
 EMERGENCY_UNRESOLVED = {
     "chemical": "71-43", "scenario": "spill",
     "data_source": "general", "unresolved": True,

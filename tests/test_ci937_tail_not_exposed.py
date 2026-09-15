@@ -23,7 +23,7 @@ tail **不带** ⇒ 只印 tail 的消费者会**静默丢掉浓度**，正好�
    被计进覆盖面，并顺理成章地「没泄漏」。**那正是本条声称要防的形状，而我写的判据挡不住它**
    （PR #53 的 review 抓到）。现在改成数 `_Client` 上的真实请求次数。
    （[[green-run-that-executed-nothing]]）
-4. **阳性对照实测**（2026-09-15）：把 `_drop_tail_keys` 从 `_billed_json` 撤掉
+4. **阳性对照实测**：把 `_drop_tail_keys` 从 `_billed_json` 撤掉
    ⇒ 23 个工具里 **15 个**漏；带上 ⇒ **0 个**。
 """
 import asyncio

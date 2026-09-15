@@ -1,8 +1,8 @@
-"""测试自己不许写生产——2026-08-16 量出来的，不是假想。
+"""测试自己不许写生产—— 量出来的，不是假想。
 
 `server.API_URL` 默认就是 Prod 后端，而 `_log_call` 是 fire-and-forget（失败吞成一条
 日志）⇒ 任何一个「只断言返回文案、没 stub 干净」的测试都会安静地往 Prod 写一行调用日志，
-**本地和 CI 都看不出来**。Prod 上的实测：`platform.mcp_call_logs` 里 2026-07-29 以来
+**本地和 CI 都看不出来**。Prod 上的实测：`platform.mcp_call_logs` 里 以来
 82 条 `upload_msds_pdf` 失败，**79 条是我们自己的测试**（`input_params` 里留着
 `/tmp/pytest-of-runner/...`），真实外部用户只有 1 条。
 

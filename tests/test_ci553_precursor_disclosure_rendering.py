@@ -169,7 +169,7 @@ def test_empty_disclosure_renders_nothing():
         assert "Regulated-precursor" not in out, out
 
 
-# ── 折叠同一 regime 的重复行（2026-08-19 live 实测促成）────────────────────────
+# ── 折叠同一 regime 的重复行（live 实测促成）────────────────────────
 # 这份 payload 是 Prod 上 `check_chemical_compatibility(["hydrochloric acid","acetone"])`
 # **真实返回**的 7 条（照抄，别改成手编的简化版）：日常大宗化学品同时挂在同一 regime 的
 # 多张清单上，逐条打印会在回答开头堆出七段近乎相同的话。
