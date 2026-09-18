@@ -101,3 +101,52 @@ def test_additive_changes_are_not_classified_as_breaking(current, expect_additiv
     diff = diff_surface(_BASE, current)
     assert any(expect_additive in line for line in diff["additive"]), diff
     assert not diff["breaking"], f"安全改动被误判成危险：{diff['breaking']}"
+
+
+# ── 攒批期间：线上超前目录条目多少，以及唯一那条红线 ────────────────────
+def _listing() -> dict:
+    return json.loads(BASELINE_PATH.read_text())["listing_surface"]
+
+
+def test_pending_listing_batch_is_additive_only():
+    """线上工具面可以超前上架条目（攒批再交），但**只许 additive**。
+
+    🔴 **为什么单独有这一条**：本文件另一条守卫比的是「代码 vs 基线」，
+    而基线每次改动都会被重生成 ⇒ 它一绿，**「目录条目落后了多少」就再也没人看得见**。
+    这一维是攒批期间唯一危险的那个：additive 的话旧客户端只是看不见新参数；
+    breaking 的话**目录来的用户此刻正在坏**，而线上和基线都完全一致、没有任何东西会红。
+
+    🔴 待交批次是**推导**的（`diff_surface(listing_surface, tools)`），不是手写清单
+    ——手写的清单不会自己发现成员，加一个工具时它静默放行。
+
+    重交并过审之后：把 `listing_surface` 整块替换成那一刻的 `tools`，本条自然归零。
+
+    🔬 **变异（造的时候栽过两次，都记下来）**：
+    · ✅ 有效的那个：往 `listing_surface` 里加一个线上没有的工具
+      ⇒ 红并点名「工具消失或改名」。
+    · ❌ **方向造反了的那个**：把 `listing_surface` 里某个可选参数标成**必填**。
+      那是「线上比条目更宽松」＝放宽，不是 breaking，`diff_surface` 分类正确、
+      本条不该红。**变异要按守卫防的方向造**（线上相对条目变紧，不是变松）。
+    · ❌ **打错靶子的那个**：改 `published_tool_surface.json` 里的 `tools` 来造 breaking。
+      🔴 `_current()` 读的是**活的 server**（`server.mcp.list_tools()`），不是这个 JSON
+      ⇒ 改 JSON 的 `tools` 对它零影响，变异会「安静地什么都没做」而看起来像守卫漏了。
+      要从这个方向造，得去改 `server.py`。
+    """
+    pending = diff_surface(_listing(), _current())
+    assert not pending["breaking"], (
+        "上架条目还没重交，而线上已经出现**破坏性**改动 ⇒ 从目录安装的用户此刻就在坏，"
+        f"且另一条守卫看不见这一维：{pending['breaking']}\n"
+        "⇒ 要么把改动收成只加不减，要么先重交条目再上线。")
+
+
+def test_pending_batch_is_visible_to_whoever_submits_next():
+    """攒批的内容必须能被**机械列出来**，否则下一个去重交的人不知道这批是什么。
+
+    🔴 这条不判对错，它判的是「这个量拿不拿得到」——`listing_surface` 缺席或
+    形状不对时，上面那条会静默退化成「拿空集合比空集合」，**恒绿**。
+    （[[green-run-that-executed-nothing]]：判据是「跑了多少条」。）
+    """
+    listing = _listing()
+    assert listing, "`listing_surface` 缺席 ⇒ 上面那条守卫在拿空集合比，恒绿"
+    assert set(listing) & set(_current()), (
+        "`listing_surface` 与当前工具面零交集 —— 多半是形状写错了（存成了整个文件而不是 tools）")
