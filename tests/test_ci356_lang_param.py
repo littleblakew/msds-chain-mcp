@@ -39,12 +39,18 @@ SUPPORTED = {
     #     现在**说明文字**这一段是我们自己的）。
     "get_ppe_recommendation": {"chemicals": ["a"]},
     "get_sds_section": {"chemical": "a", "section": 4},
+    #   check_regulatory_compliance：后端把 compliance 的 flags / details /
+    #     inventory.note 收进了自己的文案表，实测对比已通过。
+    #     🔴 **判据是数汉字，不是比字节**：这一对里 zh 侧反而**更短**，
+    #     所以「长度不同」会误过、「中文更长」会误判失败。
+    #     🔴 对比要带**阴性**那侧：en 必须零汉字，否则「不管传什么都给中文」
+    #     （比恒英文更糟）同样会被读成通过。探针在后端仓 `scripts/prod-db/`。
+    "check_regulatory_compliance": {"chemicals": ["a"]},
 }
 
 # 后端实测**不认** lang 的端点 → 这些工具**不该**有 lang 参数。
 # value = 实测证据，改这张表之前先重跑那个对比。
 UNSUPPORTED = {
-    "check_regulatory_compliance": "compliance：en/zh 均 372 字节、零中文",
     "search_msds_online": "online-search：en/zh 均 1599 字节、零中文",
     "get_transport_classification": "transport-classification：en/zh 均 325 字节、零中文",
     "get_waste_disposal": "waste-disposal：en/zh 均 792 字节、零中文",
@@ -191,3 +197,35 @@ def test_normalized_value_is_what_hits_the_wire(sent):
     asyncio.run(server.get_chemical_risk_warnings(chemicals=["a"], lang="ja"))
     langs = [b.get("lang") for _, b in sent if "lang" in b]
     assert langs and all(l == "en" for l in langs), f"lang=ja 应归一成 en，实际发出 {langs}"
+
+
+def test_compliance_tool_actually_forwards_lang_to_the_backend(monkeypatch):
+    """🔴 挂了参数 ≠ 送出去了 —— CI-361 修的正是「声明了没人消费」那个形状。
+
+    `_direct_compliance` 此前发的是模块级 `LANG`（服务端环境变量，托管网关上**恒 en**）
+    ⇒ 调用方传什么都没用，而 schema 里那个参数看起来完全正常。判据打在
+    **后端实际收到的值**上，不是「工具接受这个参数」。
+
+    🔬 变异：把 `_direct_compliance(chemical, effective_regions, lang)` 的第三个实参
+    删掉 ⇒ 本条红（收到 None 而不是 "zh"）。实跑过。
+    """
+    import asyncio
+
+    import server
+
+    seen: dict = {}
+
+    async def _fake(chemical, regions, lang=None):
+        seen["lang"] = lang
+        return {"chemical": chemical, "cas": "71-43-2", "summary_level": "high",
+                "region_results": [{"region": r, "status": "restricted", "flags": []}
+                                   for r in regions],
+                "unresolved": []}
+
+    monkeypatch.setattr(server, "_direct_compliance", _fake)
+    asyncio.run(server.check_regulatory_compliance(["benzene"], ["EU"], lang="zh"))
+
+    assert seen, "工具没调到后端——这条断言会伪装成通过，先查为什么没走到"
+    assert seen["lang"] == "zh", (
+        f"`lang` 没送到后端：收到 {seen['lang']!r}。"
+        "这正是改动前的形状——参数在 schema 里，发出去的却是服务端默认。")

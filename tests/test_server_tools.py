@@ -350,8 +350,13 @@ def test_direct_timeout_expectations_cover_every_direct_helper():
 # as "checked everywhere".
 # ---------------------------------------------------------------------------
 
-def _fake_compliance():
-    async def fake(chemical, regions):
+def _fake_compliance(seen: dict | None = None):
+    # 🔴 CI-361：签名跟着真函数走（多了 `lang`）。**别写成 `*args` 吞掉它** ——
+    # 那样这个桩会在真函数少传/多传参数时**继续通过**，桩就不再是真函数的替身了
+    # （[[testing-unreliability-seven-forms]]：替身在被测性质上与真货不同形）。
+    async def fake(chemical, regions, lang=None):
+        if seen is not None:
+            seen["lang"] = lang
         return {"chemical": chemical, "cas": "50-00-0", "summary_level": "high",
                 "region_results": [{"region": r, "status": "restricted", "flags": []} for r in regions],
                 "unresolved": []}
