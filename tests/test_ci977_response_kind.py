@@ -47,7 +47,7 @@ def test_redirected_intent_becomes_redirected_kind():
 def test_any_other_intent_is_answered(intent):
     """🔴 后端给了 intent ⇒ 这一轮**确实**产出了内容，必须记成 `answered`。
 
-    落 NULL 的话，读取侧算拒答率时分母只剩拒答那一类 —— 一个 100% 的拒答率，
+    落 NULL 的话，读取侧算拒答率时分母只剩拒答那一类 —— 算出来恒等于满值，
     而且它和「真的全被拒了」完全同形。
     """
     assert server._response_kind({"intent": intent}) == "answered"

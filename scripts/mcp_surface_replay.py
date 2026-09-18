@@ -7,13 +7,14 @@ CI-336 的回放打的是 `/api/v2/*` —— 那是 MCP server **调用**的代�
 结构性没有覆盖**。[[CI-342]] 就是那一类：手工维护的白名单把后端新增字段静默吞掉，
 `/api/v2` 的测试永远抓不到。
 
-2026-09-11 首次跑通，当场从 331 条真实查询里逮到 [[CI-919]]（借来的 SDS 借到空却声称
-`sds_backed`）与 [[CI-914]]/[[CI-915]]（超时谎报 `is_error=False` + 归因文案是错的）。
+它首次跑通就逮到了三类只在包装层现形的缺陷（[[CI-919]] 借来的 SDS 借到空却声称
+`sds_backed`；[[CI-914]]/[[CI-915]] 超时谎报 `is_error=False` + 归因文案是错的）
+—— 这几类在 `/api/v2` 那一层**结构上看不见**，所以这个脚本不是 CI-336 的重复。
 
 ## 🔴 这是公开仓 —— 语料绝不进来
 
-语料路径走 `CORPUS` 环境变量，**永远不 vendored**（[[CI-906]] 的红线；那份语料里有
-某客户的完整配方组分表）。不变量同理走 `INVARIANTS_DIR` 指向 `msds-chain` 仓。
+语料路径走 `CORPUS` 环境变量，**永远不 vendored**（[[CI-906]] 的红线：那份语料里有
+客户提交的原始内容，一个字都不能进这个仓）。不变量同理走 `INVARIANTS_DIR` 指向 `msds-chain` 仓。
 **改这个文件的人：别为了「方便」把任何一份样例查询硬编码进来。**
 
 ## 用法
@@ -23,10 +24,10 @@ CI-336 的回放打的是 `/api/v2/*` —— 那是 MCP server **调用**的代�
     MCP_KEY_FILE=~/.mcpkey TOOL=get_ppe_recommendation ARG=chemicals \
     LIMIT=0 SLEEP=1.2 OUT=out.json python3 scripts/mcp_surface_replay.py
 
-🔴 **`SLEEP` 别调小。** 网关是令牌桶：**容量 60、补充约 0.83/s**（2026-09-11 实测）。
-`SLEEP=1.2`（周期 ~1.4s）永不耗尽；`SLEEP=0.3` 时**正好前 60 条成功、之后全部返回同一句
-41 字符文案且 `is_error=False`** —— 看起来像「数据覆盖缺口」，实际是限流。
-**判据是「成功的序号是不是连续 1..60 然后全灭」，不是文案内容。**
+🔴 **`SLEEP` 别调小。** 网关有限流，而**被限流的回合不长得像失败**：它返回一句固定短文案、
+`is_error=False`，看起来像「数据覆盖缺口」。默认的 `SLEEP=1.2` 在补充速率之内；调小就会撞上。
+**判据是「成功的序号是不是连续到某一条之后全灭」，不是文案内容**
+——按文案判会把限流当成数据问题查上半天。
 
 🔴 **选工具决定这一轮有没有意义。** 四条不变量各自要吃的键不同：
 `get_storage_guidance` 的载荷没有 `documents`、也没有那三个 `_POSITIVE_CLAIMS` 取值
@@ -61,9 +62,9 @@ ARG  = os.environ.get("ARG", "chemicals")
 # `chemicals` 是 ChemicalList（列表），`question`/`chemical` 是标量 —— 形状不同，别猜。
 AS_LIST = ARG.endswith("s")
 OUT = os.environ.get("OUT", "mcp_replay_result.json")
-# 🔴 不限速会被限流：首轮实测**正好前 60 条成功、之后 271 条全部返回同一句 41 字符文案**，
-# 而 `is_error=False`、调用层零异常 ⇒ 看起来像「数据覆盖缺口」，实际是限流。
-# 判据是「成功的序号 1..60 连续、之后全灭」，不是文案内容。
+# 🔴 不限速会被限流，而**被限流的回合不长得像失败**：一句固定短文案、`is_error=False`、
+# 调用层零异常 ⇒ 看起来像「数据覆盖缺口」，实际是限流。
+# 判据是「成功的序号连续到某一条之后全灭」，不是文案内容。
 SLEEP = float(os.environ.get("SLEEP", "0.3"))
 
 def load_queries():
@@ -80,8 +81,8 @@ async def main():
     qs = load_queries()
     if LIMIT: qs = qs[:LIMIT]
     results, t0 = [], time.time()
-    # 🔴 逐条落 JSONL：只在结尾 dump 的话，超时或中断 = 全丢。
-    #    实测被 `timeout 900` 砍在 212/331，结果文件根本没生成。
+    # 🔴 逐条落 JSONL：只在结尾 dump 的话，超时或中断 = 全丢
+    #    ——一次被外层 `timeout` 砍在半途的跑批，结果文件根本没生成过。
     jl = open(OUT + 'l', 'a', buffering=1)
     http = httpx2.AsyncClient(headers={"Authorization": f"Bearer {KEY}"},
                               timeout=httpx2.Timeout(180.0, read=300.0), follow_redirects=True)
