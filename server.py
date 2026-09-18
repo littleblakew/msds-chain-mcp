@@ -3007,6 +3007,10 @@ async def get_audit_report(session_id: Annotated[str | None, Field(
     success = True
     built_from_recent: list[str] = []
     not_in_report: list[str] = []
+    # 🔴 CI-905：**这次调用自己建了 session 吗**——不能用 `built_from_recent` 代替。
+    # 那个列表只装后端真的收进去的化学品，`recent` 非空但一个都没入库时它是 `[]`,
+    # 而 session **已经建出来了**。两者在「建没建」这一问上不同形，正是 402 那条路要问的。
+    built_here = False
     try:
         if not get_caller_credential():
             return "get_audit_report requires an authenticated API key (MSDS_API_KEY for stdio, or gateway auth for remote)."
@@ -3049,6 +3053,7 @@ async def get_audit_report(session_id: Annotated[str | None, Field(
             built = await _build_audit_session(
                 f"Recent MCP analyses ({len(chemicals)} chemicals)", chemicals)
             session_id = built["session_id"]
+            built_here = True
             # 🔴 覆盖范围只能报**后端真的收进去的**那些。请求了 5 个、库里认得 3 个时，
             # 说「涵盖 5 个」＝让用户把一份不含另外两个的签名文件当成含了。
             added = built.get("chemicals", {}).get("added") or []
@@ -3078,7 +3083,23 @@ async def get_audit_report(session_id: Annotated[str | None, Field(
             # 🔴 **本仓先于后端上是有意的、也是安全的**：后端今天不发 usage header ⇒
             # `_parse_usage` 空 ⇒ `_with_usage` 是 no-op，402 也还不会发生。等后端开收费时
             # 这条通道已经是好的，不用两个仓卡时序。
-            billed = _billed_json(res)
+            try:
+                billed = _billed_json(res)
+            except ToolReason as e:
+                # 🔴 CI-905：零参路径**先免费建 session、后付费取链接**。余额在中间耗尽时，
+                # `_billed_json` 那句话里没有 `session_id`，函数也没有别的出口把它交出去
+                # ⇒ 用户充值后重问，模型只能再走一次零参路径，**又建一个 session**，
+                # 前一个成为孤儿行。把 id 说出来，重试就能复用它。
+                # ⚠️ 只在 `built_here` 时补：调用方自己传 id 的那条路上什么都没丢，
+                # 多说一句只是噪音。
+                if built_here:
+                    raise ToolReason(
+                        f"{e} Your report session `{session_id}` was already created "
+                        f"before the charge failed — once topped up, call "
+                        f'get_audit_report(session_id="{session_id}") to finish it, '
+                        f"rather than asking again (that would build a second session)."
+                    ) from e
+                raise
             relative = billed["url"]
 
         full_url = relative if str(relative).startswith("http") else f"{API_URL}{relative}"
