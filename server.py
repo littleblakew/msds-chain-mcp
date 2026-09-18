@@ -1636,14 +1636,22 @@ async def _direct_compliance(chemical: str, regions: list[str],
     """POST /api/v2/compliance — direct rule engine, no LLM.
 
     🔴 CI-361：`lang` 此前发的是模块级 `LANG`（服务端环境变量，托管网关上**恒 `en`**）
-    ⇒ 调用方说什么语言都没用。与 `_direct_storage` 等已挂 lang 的工具形状对齐：
-    归一化放在我们这一层，后端只认 `_BACKEND_LANGS`。
+    ⇒ 调用方说什么语言都没用。
+
+    🔴 写法必须逐字是 `_normalize_lang(lang or LANG)` —— **归一化要盖住 `LANG` 那一侧**，
+    不是只盖住调用方给的值。`MSDS_LANG` 被配成后端不认的值时，**只归一化调用方那一侧、
+    让 `LANG` 直通**的写法会把那个非法值原样转发，而别的工具都会把它夹成 `en`。
+    ⚠️ 今天 `LANG` 恒 `en` 所以两种写法行为相同 ——**这正是它不会被任何测试抓到的原因**。
+    守卫 `test_ci356_lang_param.py::test_lang_forwarding_has_exactly_one_spelling`
+    钉住只能有这一种拼写。
+    🔴 上面那个反例**故意不写成可执行的字面量**：全量替换会命中散文里的反例并把它改成反的，
+    而散文那一半不会有任何东西报错（命中代码会立刻炸，命中反例只是那句话从此是假的）。
     """
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         res = await client.post(
             f"{API_URL}/api/v2/compliance",
             json={"chemical": chemical, "regions": regions,
-                  "lang": _normalize_lang(lang) if lang is not None else LANG},
+                  "lang": _normalize_lang(lang or LANG)},
             headers=_headers(),
         )
         return _billed_json(res)

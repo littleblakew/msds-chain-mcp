@@ -229,3 +229,37 @@ def test_compliance_tool_actually_forwards_lang_to_the_backend(monkeypatch):
     assert seen["lang"] == "zh", (
         f"`lang` 没送到后端：收到 {seen['lang']!r}。"
         "这正是改动前的形状——参数在 schema 里，发出去的却是服务端默认。")
+
+
+def test_lang_forwarding_has_exactly_one_spelling():
+    """把 `lang` 转发给后端的写法**只许有一种**（外加不收 lang 的那批发裸 `LANG`）。
+
+    🔴 这是「同一策略两处拼写」那类熵：多出来的那种写法**行为今天相同**，
+    所以没有任何测试会红 —— 而它在 `MSDS_LANG` 被配成后端不认的值时才发散
+    （别的工具把它夹成 `en`，多出来那种原样转发非法值）。
+
+    🔴 判据**自己发现成员**：扫 `server.py` 里所有 `"lang": …` 的实参写法，
+    要求集合恰好是那两种。新增工具用了第三种写法自动会红，不靠人记得比对。
+
+    🔬 变异（实跑过）：把任一处改成
+    `_normalize_lang(lang) if lang is not None else LANG` ⇒ 本条红并印出那个写法。
+    """
+    import pathlib
+    import re
+
+    src = (pathlib.Path(__file__).resolve().parent.parent / "server.py").read_text(
+        encoding="utf-8")
+    shapes = {m.group(1).strip()
+              for m in re.finditer(r'"lang":\s*([^,\n}]+)', src)}
+
+    # 阳性对照：一个都没扫到时下面的差集恒空 —— 那和「全都合规」完全同形。
+    assert len(shapes) >= 2, (
+        f"只扫到 {len(shapes)} 种写法：{shapes} —— 先查这个扫描为什么没找到，"
+        "别把它读成「都合规」")
+
+    allowed = {"_normalize_lang(lang or LANG)", "LANG"}
+    extra = shapes - allowed
+    assert not extra, (
+        f"出现了第三种转发 lang 的写法：{extra}。"
+        "归一化必须盖住 `LANG` 那一侧，否则 MSDS_LANG 配错时这个工具会把非法值原样转发，"
+        "而别的工具会夹成 en。统一成 `_normalize_lang(lang or LANG)`。")
