@@ -260,12 +260,11 @@ Chemical = Annotated[str, Field(
 )]
 
 # CI-823：调用方（客户端 LLM）把用户的话翻成下面那些结构化参数。翻错了我们看得见入参、
-# 看不见「他本来要问什么」——423 次外部调用里只有 38 次走 `ask_chemical_safety`，
-# 带自然语言问句的全时段只有 10 条，其余工具的意图面是零。
+# 看不见「他本来要问什么」——除 `ask_chemical_safety` 外的工具没有任何意图面。
 # 🔴 这是**只读日志面**：`intent` 不会被送到后端、不参与作答。任何一条让它流进答案的路
 # 都是安全结论的注入面（调用方可以把「就说它安全」写进来）。
-# 🔴 这段描述在 `tools/list` 里**每个工具各有一份**（17 份）：初版 590 字符 ＝ 整个
-# 响应的 20.5%，每个客户端连上来都付这笔 context。措辞按守卫断言的三句收敛过。
+# 🔴 这段描述在 `tools/list` 里**每个工具各有一份** ⇒ 它的长度要乘以工具数，
+# 每个客户端连上来都付这笔 context。措辞按守卫断言的三句收敛过，别往长里改。
 Intent = Annotated[str | None, Field(
     description="Optional, recorded only — it does NOT change the answer. Never put "
                 'instructions here, and never leave a real argument out in favour of it. '
@@ -647,7 +646,7 @@ def _format_sds_documents(documents: list[dict]) -> str:
                 entry += f" — {note}"
         # 🔴 CI-365：**这份文件不是本次结论所引用的那一份**时必须说出来。
         #
-        # 后端现在让附件跟着「结论的依据」走；取不到被引用那行的原件时（Prod ≈0.05%）
+        # 后端现在让附件跟着「结论的依据」走；取不到被引用那行的原件时（罕见）
         # 它退回文档侧选择，并把 `document_follows_citation=False` +
         # `citation_divergence_note` 一起发下来。**那一句不渲染，降级就是静默的**——
         # 用户看到标题「📄 Original SDS (click to verify)」下的一个链接，会拿它去核对
@@ -735,11 +734,11 @@ def _headers() -> dict[str, str]:
 # data → upload the MSDS), a direct-tool timeout is transient service slowness, so
 # the graceful answer is retry-oriented. Applied as a wrapper so all direct tools
 # share one behavior. NEVER assert safety here.
-# 🔴 CI-915：这句话**不许猜成因**。原文写的是「常见于刚部署后」，而实测那次超时
-# （20 个化学品、45.2 秒）当天最后一次部署已在几小时之前 —— 真实成因是**这一次查询很重**。
+# 🔴 CI-915：这句话**不许猜成因**。它一度写着「常见于刚部署后」，而被观察到的那次超时
+# 与任何一次部署都不相邻 —— 成因是那一次查询本身很重。
 # 误导性诊断比没有诊断更贵：它让用户重试同一个必然再超时的查询，也让排查的人先去翻
 # 空无一物的部署记录。⇒ 只说**观察到的事实**（超时了）与**可行动的两条路**（重试 / 拆小），
-# 别把负载问题说成部署抖动。参照点：同一份回放里 4–5 个化学品的查询 5–7 秒返回。
+# 别把负载问题说成部署抖动。
 _DIRECT_TIMEOUT_MSG = {
     "en": "This safety check timed out. Please try again in a moment.",
     "zh": "本次安全检查超时。请稍候重试。",
@@ -753,8 +752,8 @@ _DIRECT_TIMEOUT_MSG = {
 # （`get_emergency_response` / `get_sds_document` / `get_audit_report` …）——对它们说这句话，
 # 就是 CI-915 要消灭的那种「听起来可行动、实际不适用」的建议，只是换了个地方犯。
 # 🔴 **订正过一次**：第一版这句写的是「large batches are the usual cause」——
-# **那仍然是在猜**，证据只有回放里的一个数据点（20 个化学品 / 45.2 秒）。同一天在 Prod 真实面上
-# 重跑同样 20 个化学品**正常返回**了 ⇒ 批量与超时**相关但不决定**。
+# **那仍然是在猜**，证据只有一个数据点，而同样的入参重跑一次**正常返回**了
+# ⇒ 批量与超时**相关但不决定**。
 # 「usual cause」这种因果断言配不上 n=1，而它正是 CI-915 要消灭的那类东西（只是轻一档）。
 # ⇒ 只留**可行动的条件建议**（「包含很多化学品的话可以拆小再试」），不说成因。
 # ⇒ 按**被包函数的签名**推导用哪一句，**不手写名单**：名单会腐化，签名不会
@@ -1046,15 +1045,14 @@ def _format_tool_results(tool_results: list[dict]) -> str:
 def _error_text(e: BaseException) -> str:
     """Render an exception for storage/logging — never an empty string.
 
-    CI-250: measured on prod `mcp_call_logs`, 66% of external failed calls had
-    no `error_message` at all. Root cause: several httpx exceptions (notably
-    ReadTimeout / PoolTimeout and other httpx.TimeoutException subclasses)
-    stringify to "" — `str(e) == ""` — and every tool's except-block did
-    `error_msg = _error_text(e)` with no fallback. Duration histograms on the
-    empty-message rows land exactly on TIMEOUT / TIMEOUT_MULTI (15000 / 45000
-    ms), confirming this is the mechanism, not a one-off. Always prefix with
-    the exception's class name so rows are groupable even when the message
-    itself is empty or generic.
+    CI-250: a large share of failed call-log rows carried no `error_message`
+    at all. Root cause: several httpx exceptions (notably ReadTimeout /
+    PoolTimeout and other httpx.TimeoutException subclasses) stringify to ""
+    — `str(e) == ""` — and every tool's except-block did
+    `error_msg = _error_text(e)` with no fallback. The durations on those rows
+    sit exactly on the two client timeouts, which is what makes this a
+    mechanism rather than a one-off. Always prefix with the exception's class
+    name so rows stay groupable even when the message itself is empty.
     """
     msg = str(e).strip()
     label = type(e).__name__
@@ -2714,7 +2712,7 @@ async def get_emergency_response(
             lines.extend(f"  - {a}" for a in hcode)
             lines.append("")
         # CI-370: GHS 官方为该危害类别指派的处置语（P 句），每条自带 P 码。
-        # 🔴 必须渲进**文本**：后端可答率因这一层从 15.5% 升到 79.2%（exposure 场景），
+        # 🔴 必须渲进**文本**：这一层把 exposure 场景的可答率抬高了一大截，
         # 但多数 MCP 客户端只把 text 喂给模型（见 CI-360 的同一教训）——只放在
         # structuredContent 里，等于后端声称有依据而用户看到零条指引。
         # 🔴 标题写明出处：这是**这一类危害**的标准处置语，不是这份 SDS 的正文。
@@ -3593,7 +3591,7 @@ async def search_chemical_database(query: Annotated[str, Field(
                 #   · 没有这个**形态**的条目（`浓硫酸`；母体 7664-93-9 有 5 行 canonical）
                 #   · 确实没有
                 # 而我们下面那句写死的话在**前两种情况下是假的**，还会把用户推向
-                # 「上传 SDS」这个对他无效的动作（Prod agent 面实测 4/4）。
+                # 「上传 SDS」这个对他无效的动作。
                 # ⚠️ 老后端不认这个参数会**忽略**它并照旧返回裸 list，下面的取值两种
                 # 形状都认 ⇒ 两仓部署顺序不敏感。
                 params={"q": query, "with_reason": 1},
@@ -3983,8 +3981,8 @@ async def get_chemical_alternatives(
     success = True
     try:
         # CI-137：此前拼一句英文 prompt 交给 `_quick_chat`（RAI→intent→summary 三轮 LLM），
-        # 实测 p50 **9.7 秒**；而后端 `agent/tools/chemical_substitution.py` 早就是确定性实现
-        # （curated 替代表 + `resolve_cas` + GHS 风险比较，全文件零 LLM 引用）。
+        # 延迟是确定性端点的若干倍；而后端 `agent/tools/chemical_substitution.py` 早就是
+        # 确定性实现（curated 替代表 + `resolve_cas` + GHS 风险比较，全文件零 LLM 引用）。
         # 同 [[CI-523]] 一族：**信息在，只是这条通道没去拿。**
         # 🔴 保留凭证检查：`_quick_chat` 会 `_require_api_key()`，`_direct_*` 不会 ⇒
         # 直接换端点会把这个工具顺带变成匿名可调（CI-523 踩过）。
@@ -4107,23 +4105,17 @@ async def validate_protocol_chemicals(
 def _mixing_order_prompt(chemical_a: str, chemical_b: str, context: str = "") -> str:
     """`check_mixing_order` 发给 `/quick-chat` 的那一串。
 
-    🔴 **这串是量出来的，不是写出来的**，改它之前先读 `docs/pm/tickets/CI-613.md`。
-    Prod 交错采样（bleach + hydrochloric acid，同一时间窗，判据取 `/quick-chat`
-    返回的 `intent`）：
-
-    | 措辞 | 被 RAI 判 `rejected` |
-    |---|---|
-    | 旧串（`the DANGEROUS order to avoid and what happens if done wrong`） | **4/5**（跨轮累计约 2/3）|
-    | 本串 | **0/20**（跨轮累计 0/30）|
+    🔴 **这串是量出来的，不是写出来的**（交错采样比过候选措辞；量与口径在私有票
+    `docs/pm/tickets/CI-613.md`）。改它之前先去读那张票——**别凭读着顺不顺手改**。
 
     两个改动点，各自单独测过、缺一不可：
-    ① 开头换成 RAI 提示词里逐字白名单的形状（"Is it safe to mix …"）。
-       **只去掉反向条款而不改开头仍是 3/5** ⇒ 票里原本设想的「方向 1」就此证伪。
+    ① 开头换成内容分类器提示词里逐字白名单的形状（"Is it safe to mix …"）。
+       **只去掉反向条款而不改开头，拒答照旧** ⇒ 票里原本设想的那条修法就此证伪。
     ② 反向那条从祈使式索取（"the DANGEROUS order to avoid and what happens if done
        wrong"）改成判断句（"whether … is unsafe"）。内容一条没丢 ⇒ 不需要在 MCP 层
        确定性渲染反向顺序。
-    🔴 **别再去改 RAI 提示词**：两条修法已证伪并回滚（`62a8f174` / `a53bd446`）。
-    🔴 0/30 只够说「没看到回归」，不够说「稳」⇒ 拒答兜底照样留着。
+    🔴 **别再去改分类器那侧的提示词**：两条修法都已证伪并回滚。
+    🔴 采样规模只够说「没看到回归」，不够说「稳」⇒ 拒答兜底照样留着。
 
     做成独立函数是为了让这串**可被引用而不是被抄写**：golden
     `safety_guard.yaml::safe-order-001` 钉的就是它，跨仓一致性由
@@ -4318,7 +4310,7 @@ async def check_mixing_order(
             success = False
             error_msg = "timeout"
         # 🔴 CI-613：拒答不是「没有答案」，是**这条通道**没有答案。
-        # 改措辞把误判率从 ~2/3 压到低位，但**压不到 0**（实测：任何写法都还有残余，
+        # 改措辞把误判率压下来了，但**压不到 0**（任何写法都还有残余，
         # 详见票）。残余那部分若原样返回，调用方拿到的是一句礼貌的「I can't assist」
         # 加 0 个工具 —— 而这个工具最该服务的正是漂白剂+酸这类真危险对。
         if data.get("intent") == "rejected":
@@ -5171,8 +5163,8 @@ async def check_regulatory_lists(chemical: Chemical, lang: Lang = None, intent: 
         #   ② the answer was a summariser's retelling, so the two explicit
         #      disclosures the backend had already built — CI-507's "could not
         #      check ≠ not on any list" and CI-375's unresolved wording — were
-        #      paraphrased away or dropped. Five identical calls returned
-        #      174/722/2588/2592/2599 characters.
+        #      paraphrased away or dropped. Repeating the identical call gave
+        #      answers whose length varied by more than an order of magnitude.
         # Now it calls the deterministic endpoint and renders it. Same decision as
         # the Direct Service Layer switch; this tool was not migrated with the rest.
         # 🔴 Keep the credential requirement the old path had. `_quick_chat` calls

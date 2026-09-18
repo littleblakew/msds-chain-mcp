@@ -1,15 +1,15 @@
 """CI-370: GHS 官方处置语（P 句）必须出现在**文本**里，不能只躺在 structuredContent。
 
 后端 CI-370 给 `emergency_response` / `storage_guidance` 加了第四种依据 —— GHS 官方
-为该危害类别指派的处置语（P 句），每条自带 P 码。可答率因此从 15.5% 升到 79.2%
-（exposure 场景，Prod 全量 72,426 条）。
+为该危害类别指派的处置语（P 句），每条自带 P 码。它把 exposure 场景的可答率抬高了
+一大截（量与口径在私有票里）。
 
 **但这一面此前只渲染旧键** ⇒ `precaution_actions` / `precaution_conditions` 只活在
 `structuredContent` 里，而本文件（见 CI-360 那份注释）已经写明「多数 MCP 客户端只把
 text 喂给模型」。后果：后端报 `data_source: ghs_precautionary`、
 `insufficient_hazard_data: false`（声称有依据），而真实 MCP 客户端看到的文本里
 **零条可见指引** —— 正是 CI-360/CI-243 要消灭的形状，只是挪到了渲染层。
-也意味着这一整票的收益，唯一深度活跃的真实 MCP 用户根本吃不到。
+⇒ 后端那一整票的收益，在这条通道上等于没发生。
 
 🔴 第二个判据（比「有没有渲染」更重要）：**出处必须在文本里说清**。
 P 句是 GHS 对**这一类危害**的标准处置语，不是这份 SDS 的正文。两者混在一起渲染，

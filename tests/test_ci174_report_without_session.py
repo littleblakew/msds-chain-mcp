@@ -1,8 +1,8 @@
 """CI-174：报告不能只在「你手上已经有 session_id」时才拿得到。
 
-实测过：`batch_safety_check` **从上线那天起**就在输出尾部写着「要签名 PDF 报告就调
-`create_audit_session`」，而它在外部调用上的转化是 **0**。所以缺的不是又一句提示，
-是**那一步本身**：拿报告要先有一个 session_id，而用户手上从来没有。
+`batch_safety_check` **从上线那天起**就在输出尾部写着「要签名 PDF 报告就调
+`create_audit_session`」，而那句提示**从来没有把任何人带到下一步**。所以缺的不是
+又一句提示，是**那一步本身**：拿报告要先有一个 session_id，而用户手上从来没有。
 
 改法：`get_audit_report()` 可以不带参数，用后端记着的「这个人最近分析过什么」把 session
 建出来。判据钉三件事——不带参数时**真的**建了并出了报告 · 没有可报告的东西时**不建空 session**
@@ -157,7 +157,7 @@ def test_session_id_is_optional_in_the_schema():
 
 
 def test_batch_hint_points_at_the_zero_argument_call():
-    """那句转化为 0 的提示必须改口——它此前指的正是用户做不到的那一步。
+    """那句没人跟进的提示必须改口——它此前指的正是用户做不到的那一步。
 
     仍然只挂在 `batch_safety_check` 一个工具上：同一个工具、同样的曝光、只变「两步→一步」
     这一个变量，下一轮才读得出是不是这一步的问题。
