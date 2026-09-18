@@ -1631,12 +1631,19 @@ async def _direct_emergency(chemical: str, scenario: str, lang: str | None = Non
         return _billed_json(res)
 
 
-async def _direct_compliance(chemical: str, regions: list[str]) -> dict:
-    """POST /api/v2/compliance — direct rule engine, no LLM."""
+async def _direct_compliance(chemical: str, regions: list[str],
+                             lang: str | None = None) -> dict:
+    """POST /api/v2/compliance — direct rule engine, no LLM.
+
+    🔴 CI-361：`lang` 此前发的是模块级 `LANG`（服务端环境变量，托管网关上**恒 `en`**）
+    ⇒ 调用方说什么语言都没用。与 `_direct_storage` 等已挂 lang 的工具形状对齐：
+    归一化放在我们这一层，后端只认 `_BACKEND_LANGS`。
+    """
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         res = await client.post(
             f"{API_URL}/api/v2/compliance",
-            json={"chemical": chemical, "regions": regions, "lang": LANG},
+            json={"chemical": chemical, "regions": regions,
+                  "lang": _normalize_lang(lang) if lang is not None else LANG},
             headers=_headers(),
         )
         return _billed_json(res)
@@ -2332,7 +2339,7 @@ async def check_regulatory_compliance(
         description='Region codes to check. Valid codes: "EU", "US", "CN", "JP", "KR", '
                     '"CA", "AU", "TW". Omit to check EU + US (the default pair) — the '
                     'response says explicitly which regions were used.',
-    )] = None, intent: Intent = None,
+    )] = None, lang: Lang = None, intent: Intent = None,
 ) -> str:
     """
     Check multi-region regulatory status for chemicals. Answers TWO separate questions
@@ -2388,7 +2395,7 @@ async def check_regulatory_compliance(
         _usage_reason = ""
         _saw_usage = False
         for chemical in chemicals:
-            data = await _direct_compliance(chemical, effective_regions)
+            data = await _direct_compliance(chemical, effective_regions, lang)
             _u = data.pop("_usage", None)  # strip internal key from stored per-chemical result
             if _u:
                 _saw_usage = True

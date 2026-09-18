@@ -2,8 +2,8 @@
   "_ticket": "CI-848",
   "_why": "外部客户端拿到的是工具面的**快照**：ChatGPT 应用目录条目在 Scan Tools 时拍一份（官方原话 Published plugins do not update those skills live），claude.ai 在添加连接器时拍一份。平台都不会告诉我们条目过期了，所以这份基线＝上一次有人**看过并接受**的工具面。",
   "_how_to_update": "改动被接受后跑 scripts/export_tool_surface.py，并手工核对下面两个日期字段。",
-  "last_reviewed": "2026-09-04",
-  "chatgpt_listing_resubmitted_at": null,
+  "last_reviewed": "2026-09-18",
+  "chatgpt_listing_resubmitted_at": "2026-09-04",
   "tools": {
     "check_chemical_compatibility": {
       "required": [
@@ -29,6 +29,7 @@
       ],
       "optional": [
         "intent",
+        "lang",
         "regions"
       ]
     },
