@@ -84,3 +84,13 @@ def test_scenario_description_tells_the_client_person_first():
     assert "spilled" in desc and "exposure" in desc, (
         "必须点名『用户说 spilled 但接触到人时仍选 exposure』这个具体误判，"
         f"泛泛说一句『按最接近的选』挡不住它：{desc!r}")
+    # 🔴 CI-1020：第二个具体误判，与上面那条**并列**、各钉各的一句。
+    # 形状：「I got burned by <化学品>」这一族。后端那面的分类器把它落到默认档，
+    # 因为 burn/burned/burnt 不在任何一张场景词表里；而 `burning` 属于 fire 一侧
+    # ⇒ **「烧起来了」与「灼伤」互相偷**。后端那半已单独修（正则加了一条人身锚定的判据）。
+    # 这一面的分类器是客户端模型 ⇒ **只能靠措辞**，且必须同时划清 fire 那一侧，
+    # 否则把真燃烧也吸成 exposure —— 那是修这条时自己新开的失效方向。
+    # 变异：把 description 里 burn 那两句删掉 ⇒ 本断言红。
+    assert "burn" in desc, f"没点名「人身灼伤是 exposure」这个误判：{desc!r}"
+    assert "combusting" in desc, (
+        f"只说 burn 是 exposure 会把真火灾也吸过来，必须划清 fire 那一侧：{desc!r}")

@@ -2637,7 +2637,10 @@ async def get_emergency_response(
                     'it on my hand" is "exposure", not "spill". Only "exposure" returns the '
                     'substance-specific first-aid protocol (e.g. the calcium gluconate protocol '
                     'for hydrofluoric acid); picking "spill" for a contact incident silently '
-                    'returns cleanup guidance instead of the antidote.',
+                    'returns cleanup guidance instead of the antidote. '
+                    '🔴 CI-1020 — A BURN ON A PERSON IS "exposure", NOT "fire": '
+                    '"I got burned by HF", "it is burning my hand", "chemical burn on my arm" '
+                    'are all "exposure". Use "fire" only when something is actually combusting.',
     )] = "spill",
     lang: Lang = None, intent: Intent = None,
 ) -> str:
