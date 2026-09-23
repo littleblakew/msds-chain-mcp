@@ -1,0 +1,707 @@
+{
+  "_ci822": "本仓是 PUBLIC。这份文件只含后端 /api/v2 契约中**本仓真的调用的那些端点**；后端的内部工具注册表面**刻意不在这里**，见 scripts/refresh_backend_surface.py 的模块 docstring。",
+  "endpoints": [
+    {
+      "body_params": {
+        "chemicals": {
+          "items_type": "string",
+          "required": true,
+          "type": "array"
+        },
+        "lang": {
+          "required": false,
+          "type": "string"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/batch-safety",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    },
+    {
+      "body_params": {
+        "chemical": {
+          "required": true,
+          "type": "string"
+        },
+        "lang": {
+          "required": false,
+          "type": "string"
+        },
+        "use_case": {
+          "required": false,
+          "type": "string"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/chemical-alternatives",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    },
+    {
+      "body_params": {
+        "chemical": {
+          "required": true,
+          "type": "string"
+        },
+        "region": {
+          "required": false,
+          "type": "string"
+        },
+        "supplier": {
+          "required": false,
+          "type": "string"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/compare-sds-versions",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    },
+    {
+      "body_params": {
+        "chemicals": {
+          "items_type": "string",
+          "required": true,
+          "type": "array"
+        },
+        "lang": {
+          "required": false,
+          "type": "string"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/compatibility/check",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    },
+    {
+      "body_params": {
+        "chemical": {
+          "required": true,
+          "type": "string"
+        },
+        "lang": {
+          "required": false,
+          "type": "string"
+        },
+        "regions": {
+          "items_type": "string",
+          "required": false,
+          "type": "array"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/compliance",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    },
+    {
+      "body_params": {
+        "chemical": {
+          "required": true,
+          "type": "string"
+        },
+        "lang": {
+          "required": false,
+          "type": "string"
+        },
+        "scenario": {
+          "required": false,
+          "type": "string"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/emergency-response",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    },
+    {
+      "body_params": {
+        "chemicals": {
+          "items_type": "string",
+          "required": true,
+          "type": "array"
+        },
+        "lang": {
+          "required": false,
+          "type": "string"
+        },
+        "region": {
+          "required": false,
+          "type": "string"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/exposure-limits",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    },
+    {
+      "body_params": {
+        "cas_number": {
+          "required": false,
+          "type": "string"
+        },
+        "chemical_name": {
+          "required": false,
+          "type": "string"
+        },
+        "lang": {
+          "required": false,
+          "type": "string"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/online-search",
+      "query_params": {}
+    },
+    {
+      "body_params": {
+        "chemicals": {
+          "items_type": "string",
+          "required": true,
+          "type": "array"
+        },
+        "lang": {
+          "required": false,
+          "type": "string"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/ppe-recommendation",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    },
+    {
+      "body_params": {},
+      "method": "GET",
+      "path": "/api/v2/recent-chemicals",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "days": {
+          "in": "query",
+          "required": false,
+          "type": "integer"
+        },
+        "limit": {
+          "in": "query",
+          "required": false,
+          "type": "integer"
+        }
+      }
+    },
+    {
+      "body_params": {
+        "chemical": {
+          "required": true,
+          "type": "string"
+        },
+        "lang": {
+          "required": false,
+          "type": "string"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/regulatory-lists",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    },
+    {
+      "body_params": {
+        "chemicals": {
+          "items_type": "string",
+          "required": true,
+          "type": "array"
+        },
+        "lang": {
+          "required": false,
+          "type": "string"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/risk-warnings",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    },
+    {
+      "body_params": {},
+      "method": "GET",
+      "path": "/api/v2/sds-document-url",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "chemical": {
+          "in": "query",
+          "required": true,
+          "type": "string"
+        },
+        "lang": {
+          "in": "query",
+          "required": false,
+          "type": "string"
+        }
+      }
+    },
+    {
+      "body_params": {
+        "chemical": {
+          "required": true,
+          "type": "string"
+        },
+        "lang": {
+          "required": false,
+          "type": "string"
+        },
+        "section": {
+          "required": true,
+          "type": "integer"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/sds-section",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    },
+    {
+      "body_params": {
+        "chemicals": {
+          "items_type": "string",
+          "required": true,
+          "type": "array"
+        },
+        "lang": {
+          "required": false,
+          "type": "string"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/storage-guidance",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    },
+    {
+      "body_params": {
+        "chemicals": {
+          "items_type": "string",
+          "required": true,
+          "type": "array"
+        },
+        "lang": {
+          "required": false,
+          "type": "string"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/transport-classification",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    },
+    {
+      "body_params": {
+        "chemicals": {
+          "items_type": "string",
+          "required": true,
+          "type": "array"
+        },
+        "lang": {
+          "required": false,
+          "type": "string"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/waste-disposal",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    }
+  ],
+  "source": {
+    "api_v2_endpoint_count": 18,
+    "api_v2_sha256": "570950d3f13e59800afd2fc74cffec62466b633c54f21cfbaacb11eaf78011d9",
+    "backend_commit": "4303ff6a22426b22cd0933976d3354738b06c02a",
+    "kept": 17,
+    "refreshed_at": "2026-09-23"
+  }
+}
