@@ -17,18 +17,24 @@
 裁剪会把「本仓不调用的端点」丢掉，所以后端新增这类端点时，裁完再哈希是**不变**的
 ——「后端动过」会被自己的裁剪吃掉。
 
-## 变异（🔴 没记变异的守卫默认当它不存在；六条都实跑过）
+## 变异（🔴 没记变异的守卫默认当它不存在；八条都实跑过）
 
 | 测试 | 什么改动会让它红 |
 |---|---|
 | `test_every_called_endpoint_is_in_the_contract` | 往 `server.py` 加一个调用契约里没有的端点 |
 | `test_no_phantom_params` | 给某个 `_direct_*` 的 `json={}` 加一个后端没声明的键 |
+| `test_required_params_are_supplied` | 后端给某个已存在端点**加一个必填参数**，刷新后 `server.py` 没跟 |
 | `test_vendored_copy_carries_no_internal_surface` | 刷新脚本不裁剪，整份后端文件原样写进 vendored |
 | `test_vendored_copy_holds_nothing_we_do_not_call` | 同上（裁剪边界那一半） |
-| `test_backend_has_not_moved_since_we_vendored` | ①后端侧新增一个成员 ②把 vendored 的戳改旧 ③把戳整个删掉 |
+| `test_backend_has_not_moved_since_we_vendored` | ①后端**新增**一个端点 ②后端**改动已有**端点的契约 ③把 vendored 的戳改旧 ④把戳整个删掉 |
 
-🔴 最后一行**三条都要**：「后端动了」「我们没刷新」「从没刷新过」是三种不同的坏法，
-而在只比内容的守卫里它们**同形**——那正是 vendored 分发的固有失效方向。
+🔴 最后一行四条缺一不可，因为它们是四种不同的坏法：
+- ①**清单多了一个** —— 会被本仓的裁剪丢掉 ⇒ **只有契约层的话，这条变异什么都测不出来**。
+  这正是比对键必须选「后端未裁剪的全量 sha」的原因。
+- ②**已有成员的契约变了** —— 清单一个字不变，**任何「只保留已知成员」的裁剪都留得住它**，
+  所以它同时点亮契约层（刷新之后 `test_required_params_are_supplied` 会指名那个新必填参数）。
+  ⇒ ①②方向相反，**只造其中一条会漏掉整整一侧**。
+- ③漂了 / ④**从没刷新过** —— 在只比内容的守卫里**同形**，那是 vendored 分发的固有失效方向。
 """
 from __future__ import annotations
 
