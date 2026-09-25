@@ -241,20 +241,41 @@ The hosted endpoint serves **both** transports — streamable HTTP (`/mcp`, pref
 5. HTTP Headers：`Authorization` : `Bearer sk-msds-your-key`
 6. 点击「添加」
 
-### Gemini
+### Gemini CLI
 
-**Gemini CLI** — install the extension (bundles the hosted server; OAuth on first use):
+Listed in the [Gemini CLI extensions gallery](https://geminicli.com/extensions/). Install it with:
 
 ```bash
 gemini extensions install https://github.com/littleblakew/msds-chain-mcp
 ```
 
-**Gemini app (gemini.google.com)** — Settings → Connected Apps → Custom apps →
-Add a custom app → `https://mcp.lagentbot.com/mcp`. Personal Google accounts only;
-work/school accounts cannot add custom MCP servers.
+Gemini asks you to confirm twice: once to trust the workspace, once to review the
+extension and the agent skill it carries. Installing it gives you two things:
 
-**Gemini Enterprise** — add a custom MCP server data store pointing at the same
-streamable HTTP endpoint.
+* the hosted MCP server at `https://mcp.lagentbot.com/mcp` (remote, nothing runs locally)
+* the `msds-safety-check` skill, which prompts Gemini to run a safety check when you
+  are working through an experimental procedure
+
+**Signing in.** Your first chemical question starts the sign-in automatically. Gemini
+opens a browser, you enter your email, and you paste back the code we send you. There
+is no API key to create beforehand and no credentials to fill in by hand: the server
+supports Dynamic Client Registration, so Gemini registers itself and completes the
+OAuth exchange on its own. A free account includes a monthly allowance.
+
+Check that it connected:
+
+```bash
+gemini mcp list
+```
+
+Then just ask, in chat:
+
+```
+Can acetone and sodium hypochlorite be stored in the same cabinet?
+```
+
+Gemini picks the right tool for the question. Every answer names the supplier SDS it
+came from, with a link to the original PDF.
 
 ### Dify / Coze / other platforms
 
