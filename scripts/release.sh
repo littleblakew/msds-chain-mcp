@@ -47,15 +47,14 @@ perl -0pi -e 's/^__version__ = "[^"]*"/__version__ = "'"$VERSION"'"/m' server.py
 
 # JSON manifests: every "version" key in each file is the release version.
 # (verified: no manifest carries an unrelated "version" field to protect.)
-JSON_MANIFESTS=(
-  npm-package/package.json
-  npm-package/server.json
-  plugin.json
-  .claude-plugin/plugin.json
-  .claude-plugin/marketplace.json
-  .codex-plugin/plugin.json
-  .agents/plugins/marketplace.json
+# CI-1091: the list lives in release_metadata.py so this STAMPER and the GUARD
+# (tests/test_version.py) read the same one. It used to be spelled out in both
+# files; a manifest added to only one was silently never stamped.
+JSON_MANIFESTS=()
+while IFS= read -r line; do JSON_MANIFESTS+=("$line"); done < <(
+  python -c "import release_metadata as rm; print(chr(10).join(rm.JSON_MANIFESTS))"
 )
+[[ ${#JSON_MANIFESTS[@]} -gt 0 ]] || { echo "❌ could not read rm.JSON_MANIFESTS" >&2; exit 1; }
 for f in "${JSON_MANIFESTS[@]}"; do
   perl -pi -e 's/"version": "[0-9]+\.[0-9]+\.[0-9]+"/"version": "'"$VERSION"'"/g' "$f"
   echo "  stamped $f"

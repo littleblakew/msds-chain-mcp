@@ -241,6 +241,21 @@ The hosted endpoint serves **both** transports — streamable HTTP (`/mcp`, pref
 5. HTTP Headers：`Authorization` : `Bearer sk-msds-your-key`
 6. 点击「添加」
 
+### Gemini
+
+**Gemini CLI** — install the extension (bundles the hosted server; OAuth on first use):
+
+```bash
+gemini extensions install https://github.com/littleblakew/msds-chain-mcp
+```
+
+**Gemini app (gemini.google.com)** — Settings → Connected Apps → Custom apps →
+Add a custom app → `https://mcp.lagentbot.com/mcp`. Personal Google accounts only;
+work/school accounts cannot add custom MCP servers.
+
+**Gemini Enterprise** — add a custom MCP server data store pointing at the same
+streamable HTTP endpoint.
+
 ### Dify / Coze / other platforms
 
 General steps:
