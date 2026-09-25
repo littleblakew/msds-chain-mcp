@@ -3559,6 +3559,12 @@ def _precursor_disclosure_block(data: dict) -> list[str]:
     return lines
 
 
+# 🔴 CI-1080：这段 docstring 曾写着「or to get the canonical CAS number for a
+# chemical name」。这个工具落在 `GET /chemicals?q=` —— listing 面，返回模糊候选
+# 是设计内的（下面 `_mismatch` / `substance_no_cas` 那几段都在解释「这一行不进
+# 判定」）。把它描述成身份解析器，消费端的模型就会把候选行当成身份结论，而
+# 判定面那条路本来是对的 ⇒ 错不在检索，在描述。
+# **别把「返回 canonical CAS」这类说法加回来**；要给身份就指向判定工具。
 @mcp.tool(annotations=ToolAnnotations(title="Search Chemical Database", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_reported
 async def search_chemical_database(query: Annotated[str, Field(
@@ -3569,12 +3575,17 @@ async def search_chemical_database(query: Annotated[str, Field(
     """
     Search the MSDS Chain database for a specific chemical.
 
-    Returns structured information: CAS number, chemical name, NFPA ratings
-    (flammability, health, reactivity), GHS classification, and whether full
-    MSDS data is available.
+    Returns a ranked list of CANDIDATE records for confirmation, each with CAS
+    number, chemical name, NFPA ratings (flammability, health, reactivity), GHS
+    classification, and whether full MSDS data is available. A candidate row is
+    not a decided identity: near-matches are expected here by design, and the
+    response says why a query resolved the way it did.
 
-    Use this to verify a chemical is in the database before running compatibility
-    or risk checks, or to get the canonical CAS number for a chemical name.
+    Use this to browse what the database holds and to pick the right record.
+    Do NOT read the top row as "the CAS number for this name". For a decided
+    identity, and for any hazard, compatibility, storage or compliance verdict,
+    call ask_chemical_safety or the corresponding judgement tool, which apply
+    the identity checks this listing surface deliberately does not.
 
     Args:
         query: Chemical name, synonym, or CAS number, e.g.
