@@ -2077,6 +2077,38 @@ def _insufficient_lines(item: dict, what: str) -> list[str]:
     return lines
 
 
+def _peroxide_former_lines(item: dict) -> list[str]:
+    """把过氧化物生成物的警告渲染进**文本**面。
+
+    🔴 **在 CI-1085 之前，`peroxide_former` 在本仓一次都没有被渲染过** —— 它只存在于
+    `structured_content` 里，而这些工具都是 `structured_output=False`、多数客户端只把
+    text 喂给模型 ⇒ 对那些用户**它等于不存在**。这与 `_form_disclosure_lines` 头部记的是
+    同一条（「后端产出 ≠ 用户看见」），那里已经栽过两次，这是第三个字段。
+    ⇒ 加新展示字段时，判据是「**它有没有进 text**」，不是「后端发了没有」。
+
+    危害是**开容器那一刻**：过氧化物结晶受摩擦或撞击可能起爆，所以那条「看见结晶就别动」
+    必须排在储存要求之前 —— 读者按顺序读，而他可能已经站在柜子前面了。
+
+    `peroxide_former_coverage_note` **只在没有分类时**渲染：后端两者都发，同时说出来
+    就成了「这是 Class B」紧跟着「我们没有这个物质的分类」，两句逐字打架，
+    而读者合理的反应是不信那条分类。（后端为什么两者都发，归 trust 线，已投递。）
+    """
+    if not isinstance(item, dict):
+        return []
+    pf = item.get("peroxide_former")
+    if not isinstance(pf, dict) or not pf:
+        note = item.get("peroxide_former_coverage_note")
+        return [f"- {note}"] if note else []
+
+    label = pf.get("class_label") or pf.get("hazard_class") or "peroxide former"
+    out = [f"- **Peroxide former:** {label}"]
+    for g in pf.get("guidance") or []:
+        out.append(f"  - {g}")
+    if pf.get("citation"):
+        out.append(f"  - Basis: {pf['citation']}")
+    return out
+
+
 def _storage_item_lines(item: dict) -> list[str]:
     """渲染一条 storage 结果。抽成函数是为了能直接测文本面——这一段的失效方式
     （渲染出一串 `N/A`）在集成测试里看起来完全正常。
@@ -2101,9 +2133,18 @@ def _storage_item_lines(item: dict) -> list[str]:
         lines.append(f"- **Cabinet color:** {item.get('cabinet_color', 'N/A')}")
         lines.append(f"- **Recommended cabinet:** {item.get('recommended_cabinet', 'N/A')}")
         lines.append(f"- **Temperature:** {item.get('temperature_requirement', 'N/A')}")
+    lines.extend(_peroxide_former_lines(item))
     reqs = item.get("storage_requirements", [])
     if reqs:
-        lines.append("- **Storage requirements:** " + "; ".join(str(r) for r in reqs))
+        # 🔴 CI-1085：**一条一行，不要再用 `"; ".join` 拼成一个长句**。
+        # 这个列表里混着两种东西：几条按危害类别推的通用要求（「与碱、氧化剂分开」），
+        # 和偶尔出现的一条**「我判不出来，别据此做某事」**（酸碱未定时后端发的那句）。
+        # 拼成一行之后，后者是七项里的一项，而下游模型是在**转述**这一行而不是照抄它
+        # ⇒ 它被概括掉的时候，读者看到的是一份读起来很完整、只是少了那句告诫的答案。
+        # 观察到的形状：酸碱未定那句没有到达用户，而模型替它补了一个更像样的柜型。
+        # 一条一行不保证模型一定转述，但它不再是**一个句子里的一个从句**。
+        lines.append("- **Storage requirements:**")
+        lines.extend(f"  - {r}" for r in reqs)
     # CI-370：GHS 官方存储段处置语（通风/密闭/阴凉/避光/上锁），每条带 P 码。
     # 与上面的 storage_requirements 分开渲染：那是按危害类别推的柜型/温度要求，
     # 这是官方指派语 —— 出处不同，别混成一段（同 get_emergency_response）。

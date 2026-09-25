@@ -61,6 +61,7 @@ ALLOWED_CAS = {
     "7681-52-9":  "sodium hypochlorite",
     "7664-93-9":  "sulfuric acid",
     "7440-00-0":  "nickel",
+    "67-63-0":    "isopropyl alcohol",
     "1234-56-7":  "(占位号，故意不是真的)",
     "99999-08-0": "(占位号，故意不是真的)",
 }
