@@ -4188,8 +4188,20 @@ async def _mixing_order_grounded_fallback(
             f"  Basis (rule): {pair.get('source', 'unknown')}"
         )
         if level == "incompatible":
-            lines.append("  ⚠️ There is **no safe addition order** for an incompatible pair — "
-                         "do not combine them in either direction.")
+            # 🔴 CI-1078：这里原来写「There is **no safe addition order** … do not combine
+            # them in either direction.」——与 `_order_scope_note` 同一个外推，而这条路
+            # **同时和自己的表头矛盾**（表头逐字写着 "Addition order: NOT determined."）。
+            # 登记表的单位是「能不能共存」，没有顺序维度 ⇒ 说不出「不存在安全的顺序」。
+            # 🔴 这条路比另一条更该修，不是更不该：它只在 RAI 拒答时才走，
+            # 而触发拒答的恰恰是**真危险对**（CI-613），也就是最可能来自真实工艺的提问。
+            lines.append("  ⚠️ INCOMPATIBLE for coexistence — do not combine them outside a "
+                         "documented, engineered procedure. **No addition order has been "
+                         "determined — in either direction**: the registry has no order "
+                         "dimension. An incompatibility verdict is also not a finding that no "
+                         "controlled process can exist (sulfuric acid + hydrogen peroxide, "
+                         "SPM / piranha, is incompatible by verdict and is still deliberately "
+                         "prepared under engineered controls). Take the order and the controls "
+                         "from your validated process document or SDS Section 7.")
         else:
             # 🔴 这一句是本函数存在的安全理由，别删：`no_known_incompatibility`
             # 是「登记表里没查到冲突」，不是「顺序无关紧要」。硫酸+水正是这一档，
