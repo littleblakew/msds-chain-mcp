@@ -22,15 +22,9 @@ import server
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 # JSON manifests whose "version" field(s) must equal the release version.
-JSON_MANIFESTS = [
-    "npm-package/package.json",
-    "npm-package/server.json",
-    "plugin.json",
-    ".claude-plugin/plugin.json",
-    ".claude-plugin/marketplace.json",
-    ".codex-plugin/plugin.json",
-    ".agents/plugins/marketplace.json",
-]
+# CI-1091: read from release_metadata so the stamper (scripts/release.sh) and
+# this guard share one list — they used to keep separate copies.
+JSON_MANIFESTS = rm.JSON_MANIFESTS
 
 
 def _version_file() -> str:

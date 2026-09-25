@@ -1,0 +1,13 @@
+{
+  "name": "msds-chain",
+  "version": "1.5.10",
+  "description": "Chemical safety intelligence for AI-assisted lab work — 23 tools for compatibility, hazards, PPE, storage, waste disposal, mixing order, exposure limits, transport classification, regulatory compliance, and signed audit reports, every answer traceable to a specific supplier SDS.",
+  "mcpServers": {
+    "msds-chain": {
+      "httpUrl": "https://mcp.lagentbot.com/mcp",
+      "oauth": {
+        "enabled": true
+      }
+    }
+  }
+}

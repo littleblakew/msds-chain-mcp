@@ -26,6 +26,28 @@ THIS module, so their surface lists can no longer drift apart.
 """
 import re
 
+# --- Release-version manifests --------------------------------------------
+# Every JSON manifest whose "version" field(s) carry the release version.
+# scripts/release.sh stamps each from VERSION; tests/test_version.py verifies.
+# Both import THIS list, so writer and verifier cannot drift apart (before
+# CI-1091 the list was spelled out twice — adding a manifest to one and not the
+# other left it permanently unstamped, and nothing went red).
+#
+# 🔴 A new manifest added to the repo but NOT listed here is caught by
+# tests/test_ci1091_manifest_registry.py, which discovers candidates from git
+# rather than trusting anyone to come back and edit this list.
+JSON_MANIFESTS = [
+    "npm-package/package.json",
+    "npm-package/server.json",
+    "plugin.json",
+    ".claude-plugin/plugin.json",
+    ".claude-plugin/marketplace.json",
+    ".codex-plugin/plugin.json",
+    ".agents/plugins/marketplace.json",
+    "gemini-extension.json",  # Gemini CLI extensions gallery
+]
+
+
 # --- Tool count ------------------------------------------------------------
 # Files whose user-facing copy states the tool count ("N tools"). These are what
 # ChatGPT / claude.ai / npm / the Claude Code + Codex plugin listings + the
@@ -45,6 +67,7 @@ TOOL_COUNT_SURFACES = [
     ".agents/plugins/marketplace.json",
     "README.md",
     "skills/msds-safety-check/SKILL.md",
+    "gemini-extension.json",
 ]
 
 # A tool count appears in copy in these shapes; each captures the number in
@@ -90,6 +113,7 @@ ENDPOINT_URL_SURFACES = [
     ".codex-plugin/plugin.json",
     "README.md",
     "skills/msds-safety-check/rules/setup-guide.md",
+    "gemini-extension.json",
 ]
 
 # Matches a full primary-endpoint URL (the `/mcp` streamable path). Never matches
