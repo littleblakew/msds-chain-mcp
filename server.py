@@ -2172,8 +2172,14 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
     """
     Check pairwise compatibility between a list of chemicals.
 
-    Returns compatibility status (compatible / caution / incompatible) for each
-    pair, along with specific hazard reasons and storage recommendations.
+    Returns, for every pair, a verdict (compatible / caution / incompatible)
+    with the reason and the rule it came from.
+
+    Scope: this answers whether two chemicals may be brought together, and
+    nothing more. To find out which cabinet each one belongs in, at what
+    temperature, what it must be kept away from, or whether it forms peroxides
+    on standing, call get_storage_guidance as well. A set of pairwise verdicts
+    does not by itself lay out where the chemicals go.
 
     Use this before an experiment to verify it is safe to use the listed
     chemicals together in the same lab setting.
