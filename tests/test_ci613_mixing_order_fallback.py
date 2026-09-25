@@ -4,6 +4,17 @@
 （CI-588 就是靠仓内全绿发上去然后回滚的）。误判率那一半的判据在 Prod 采样，
 写在 `docs/pm/tickets/CI-613.md`。这里守的是**拒答之后用户看到什么**——
 那一半是确定性的，能在仓里钉死。
+
+🔴 **CI-1078 在这里留下的一条**：同一个「不相容 ⇒ 不存在安全的加料顺序」的外推
+**在本仓有两处**（`_order_scope_note` 与本文件测的 `_mixing_order_grounded_fallback`），
+而只修了一处时**两个文件的守卫都是绿的**——因为本文件当时正断言着那句话必须出现。
+⇒ 判据：**改一条这类口径前，先 grep 它的字面看它在几个渲染出口各拼了一份**
+（本仓两条出口：正常路径 + RAI 拒答兜底）。
+
+🔴 **本文件与 CI-1078 相关的变异（跑过）**：把 `_mixing_order_grounded_fallback` 的
+不相容那行换回旧句（`no safe addition order` + `do not combine them in either direction`）
+⇒ `test_rejected_falls_back_to_rule_verdict` 红（1 failed / 8 passed；断言短路，
+先红的是 `INCOMPATIBLE for coexistence`，看不到后面几条——别据此以为只有一条不满足）。
 """
 import asyncio
 
@@ -71,7 +82,14 @@ def test_rejected_falls_back_to_rule_verdict(monkeypatch):
     assert "CAMEO" in text
     # 🔴 不许把「拒答」渲染成「有顺序结论」
     assert "NOT determined" in text
-    assert "no safe addition order" in text
+    # 🔴 CI-1078：这里原来断言 `"no safe addition order" in text`，钉住的是一个**外推**
+    # ——登记表的单位是「能不能共存」、没有顺序维度，而这条路的表头自己就写着
+    # "Addition order: NOT determined." ⇒ 那句逐对禁令和表头直接矛盾。
+    # 现在钉：不相容那一维照说 ＋ 不下绝对禁令 ＋ 仍然不是绿灯。
+    assert "INCOMPATIBLE for coexistence" in text
+    assert "documented, engineered procedure" in text
+    assert "no safe addition order" not in text.lower()
+    assert "do not combine them in either direction" not in text.lower()
 
 
 def test_rejected_no_known_incompatibility_is_not_rendered_as_clearance(monkeypatch):

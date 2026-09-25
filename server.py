@@ -4132,8 +4132,9 @@ def _mixing_order_prompt(chemical_a: str, chemical_b: str, context: str = "") ->
     🔴 采样规模只够说「没看到回归」，不够说「稳」⇒ 拒答兜底照样留着。
 
     做成独立函数是为了让这串**可被引用而不是被抄写**：golden
-    `safety_guard.yaml::safe-order-001` 钉的就是它，跨仓一致性由
-    `scripts/cross-repo-consistency-check.py` 看住（抄写过的探针盯不住措辞漂移）。
+    `safety_guard.yaml::safe-order-001` 钉的就是它，跨仓一致性由**私有 workspace 侧**的
+    跨仓一致性检查看住（抄写过的探针盯不住措辞漂移）。
+    🔴 那个脚本**不在本仓**——此前这里写的相对路径在公开仓里指向不存在的文件，别在这儿找。
     """
     ctx = f" Context: {context}." if context else ""
     return (
@@ -4198,8 +4199,20 @@ async def _mixing_order_grounded_fallback(
             f"  Basis (rule): {pair.get('source', 'unknown')}"
         )
         if level == "incompatible":
-            lines.append("  ⚠️ There is **no safe addition order** for an incompatible pair — "
-                         "do not combine them in either direction.")
+            # 🔴 CI-1078：这里原来写「There is **no safe addition order** … do not combine
+            # them in either direction.」——与 `_order_scope_note` 同一个外推，而这条路
+            # **同时和自己的表头矛盾**（表头逐字写着 "Addition order: NOT determined."）。
+            # 登记表的单位是「能不能共存」，没有顺序维度 ⇒ 说不出「不存在安全的顺序」。
+            # 🔴 这条路比另一条更该修，不是更不该：它只在 RAI 拒答时才走，
+            # 而触发拒答的恰恰是**真危险对**（CI-613），也就是最可能来自真实工艺的提问。
+            lines.append("  ⚠️ INCOMPATIBLE for coexistence — do not combine them outside a "
+                         "documented, engineered procedure. **No addition order has been "
+                         "determined — in either direction**: the registry has no order "
+                         "dimension. An incompatibility verdict is also not a finding that no "
+                         "controlled process can exist (sulfuric acid + hydrogen peroxide, "
+                         "SPM / piranha, is incompatible by verdict and is still deliberately "
+                         "prepared under engineered controls). Take the order and the controls "
+                         "from your validated process document or SDS Section 7.")
         else:
             # 🔴 这一句是本函数存在的安全理由，别删：`no_known_incompatibility`
             # 是「登记表里没查到冲突」，不是「顺序无关紧要」。硫酸+水正是这一档，
@@ -4259,7 +4272,19 @@ def _order_scope_note(data: dict) -> str:
 
     🔴 多数 MCP 客户端只读 text —— 只塞进 structuredContent 等于没修
     （[[fix-never-reaches-the-real-consumer]]）。
-    不相容的对不需要这句：那种情况下正确的话是「没有安全的加料顺序」，已单独给出。
+
+    🔴 **CI-1078：不相容分支此前说「there is no safe addition order / 两个方向都别混」，
+    那是本函数原本要防的范畴错误的反向，已撤。** 引擎的判定单位是**能不能共存**，
+    它没有顺序维度 ⇒ 从「不能共存」推出「不存在安全的加料顺序」**和从「能共存」推出
+    「顺序放行」是同一个错**，只是方向相反。而这一侧的代价更贵：半导体 fab 每天**故意**
+    配的 SPM（硫酸+双氧水）/ SC-1 / SC-2 三对恰恰都被判 incompatible，一句绝对禁令
+    对他们**无法执行** ⇒ 整条答案被丢掉，连该读的危害信息一起丢。
+    ⇒ 两个分支现在都**不对顺序下判定**（与 `structuredContent.addition_order.verdict
+    = not_determined` 一致，此前文本与结构化层自相矛盾），差别只在**共存那一维说了什么**。
+
+    🔴 **别把这次改动读成「放宽」**：不相容分支仍然明确「不要在没有成文受控工艺的情况下
+    混合」，而且是两个分支里唯一带 INCOMPATIBLE 的那句。守卫 + 变异见
+    `tests/test_ci611_order_not_a_clearance.py`。
     """
     incompatible = False
     for tr in data.get("tool_results", []):
@@ -4270,8 +4295,16 @@ def _order_scope_note(data: dict) -> str:
             if str(pair.get("level") or pair.get("verdict") or "").lower() == "incompatible":
                 incompatible = True
     if incompatible:
-        return ("\n\n---\n⚠️ **This pair is INCOMPATIBLE — there is no safe addition order.** "
-                "Do not combine them in either direction.")
+        return ("\n\n---\n⚠️ **This pair is INCOMPATIBLE (coexistence verdict) — do not combine "
+                "them outside a documented, engineered procedure.** "
+                "That verdict answers whether they may COEXIST; the rule engine has no "
+                "addition-order dimension, so **no addition order has been determined here — "
+                "in either direction**. An incompatibility verdict is also not a finding that "
+                "no controlled process can exist: sulfuric acid + hydrogen peroxide (SPM / "
+                "piranha) is incompatible by verdict and is still deliberately prepared under "
+                "engineered controls. Any ordering advice *or prohibition* in the prose above "
+                "is model-generated, not derived from a structured source — take the order and "
+                "the controls from your own validated process document or SDS Section 7.")
     return ("\n\n---\n⚠️ **Addition order: not determined by any structured source.** "
             "A compatibility verdict (e.g. \"no known incompatibility\") answers whether these "
             "may COEXIST — it is *not* a clearance for the order of addition. Sulfuric acid + "
