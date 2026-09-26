@@ -17,7 +17,10 @@ import server
 
 
 async def _run(payload):
-    async def _fake(chemicals, lang=None):
+    # 🔴 CI-1112 加了 `suppliers` 入参，这个桩的签名跟着显式加一个。
+    # **别改成 `**_kw`**：那会让它对未来任何签名漂移永远绿，而「桩与真函数不一致」
+    # 正是它该报的事（CLAUDE.md 记过这条）。
+    async def _fake(chemicals, lang=None, suppliers=None):
         return payload
     orig = server._direct_ppe
     server._direct_ppe = _fake
