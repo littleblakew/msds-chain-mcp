@@ -259,6 +259,70 @@ Chemical = Annotated[str, Field(
     description='Chemical name or CAS number, e.g. "acetone" or "67-64-1".',
 )]
 
+# CI-1112：用户点名「我手上这支是谁家的」。后端 [[CI-226]] ②③ 早就收得下，而 MCP 面
+# 一个字没接 ⇒ 那套披露从真人通道压根触发不了。
+# 🔴 **它不改选源**（后端中间态 A）：带了就如实说我们用的是不是那家，选不到不静默换。
+# 🔴 **描述必须短**：同 `Intent` 那条——这段在 `tools/list` 里**每个收它的工具各有一份**，
+# 长度乘以工具数，每个客户端连上来都付这笔 context。
+Suppliers = Annotated[dict[str, str] | None, Field(
+    description='Optional. {chemical: supplier} when the user names whose SDS they hold, '
+                'e.g. {"acetone": "Sigma-Aldrich"}. Keys must match `chemicals` exactly. '
+                'We disclose whether the answer came from that supplier; it does not '
+                'filter which SDS is used.',
+)]
+
+
+def _normalize_suppliers(
+    chemicals: list[str], suppliers: dict[str, str] | None,
+) -> dict[str, str]:
+    """把客户端 LLM 给的键机械修成 `chemicals` 里的**逐字**写法。
+
+    🔴 **修，不丢**：修不上的键**原样传给后端**，让它回那句可行动的 422（后端对
+    「键不在 `chemicals` 里」是刻意的 422 而不是静默忽略，`_raise_for_status_with_reason`
+    会把原因带到模型面前，模型下一轮能自己改对）。**静默丢弃是后端明确拒绝的方向**
+    ——调用方会以为我们按他点的供应商作答了。
+    🔴 **这一层为什么该在 MCP 这边**：后端那个 422 是为**看不见 `chemicals` 的调用方**设的；
+    我们手里就有那份即将发出的列表，所以大小写与前后空白这类差异我们自己对得上，
+    不该为它烧掉用户的一整条安全答案。
+    🔴 **同 casefold 撞上两个不同化学品时不修**（`["Acetone","acetone"]`）：那时「他指哪一个」
+    我们不知道，猜一个就是替用户做决定 —— 原样传出去让后端说不清楚。
+
+    🔴🔴 **两个不同的键修完会落到同一个化学品时也不修**（`{" acetone ": A, "ACETONE": B}`）：
+    初版在这里**静默覆盖**，B 赢、A 一个字都没发出去 —— 正是本函数 docstring 自己声明要避免的
+    那个方向。review 抓到的（我自己的测试只覆盖了「两个化学品撞一个键」，没覆盖反过来）。
+    **根因值得记，它不只是这个 bug**：后端**有**这道防碰撞检查（「两个键归一到同一个名字
+    就 422」），但它只 `strip()`，而**我们这层还多 casefold 了一道** ⇒ 我们的归一化比上游宽，
+    于是我们造出来的碰撞落在**上游那道检查看不见的空间里**。
+    ⇒ **每加一层归一化，都要问一句「上游那道防碰撞的检查，还看得见我造出来的碰撞吗」。**
+    """
+    if not suppliers:
+        return {}
+    by_folded: dict[str, list[str]] = {}
+    for c in chemicals:
+        c = (c or "").strip()
+        if c:
+            by_folded.setdefault(c.casefold(), []).append(c)
+    # 🔴 **先按「修完会落到哪个名字」分组，再决定修不修。**（review 抓到的，见下）
+    claims: dict[str, list[str]] = {}
+    for raw_name in suppliers:
+        name = (raw_name or "").strip()
+        cands = by_folded.get(name.casefold(), [])
+        if len(cands) == 1:
+            claims.setdefault(cands[0], []).append(raw_name)
+    out: dict[str, str] = {}
+    for raw_name, supplier in suppliers.items():
+        name = (raw_name or "").strip()
+        cands = by_folded.get(name.casefold(), [])
+        # 🔴 三种情况原样传给后端，只有第一种改写：
+        #   ①恰好一个候选**且只有我一个键认领它** → 修成逐字写法
+        #   ②零个候选（模型编的名字）→ 后端 422「not one of `chemicals`」
+        #   ③多个候选（`["Acetone","acetone"]`，他指哪个我不知道）→ 别猜
+        #   ④**两个键认领同一个候选** → 见下面那条红线
+        one = len(cands) == 1 and len(claims.get(cands[0], ())) == 1
+        out[cands[0] if one else raw_name] = supplier
+    return out
+
+
 # CI-823：调用方（客户端 LLM）把用户的话翻成下面那些结构化参数。翻错了我们看得见入参、
 # 看不见「他本来要问什么」——除 `ask_chemical_safety` 外的工具没有任何意图面。
 # 🔴 这是**只读日志面**：`intent` 不会被送到后端、不参与作答。任何一条让它流进答案的路
@@ -1563,56 +1627,83 @@ def _expose(data: dict, *, rename: dict[str, str] | None = None,
     return out
 
 
-async def _direct_compat(chemicals: list[str], lang: str | None = None) -> dict:
+def _with_suppliers(body: dict, chemicals: list[str],
+                    suppliers: dict[str, str] | None) -> dict:
+    """没带 supplier 时请求体**一个字节都不变**。
+
+    🔴 刻意不写成 `body["suppliers"] = _normalize_suppliers(...)`：那样每个请求都会多带一个
+    `"suppliers": {}`。后端对它等价，但它会把**七个端点的请求形状**同时改掉，而
+    「不带这个参数的调用一字未变」是这次改动唯一能便宜验证的事。
+    """
+    cleaned = _normalize_suppliers(chemicals, suppliers)
+    return {**body, "suppliers": cleaned} if cleaned else body
+
+
+async def _direct_compat(chemicals: list[str], lang: str | None = None,
+                       suppliers: dict[str, str] | None = None) -> dict:
     """POST /api/v2/compatibility/check — direct service layer, bounded LLM fallback."""
     async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/compatibility/check",
-            json={"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
+            json=_with_suppliers(
+                {"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
+                chemicals, suppliers),
             headers=_headers(),
         )
         return _billed_json(res)
 
 
-async def _direct_risk(chemicals: list[str], lang: str | None = None) -> dict:
+async def _direct_risk(chemicals: list[str], lang: str | None = None,
+                       suppliers: dict[str, str] | None = None) -> dict:
     """POST /api/v2/risk-warnings — direct service layer, no LLM."""
     async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/risk-warnings",
-            json={"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
+            json=_with_suppliers(
+                {"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
+                chemicals, suppliers),
             headers=_headers(),
         )
         return _billed_json(res)
 
 
-async def _direct_batch(chemicals: list[str], lang: str | None = None) -> dict:
+async def _direct_batch(chemicals: list[str], lang: str | None = None,
+                       suppliers: dict[str, str] | None = None) -> dict:
     """POST /api/v2/batch-safety — combined compat + risk, bounded LLM fallback."""
     async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/batch-safety",
-            json={"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
+            json=_with_suppliers(
+                {"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
+                chemicals, suppliers),
             headers=_headers(),
         )
         return _billed_json(res)
 
 
-async def _direct_ppe(chemicals: list[str], lang: str | None = None) -> dict:
+async def _direct_ppe(chemicals: list[str], lang: str | None = None,
+                       suppliers: dict[str, str] | None = None) -> dict:
     """POST /api/v2/ppe-recommendation — direct, no LLM."""
     async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/ppe-recommendation",
-            json={"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
+            json=_with_suppliers(
+                {"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
+                chemicals, suppliers),
             headers=_headers(),
         )
         return _billed_json(res)
 
 
-async def _direct_storage(chemicals: list[str], lang: str | None = None) -> dict:
+async def _direct_storage(chemicals: list[str], lang: str | None = None,
+                       suppliers: dict[str, str] | None = None) -> dict:
     """POST /api/v2/storage-guidance — direct, no LLM."""
     async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/storage-guidance",
-            json={"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
+            json=_with_suppliers(
+                {"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
+                chemicals, suppliers),
             headers=_headers(),
         )
         return _billed_json(res)
@@ -1809,23 +1900,25 @@ async def _direct_exposure(chemicals: list[str], region: str | None = None) -> d
         return _billed_json(res)
 
 
-async def _direct_transport(chemicals: list[str]) -> dict:
+async def _direct_transport(chemicals: list[str], suppliers: dict[str, str] | None = None) -> dict:
     """POST /api/v2/transport-classification — direct, no LLM."""
     async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/transport-classification",
-            json={"chemicals": chemicals, "lang": LANG},
+            json=_with_suppliers({"chemicals": chemicals, "lang": LANG},
+                                  chemicals, suppliers),
             headers=_headers(),
         )
         return _billed_json(res)
 
 
-async def _direct_waste(chemicals: list[str]) -> dict:
+async def _direct_waste(chemicals: list[str], suppliers: dict[str, str] | None = None) -> dict:
     """POST /api/v2/waste-disposal — direct, no LLM."""
     async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/waste-disposal",
-            json={"chemicals": chemicals, "lang": LANG},
+            json=_with_suppliers({"chemicals": chemicals, "lang": LANG},
+                                  chemicals, suppliers),
             headers=_headers(),
         )
         return _billed_json(res)
@@ -2168,7 +2261,9 @@ def _storage_item_lines(item: dict) -> list[str]:
 )
 @_graceful_timeout
 @_reported
-async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = None, intent: Intent = None) -> CallToolResult:
+async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = None,
+                                       suppliers: Suppliers = None,
+                                       intent: Intent = None) -> CallToolResult:
     """
     Check pairwise compatibility between a list of chemicals.
 
@@ -2194,7 +2289,7 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
         if len(chemicals) < 2:
             return _text_result("Please provide at least 2 chemicals to check compatibility.")
 
-        data = await _direct_compat(chemicals, lang=lang)
+        data = await _direct_compat(chemicals, lang=lang, suppliers=suppliers)
         lines = [f"**Compatibility Check** ({len(chemicals)} chemicals)\n"]
 
         if data.get("unresolved"):
@@ -2284,7 +2379,9 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
 @mcp.tool(annotations=ToolAnnotations(title="Get Chemical Risk Warnings", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
-async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None, intent: Intent = None) -> str:
+async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None,
+                                     suppliers: Suppliers = None,
+                                     intent: Intent = None) -> str:
     """
     Get hazard and risk warnings for one or more chemicals.
 
@@ -2303,7 +2400,7 @@ async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None,
     error_msg = None
     success = True
     try:
-        data = await _direct_risk(chemicals, lang=lang)
+        data = await _direct_risk(chemicals, lang=lang, suppliers=suppliers)
         lines = [f"**Risk Warnings** ({len(chemicals)} chemicals)\n"]
 
         if data.get("unresolved"):
@@ -2558,7 +2655,9 @@ async def ask_chemical_safety(
 @mcp.tool(annotations=ToolAnnotations(title="Get PPE Recommendation", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
-async def get_ppe_recommendation(chemicals: ChemicalList, lang: Lang = None, intent: Intent = None) -> str:
+async def get_ppe_recommendation(chemicals: ChemicalList, lang: Lang = None,
+                                 suppliers: Suppliers = None,
+                                 intent: Intent = None) -> str:
     """
     Get PPE (Personal Protective Equipment) recommendations for chemicals.
 
@@ -2576,7 +2675,7 @@ async def get_ppe_recommendation(chemicals: ChemicalList, lang: Lang = None, int
     error_msg = None
     success = True
     try:
-        data = await _direct_ppe(chemicals, lang)
+        data = await _direct_ppe(chemicals, lang, suppliers=suppliers)
         lines = ["**PPE Recommendations**\n"]
 
         # CI-89: build set of SDS-backed chemicals from documents list
@@ -2648,7 +2747,9 @@ async def get_ppe_recommendation(chemicals: ChemicalList, lang: Lang = None, int
 @mcp.tool(annotations=ToolAnnotations(title="Get Storage Guidance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
-async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None, intent: Intent = None) -> str:
+async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None,
+                               suppliers: Suppliers = None,
+                               intent: Intent = None) -> str:
     """
     Get storage and isolation guidance for chemicals.
 
@@ -2664,7 +2765,7 @@ async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None, inten
     error_msg = None
     success = True
     try:
-        data = await _direct_storage(chemicals, lang=lang)
+        data = await _direct_storage(chemicals, lang=lang, suppliers=suppliers)
         lines = ["**Storage Guidance**\n"]
         for item in data.get("results", []):
             lines.extend(_storage_item_lines(item))
@@ -2886,7 +2987,9 @@ async def get_exposure_limits(
 @mcp.tool(annotations=ToolAnnotations(title="Get Transport Classification", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
-async def get_transport_classification(chemicals: ChemicalList, intent: Intent = None) -> str:
+async def get_transport_classification(chemicals: ChemicalList,
+                                       suppliers: Suppliers = None,
+                                       intent: Intent = None) -> str:
     """Get UN transport classification for chemicals (dangerous goods shipping).
     Returns UN number, proper shipping name, hazard class, packing group,
     and transport mode details (ADR road, IATA air, IMDG sea).
@@ -2896,7 +2999,7 @@ async def get_transport_classification(chemicals: ChemicalList, intent: Intent =
     error_msg = None
     success = True
     try:
-        data = await _direct_transport(chemicals)
+        data = await _direct_transport(chemicals, suppliers=suppliers)
         lines = ["**UN Transport Classification**\n"]
         for item in data.get("results", []):
             lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
@@ -4597,7 +4700,8 @@ async def check_mixing_order(
 @mcp.tool(annotations=ToolAnnotations(title="Get Waste Disposal Guidance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
-async def get_waste_disposal(chemicals: ChemicalList, intent: Intent = None) -> str:
+async def get_waste_disposal(chemicals: ChemicalList, suppliers: Suppliers = None,
+                             intent: Intent = None) -> str:
     """
     Get waste classification and disposal guidance for chemicals.
 
@@ -4617,7 +4721,7 @@ async def get_waste_disposal(chemicals: ChemicalList, intent: Intent = None) -> 
     error_msg = None
     success = True
     try:
-        data = await _direct_waste(chemicals)
+        data = await _direct_waste(chemicals, suppliers=suppliers)
         lines = ["**Waste Disposal Guidance**\n"]
         for item in data.get("results", []):
             lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
@@ -5237,7 +5341,7 @@ async def batch_safety_check(
                 'Intended for 2-20 items; this runs compatibility, hazards and PPE in '
                 'one call, so cost and latency grow with the list length.',
     )],
-    lang: Lang = None, intent: Intent = None,
+    lang: Lang = None, suppliers: Suppliers = None, intent: Intent = None,
 ) -> str:
     """
     Run a comprehensive safety check on a list of chemicals in one call.
@@ -5266,7 +5370,7 @@ async def batch_safety_check(
         if len(chemicals) > 20:
             return "Maximum 20 chemicals per batch check. Please split into smaller groups."
 
-        data = await _direct_batch(chemicals, lang=lang)
+        data = await _direct_batch(chemicals, lang=lang, suppliers=suppliers)
         sections = []
 
         sections.append("# Batch Safety Report")
