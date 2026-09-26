@@ -2209,6 +2209,8 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
         # CI-89-inline: per-chemical link lookup so each pair row carries its own
         # SDS links (survives client-model summarization better than a trailing block).
         doc_lut = _doc_link_lookup(data.get("documents", []))
+        # CI-1099：限制条件挂到每一对的判定句上，不只躺在上面那个披露块里。
+        precursor_index = _precursor_index(data)
         struct_pairs = []
         counts = {"compatible": 0, "caution": 0, "incompatible": 0}
         for pair in data.get("pairs", []):
@@ -2217,12 +2219,16 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
             # CI-89: compat verdicts come from a rule engine — label as Basis(rule)
             traceability = pair.get("traceability", "rule_based")
             basis_label = "Basis (rule)" if traceability == "rule_based" else "Source (SDS)"
+            restrict_clause, restrict_lines = _precursor_pair_note(
+                precursor_index, *_pair_sides(pair))
             pair_line = (
                 f"- **{pair.get('chem1', '?')}** + **{pair.get('chem2', '?')}**: "
-                f"[{emoji}] {pair.get('level', 'unknown')}\n"
+                f"[{emoji}] {pair.get('level', 'unknown')}{restrict_clause}\n"
                 f"  Reason: {pair.get('reason', 'N/A')}\n"
                 f"  {basis_label}: {pair.get('source', 'unknown')}"
             )
+            if restrict_lines:
+                pair_line += "\n" + "\n".join(restrict_lines)
             l1 = _inline_sds(doc_lut, pair.get("chem1"))
             l2 = _inline_sds(doc_lut, pair.get("chem2"))
             if l1:
@@ -2233,11 +2239,18 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
             lvl = (pair.get("level") or "unknown").lower()
             if lvl in counts:
                 counts[lvl] += 1
-            struct_pairs.append(_expose(
+            struct_pair = _expose(
                 pair,
                 rename={"chem1": "chemical_a", "chem2": "chemical_b"},
                 override={"traceability": traceability},   # 我们归一化过，用自己的
-            ))
+            )
+            # CI-1099：只读 structuredContent 的客户端同样要在**这一对**上看到限制，
+            # 而不是自己去顶层数组里按名字对回来（没有客户端会这么做）。
+            pair_facets = _precursor_pair_facets(
+                precursor_index, *_pair_sides(pair))
+            if pair_facets:
+                struct_pair["precursor_restrictions"] = pair_facets
+            struct_pairs.append(struct_pair)
 
         if not data.get("pairs"):
             lines.append("No compatibility pairs to check (need at least 2 resolved chemicals).")
@@ -3482,6 +3495,146 @@ def _query_form_disclosure_block(data: dict) -> list[str]:
     return lines
 
 
+# 🔴 CI-1099：限制条件必须长在**判定句**上，不能只待在平级的披露块里。
+# 客户端模型会整块丢掉旁边的披露、而保留判定（判定才是用户问的东西）⇒ 「某一支限售」
+# 被删掉、判定句留下，读起来是一个**无条件的放行**。而 `_precursor_disclosure_block`
+# 的头句是我们自己写的，曾经还亲口把这块标成 informational only 并把读者指向下面的结论
+# ——那等于我们自己签发的丢弃授权。
+#
+# 🔴 措辞仍**不在这里造**：成句来自后端 i18n（`statement`，5 语言、单一出处）。这里只引用
+# `tier` / `note` 两个**机器可读分面**（`note` 是逐字抄自法规的阈值具文，后端刻意不翻译它）
+# ⇒ 判定行上出现的是引用，不是第二份会漂的措辞。
+def _precursor_index(data: dict) -> dict[str, list[dict]]:
+    """把后端那份披露按「判定行拿得到的把手」（用户打的名字 / 匹配名 / CAS）反查。
+
+    🔴 三个把手都要：后端按 CAS 去重（同一次调用里用名字和 CAS 问同一个物质只出一条），
+    所以只按 `query_name` 对是会漏的——漏的方向是**少披露**。
+    """
+    index: dict[str, list[dict]] = {}
+    for e in data.get("precursor_disclosure") or []:
+        if not isinstance(e, dict):
+            continue
+        for handle in (e.get("query_name"), e.get("matched_name"), e.get("cas")):
+            if handle:
+                index.setdefault(str(handle).strip().lower(), []).append(e)
+    return index
+
+
+# 判定句的补语。🔴 它必须与判定同处一行：分行写就又变成一个可以单独丢掉的块。
+_PRECURSOR_VERDICT_CLAUSE = (
+    " — ⚠️ **conditional: a regulated precursor is involved.** This verdict covers the "
+    "chemistry only; it is not clearance to supply, sell or transfer."
+)
+
+
+def _pair_sides(pair: dict) -> tuple[tuple, tuple]:
+    """一对的两侧，每侧写成 `(名字, CAS)`。
+
+    🔴 **名字与 CAS 是两种东西，别摊平成一串把手**：名字是「显示用的那个」——它必须和
+    判定行上印的字一致；CAS 只是**匹配用的**。摊平之后，名字没命中而 CAS 命中时，
+    披露行会印出一串 CAS 号，读者对不上判定行里的名字（CI-1099 review 的第三条）。
+    这一层名字为空时才退回用 CAS 当显示名。
+    """
+    return ((pair.get("chem1"), pair.get("cas_a")),
+            (pair.get("chem2"), pair.get("cas_b")))
+
+
+def _precursor_side_entries(
+    index: dict[str, list[dict]], side: tuple, done: set[int],
+) -> tuple[str, list[dict]]:
+    """一侧的 `(显示名, 本侧新命中的披露)`。`done` 跨侧去重（同一条只算一次）。"""
+    label = next((str(h) for h in side if h), "")
+    found: list[dict] = []
+    for handle in side:
+        if not handle:
+            continue
+        for e in index.get(str(handle).strip().lower(), []):
+            if id(e) not in done:
+                done.add(id(e))
+                found.append(e)
+    return label, found
+
+
+def _precursor_pair_note(
+    index: dict[str, list[dict]], *sides: tuple,
+) -> tuple[str, list[str]]:
+    """判定行的 `(补语, 附加行)`；没命中就是 `("", [])`，渲染端零变化。
+
+    🔴 命中了但 `tier` 缺失**不许静默跳过**（同 `_precursor_disclosure_block` 记过的那条）：
+    退回时把**还剩下的分面**写在这儿，别把读者指回那个会被整段丢掉的披露块。
+    """
+    if not index:
+        return "", []
+    lines: list[str] = []
+    done: set[int] = set()
+    for side in sides:
+        handle, entries = _precursor_side_entries(index, side, done)
+        if not entries:
+            continue
+        seen: set[tuple] = set()
+        cited: list[str] = []
+        for e in entries:
+            tier = (e.get("tier") or "").strip()
+            note = (e.get("note") or "").strip()
+            if not tier or (tier, note) in seen:
+                continue
+            seen.add((tier, note))
+            cited.append(f"{tier} ({note})" if note else tier)
+        if cited:
+            lines.append(f"  ⚠️ **{handle}** is on a regulated-precursor list: "
+                         + " · ".join(cited) + ".")
+        else:
+            # 🔴 CI-1099 review 抓到：这里原来写 "see the notice for the full statement"
+            # ——指回的正是本票证明了会被整段丢掉的那个块 ⇒ 在「命中但 tier 缺失」这个
+            # 子情形里，原来的失效形态原样复发。改成把**还剩下的分面**直接写在这儿；
+            # 一个都不剩时才说「清单名没拿到」，并且不再把读者指走。
+            residual = " / ".join(
+                str(v) for v in (
+                    entries[0].get("regime"), entries[0].get("authority")) if v)
+            lines.append(
+                f"  ⚠️ **{handle}** is on a regulated-precursor list"
+                + (f" ({residual})" if residual else
+                   " (the list name was not returned by the backend)")
+                + ". Treat this as a flagged listing and verify against the cited regime.")
+    if not lines:
+        return "", []
+    return _PRECURSOR_VERDICT_CLAUSE, lines
+
+
+def _precursor_pair_facets(
+    index: dict[str, list[dict]], *sides: tuple,
+) -> list[dict]:
+    """structuredContent 侧的同一件事：把限制挂到**这一对**上，不只顶层那个数组。
+
+    只带分面（`chemical` / `tier` / `note` / `regime`），不复制 `statement`——成句的唯一
+    出处仍是顶层 `precursor_disclosure`。两者在同一次渲染里从同一个数组推出来，推导不会漂。
+    """
+    out: list[dict] = []
+    done: set[int] = set()
+    for side in sides:
+        label, entries = _precursor_side_entries(index, side, done)
+        for e in entries:
+            out.append({"chemical": label, "cas": e.get("cas"),
+                        "regime": e.get("regime"), "tier": e.get("tier"),
+                        "note": e.get("note")})
+    return out
+
+
+def _batch_pair_structured(pair: dict, index: dict[str, list[dict]]) -> dict:
+    """batch 的结构化 pair：透传 + CI-1099 的 `precursor_restrictions`。
+
+    单独拎成函数只为一件事——让两个工具的结构化面**共用同一段挂载逻辑**。此前它是
+    列表推导里的一行 `_expose(...)`，于是「给 pair 挂东西」这件事在本文件里有了两处
+    互不相干的写法，而漏掉的那处不会报错。
+    """
+    out = _expose(pair, rename={"chem1": "chemical_a", "chem2": "chemical_b"},
+                  override={"traceability": pair.get("traceability", "rule_based")})
+    facets = _precursor_pair_facets(index, *_pair_sides(pair))
+    if facets:
+        out["precursor_restrictions"] = facets
+    return out
+
+
 def _precursor_disclosure_block(data: dict) -> list[str]:
     """CI-553/CI-562: render the backend's regulated-precursor disclosure into **text**.
 
@@ -3511,10 +3664,18 @@ def _precursor_disclosure_block(data: dict) -> list[str]:
     entries = data.get("precursor_disclosure") or []
     if not entries:
         return []
+    # 🔴 CI-1099：头句原来写 "informational only … its results follow below"。
+    # 那句同时做了两件事：①保住「这不是拒答」（**必须保留**，见上面 CI-541 那条红线，
+    # 也防 RAI 那类闸把它读成拒绝）②把这块标成 informational、并把读者指向下面的结论
+    # ——②是我们自己签发的丢弃授权，而模型确实照办了。
+    # ⇒ 保留①、去掉②，并明说这些登记项**限定**下面的结论。别把警告调硬（那是另一个
+    # 失效方向，见 `precursor_disclosure.py` 的「分档语气」），也别加回「informational only」。
+    # 限制条件本身现在还**另挂在每条判定行上**（`_precursor_pair_note`）——这块被整段
+    # 丢掉时判定行仍带着它。
     lines = [
-        "**⚠️ Regulated-precursor notice — informational only. This is a listing "
-        "notice, not a refusal: the requested analysis was performed and its "
-        "results follow below.**",
+        "**⚠️ Regulated-precursor notice — not a refusal: the requested analysis was "
+        "performed and is reported in full. These listings qualify it: a safety verdict "
+        "is not clearance to supply, sell or transfer the chemical.**",
     ]
 
     # 🔴 A non-dict entry must not take down the whole safety answer: this block runs
@@ -4235,15 +4396,21 @@ async def _mixing_order_grounded_fallback(
         "",
     ]
     pairs = data.get("pairs", [])
+    # CI-1099：这条路也渲染判定 ⇒ 限制同样要挂在判定行上。CI-869 记过的那条在这里再成立
+    # 一次：这条路只在 RAI 拒答时才走，而触发拒答的恰恰是真危险对。
+    order_precursor_index = _precursor_index(data)
     for pair in pairs:
         level = (pair.get("level") or "unknown").lower()
         tag = {"compatible": "OK", "caution": "CAUTION",
                "incompatible": "DANGER"}.get(level, level.upper())
+        restrict_clause, restrict_lines = _precursor_pair_note(
+            order_precursor_index, *_pair_sides(pair))
         lines.append(
             f"- **{pair.get('chem1', chemical_a)}** + **{pair.get('chem2', chemical_b)}**: "
-            f"[{tag}] {pair.get('level', 'unknown')}\n"
+            f"[{tag}] {pair.get('level', 'unknown')}{restrict_clause}\n"
             f"  Reason: {pair.get('reason', 'N/A')}\n"
             f"  Basis (rule): {pair.get('source', 'unknown')}"
+            + ("\n" + "\n".join(restrict_lines) if restrict_lines else "")
         )
         if level == "incompatible":
             # 🔴 CI-1078：这里原来写「There is **no safe addition order** … do not combine
@@ -5136,15 +5303,23 @@ async def batch_safety_check(
                 f"Caution: {summary.get('caution', 0)} | "
                 f"Incompatible: {summary.get('incompatible', 0)}\n"
             )
+        # CI-1099：批量面的判定行同样要带限制（`_precursor_index` 读的是**顶层**披露，
+        # 后端在截断闸门之前算它 ⇒ 被披露的物质可能没进这轮分析，所以只在**有判定行**的
+        # 那一对上挂，`_batch_truncation_block` 继续管「谁没进来」那半）。
+        batch_precursor_index = _precursor_index(data)
         for pair in compat.get("pairs", []):
             level = pair.get("level", "unknown").upper()
             # CI-89: compat verdicts are rule-based
             traceability = pair.get("traceability", "rule_based")
             basis_label = "Basis (rule)" if traceability == "rule_based" else "Source (SDS)"
+            restrict_clause, restrict_lines = _precursor_pair_note(
+                batch_precursor_index, *_pair_sides(pair))
             line = (
                 f"- **{pair.get('chem1', '?')}** + **{pair.get('chem2', '?')}**: "
-                f"{level} — {pair.get('reason', 'N/A')}  [{basis_label}]"
+                f"{level} — {pair.get('reason', 'N/A')}  [{basis_label}]{restrict_clause}"
             )
+            if restrict_lines:
+                line += "\n" + "\n".join(restrict_lines)
             l1 = _inline_sds(doc_lut, pair.get("chem1"))
             l2 = _inline_sds(doc_lut, pair.get("chem2"))
             if l1:
@@ -5191,9 +5366,12 @@ async def batch_safety_check(
                 "summary": compat.get("summary", {}),
                 # 透传：此前 11 个字段只透出 5 个，丢的是 cas_a/cas_b/citation/source/
                 # source_detail/verdict —— 全是可追溯性字段
+                # 🔴 CI-1099 review 抓到：文本面挂了、结构化面漏了。而下面 CI-570 那条
+                # 注释正写着**这个工具**有只读 structuredContent 的消费者（claude.ai
+                # 连接器）⇒ 漏这一处等于 CI-1096 的失效形态从这个端点原样复发。
+                # 「两个面各挂一次」是本票的固有形状，别只改自己正在看的那一面。
                 "pairs": [
-                    _expose(p, rename={"chem1": "chemical_a", "chem2": "chemical_b"},
-                            override={"traceability": p.get("traceability", "rule_based")})
+                    _batch_pair_structured(p, batch_precursor_index)
                     for p in compat.get("pairs", [])
                 ],
             },
