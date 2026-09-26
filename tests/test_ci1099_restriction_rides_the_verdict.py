@@ -267,3 +267,30 @@ def test_the_label_is_the_name_on_the_verdict_line_not_the_cas():
     facet = res.structured_content["pairs"][0]["precursor_restrictions"][0]
     assert facet["chemical"] == "H2O2", facet
     assert facet["cas"] == "7722-84-1", facet   # CAS 仍在，只是不当显示名
+
+
+def test_no_known_incompatibility_is_the_most_dangerous_green_and_carries_it():
+    """🔴 Prod 上真实存在的第四种 level（`hydrogen peroxide + water` 实测就是它），而本文件
+    原来只覆盖 `compatible` / `caution` —— 是部署后跑判据探针时才发现的覆盖缺口。
+
+    它读起来就是放行，而仓里 `_mixing_order_grounded_fallback` 早就为这句写过红线
+    （「没查到不相容」不是顺序许可）⇒ **这一档最该带限制**，不是最不该。
+    变异：撤掉 `check_chemical_compatibility` 的 `{restrict_clause}`（同 M1）。
+
+    🔴 另一半也钉住：`no_known_incompatibility` 与 `incompatible` 只差一个词尾，
+    任何按**子串**判「是不是 incompatible」的判据都会把这一档误判成不用管。
+    """
+    assert "incompatible" not in "no_known_incompatibility", (
+        "词尾假设变了：`no_known_incompatibility` 现在包含 `incompatible` 这个子串 ⇒ "
+        "任何按子串判级的地方会把这一档误判成不用管，去重查")
+    payload = dict(COMPAT_GREEN)
+    payload["pairs"] = [{**COMPAT_GREEN["pairs"][0],
+                         "level": "no_known_incompatibility",
+                         "reason": "no conflict found in the registry"}]
+    out = _text(server.check_chemical_compatibility, "_direct_compat", payload,
+                ["hydrogen peroxide", "water"])
+    line = next(l for l in out.splitlines()
+                if l.startswith("- **hydrogen peroxide**") and " + **water**" in l)
+    assert "no_known_incompatibility" in line, line
+    assert "conditional" in line, line
+    assert "not clearance to supply, sell or transfer" in line, line
