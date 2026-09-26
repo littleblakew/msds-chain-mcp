@@ -2209,6 +2209,8 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
         # CI-89-inline: per-chemical link lookup so each pair row carries its own
         # SDS links (survives client-model summarization better than a trailing block).
         doc_lut = _doc_link_lookup(data.get("documents", []))
+        # CI-1099：限制条件挂到每一对的判定句上，不只躺在上面那个披露块里。
+        precursor_index = _precursor_index(data)
         struct_pairs = []
         counts = {"compatible": 0, "caution": 0, "incompatible": 0}
         for pair in data.get("pairs", []):
@@ -2217,12 +2219,17 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
             # CI-89: compat verdicts come from a rule engine — label as Basis(rule)
             traceability = pair.get("traceability", "rule_based")
             basis_label = "Basis (rule)" if traceability == "rule_based" else "Source (SDS)"
+            restrict_clause, restrict_lines = _precursor_pair_note(
+                precursor_index, pair.get("chem1"), pair.get("chem2"),
+                pair.get("cas_a"), pair.get("cas_b"))
             pair_line = (
                 f"- **{pair.get('chem1', '?')}** + **{pair.get('chem2', '?')}**: "
-                f"[{emoji}] {pair.get('level', 'unknown')}\n"
+                f"[{emoji}] {pair.get('level', 'unknown')}{restrict_clause}\n"
                 f"  Reason: {pair.get('reason', 'N/A')}\n"
                 f"  {basis_label}: {pair.get('source', 'unknown')}"
             )
+            if restrict_lines:
+                pair_line += "\n" + "\n".join(restrict_lines)
             l1 = _inline_sds(doc_lut, pair.get("chem1"))
             l2 = _inline_sds(doc_lut, pair.get("chem2"))
             if l1:
@@ -2233,11 +2240,19 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
             lvl = (pair.get("level") or "unknown").lower()
             if lvl in counts:
                 counts[lvl] += 1
-            struct_pairs.append(_expose(
+            struct_pair = _expose(
                 pair,
                 rename={"chem1": "chemical_a", "chem2": "chemical_b"},
                 override={"traceability": traceability},   # 我们归一化过，用自己的
-            ))
+            )
+            # CI-1099：只读 structuredContent 的客户端同样要在**这一对**上看到限制，
+            # 而不是自己去顶层数组里按名字对回来（没有客户端会这么做）。
+            pair_facets = _precursor_pair_facets(
+                precursor_index, pair.get("chem1"), pair.get("chem2"),
+                pair.get("cas_a"), pair.get("cas_b"))
+            if pair_facets:
+                struct_pair["precursor_restrictions"] = pair_facets
+            struct_pairs.append(struct_pair)
 
         if not data.get("pairs"):
             lines.append("No compatibility pairs to check (need at least 2 resolved chemicals).")
@@ -3482,6 +3497,101 @@ def _query_form_disclosure_block(data: dict) -> list[str]:
     return lines
 
 
+# 🔴 CI-1099：限制条件必须长在**判定句**上，不能只待在平级的披露块里。
+# 客户端模型会整块丢掉旁边的披露、而保留判定（判定才是用户问的东西）⇒ 「某一支限售」
+# 被删掉、判定句留下，读起来是一个**无条件的放行**。而 `_precursor_disclosure_block`
+# 的头句是我们自己写的，曾经还亲口把这块标成 informational only 并把读者指向下面的结论
+# ——那等于我们自己签发的丢弃授权。
+#
+# 🔴 措辞仍**不在这里造**：成句来自后端 i18n（`statement`，5 语言、单一出处）。这里只引用
+# `tier` / `note` 两个**机器可读分面**（`note` 是逐字抄自法规的阈值具文，后端刻意不翻译它）
+# ⇒ 判定行上出现的是引用，不是第二份会漂的措辞。
+def _precursor_index(data: dict) -> dict[str, list[dict]]:
+    """把后端那份披露按「判定行拿得到的把手」（用户打的名字 / 匹配名 / CAS）反查。
+
+    🔴 三个把手都要：后端按 CAS 去重（同一次调用里用名字和 CAS 问同一个物质只出一条），
+    所以只按 `query_name` 对是会漏的——漏的方向是**少披露**。
+    """
+    index: dict[str, list[dict]] = {}
+    for e in data.get("precursor_disclosure") or []:
+        if not isinstance(e, dict):
+            continue
+        for handle in (e.get("query_name"), e.get("matched_name"), e.get("cas")):
+            if handle:
+                index.setdefault(str(handle).strip().lower(), []).append(e)
+    return index
+
+
+# 判定句的补语。🔴 它必须与判定同处一行：分行写就又变成一个可以单独丢掉的块。
+_PRECURSOR_VERDICT_CLAUSE = (
+    " — ⚠️ **conditional: a regulated precursor is involved.** This verdict covers the "
+    "chemistry only; it is not clearance to supply, sell or transfer."
+)
+
+
+def _precursor_pair_note(
+    index: dict[str, list[dict]], *handles: object,
+) -> tuple[str, list[str]]:
+    """判定行的 `(补语, 附加行)`；没命中就是 `("", [])`，渲染端零变化。
+
+    🔴 命中了但 `tier` 缺失**不许静默跳过**（同 `_precursor_disclosure_block` 记过的那条）：
+    退回一句不带清单名的披露，仍挂在判定行上。少说话在这里是错误方向。
+    """
+    if not index:
+        return "", []
+    lines: list[str] = []
+    done: set[int] = set()
+    for handle in handles:
+        if not handle:
+            continue
+        entries = [e for e in index.get(str(handle).strip().lower(), [])
+                   if id(e) not in done]
+        if not entries:
+            continue
+        done.update(id(e) for e in entries)
+        seen: set[tuple] = set()
+        cited: list[str] = []
+        for e in entries:
+            tier = (e.get("tier") or "").strip()
+            note = (e.get("note") or "").strip()
+            if not tier or (tier, note) in seen:
+                continue
+            seen.add((tier, note))
+            cited.append(f"{tier} ({note})" if note else tier)
+        if cited:
+            lines.append(f"  ⚠️ **{handle}** is on a regulated-precursor list: "
+                         + " · ".join(cited) + ".")
+        else:
+            lines.append(f"  ⚠️ **{handle}** is on a regulated-precursor list (the list "
+                         "name was not returned — see the notice for the full statement).")
+    if not lines:
+        return "", []
+    return _PRECURSOR_VERDICT_CLAUSE, lines
+
+
+def _precursor_pair_facets(
+    index: dict[str, list[dict]], *handles: object,
+) -> list[dict]:
+    """structuredContent 侧的同一件事：把限制挂到**这一对**上，不只顶层那个数组。
+
+    只带分面（`chemical` / `tier` / `note` / `regime`），不复制 `statement`——成句的唯一
+    出处仍是顶层 `precursor_disclosure`。两者在同一次渲染里从同一个数组推出来，推导不会漂。
+    """
+    out: list[dict] = []
+    done: set[int] = set()
+    for handle in handles:
+        if not handle:
+            continue
+        for e in index.get(str(handle).strip().lower(), []):
+            if id(e) in done:
+                continue
+            done.add(id(e))
+            out.append({"chemical": str(handle), "cas": e.get("cas"),
+                        "regime": e.get("regime"), "tier": e.get("tier"),
+                        "note": e.get("note")})
+    return out
+
+
 def _precursor_disclosure_block(data: dict) -> list[str]:
     """CI-553/CI-562: render the backend's regulated-precursor disclosure into **text**.
 
@@ -3511,10 +3621,18 @@ def _precursor_disclosure_block(data: dict) -> list[str]:
     entries = data.get("precursor_disclosure") or []
     if not entries:
         return []
+    # 🔴 CI-1099：头句原来写 "informational only … its results follow below"。
+    # 那句同时做了两件事：①保住「这不是拒答」（**必须保留**，见上面 CI-541 那条红线，
+    # 也防 RAI 那类闸把它读成拒绝）②把这块标成 informational、并把读者指向下面的结论
+    # ——②是我们自己签发的丢弃授权，而模型确实照办了。
+    # ⇒ 保留①、去掉②，并明说这些登记项**限定**下面的结论。别把警告调硬（那是另一个
+    # 失效方向，见 `precursor_disclosure.py` 的「分档语气」），也别加回「informational only」。
+    # 限制条件本身现在还**另挂在每条判定行上**（`_precursor_pair_note`）——这块被整段
+    # 丢掉时判定行仍带着它。
     lines = [
-        "**⚠️ Regulated-precursor notice — informational only. This is a listing "
-        "notice, not a refusal: the requested analysis was performed and its "
-        "results follow below.**",
+        "**⚠️ Regulated-precursor notice — not a refusal: the requested analysis was "
+        "performed and is reported in full. These listings qualify it: a safety verdict "
+        "is not clearance to supply, sell or transfer the chemical.**",
     ]
 
     # 🔴 A non-dict entry must not take down the whole safety answer: this block runs
@@ -4235,15 +4353,22 @@ async def _mixing_order_grounded_fallback(
         "",
     ]
     pairs = data.get("pairs", [])
+    # CI-1099：这条路也渲染判定 ⇒ 限制同样要挂在判定行上。CI-869 记过的那条在这里再成立
+    # 一次：这条路只在 RAI 拒答时才走，而触发拒答的恰恰是真危险对。
+    order_precursor_index = _precursor_index(data)
     for pair in pairs:
         level = (pair.get("level") or "unknown").lower()
         tag = {"compatible": "OK", "caution": "CAUTION",
                "incompatible": "DANGER"}.get(level, level.upper())
+        restrict_clause, restrict_lines = _precursor_pair_note(
+            order_precursor_index, pair.get("chem1"), pair.get("chem2"),
+            pair.get("cas_a"), pair.get("cas_b"))
         lines.append(
             f"- **{pair.get('chem1', chemical_a)}** + **{pair.get('chem2', chemical_b)}**: "
-            f"[{tag}] {pair.get('level', 'unknown')}\n"
+            f"[{tag}] {pair.get('level', 'unknown')}{restrict_clause}\n"
             f"  Reason: {pair.get('reason', 'N/A')}\n"
             f"  Basis (rule): {pair.get('source', 'unknown')}"
+            + ("\n" + "\n".join(restrict_lines) if restrict_lines else "")
         )
         if level == "incompatible":
             # 🔴 CI-1078：这里原来写「There is **no safe addition order** … do not combine
@@ -5136,15 +5261,24 @@ async def batch_safety_check(
                 f"Caution: {summary.get('caution', 0)} | "
                 f"Incompatible: {summary.get('incompatible', 0)}\n"
             )
+        # CI-1099：批量面的判定行同样要带限制（`_precursor_index` 读的是**顶层**披露，
+        # 后端在截断闸门之前算它 ⇒ 被披露的物质可能没进这轮分析，所以只在**有判定行**的
+        # 那一对上挂，`_batch_truncation_block` 继续管「谁没进来」那半）。
+        batch_precursor_index = _precursor_index(data)
         for pair in compat.get("pairs", []):
             level = pair.get("level", "unknown").upper()
             # CI-89: compat verdicts are rule-based
             traceability = pair.get("traceability", "rule_based")
             basis_label = "Basis (rule)" if traceability == "rule_based" else "Source (SDS)"
+            restrict_clause, restrict_lines = _precursor_pair_note(
+                batch_precursor_index, pair.get("chem1"), pair.get("chem2"),
+                pair.get("cas_a"), pair.get("cas_b"))
             line = (
                 f"- **{pair.get('chem1', '?')}** + **{pair.get('chem2', '?')}**: "
-                f"{level} — {pair.get('reason', 'N/A')}  [{basis_label}]"
+                f"{level} — {pair.get('reason', 'N/A')}  [{basis_label}]{restrict_clause}"
             )
+            if restrict_lines:
+                line += "\n" + "\n".join(restrict_lines)
             l1 = _inline_sds(doc_lut, pair.get("chem1"))
             l2 = _inline_sds(doc_lut, pair.get("chem2"))
             if l1:

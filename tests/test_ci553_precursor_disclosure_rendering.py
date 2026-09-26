@@ -104,7 +104,12 @@ def test_disclosure_says_the_answer_still_stands():
     失效方向（完全不提示）换成了另一个（无差别拒答）——这条守卫钉的是那个滑坡。"""
     out = _run(server.check_chemical_compatibility, "_direct_compat", COMPAT,
                ["hydrochloric acid", "acetone"])
-    assert "not a refusal" in out and "results follow below" in out, out
+    # 🔴 CI-1099 把头句里的 "informational only … results follow below" 删了（那是我们
+    # 自己签发的丢弃授权），**但「不是拒答」这一半必须留着** —— 它才是本守卫钉的东西。
+    # 别把断言改回具体那句话：钉的是性质，不是措辞。
+    assert "not a refusal" in out, out
+    assert "reported in full" in out, out
+    assert "informational only" not in out, out
     # 分析结果本身必须还在，而且是**真渲染出来的那一行**（不是一行 `**?** + **?**`）
     assert "**hydrochloric acid** + **acetone**" in out, out
     assert "exothermic reaction with organic solvents" in out, out
