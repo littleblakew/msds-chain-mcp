@@ -286,6 +286,14 @@ def _normalize_suppliers(
     不该为它烧掉用户的一整条安全答案。
     🔴 **同 casefold 撞上两个不同化学品时不修**（`["Acetone","acetone"]`）：那时「他指哪一个」
     我们不知道，猜一个就是替用户做决定 —— 原样传出去让后端说不清楚。
+
+    🔴🔴 **两个不同的键修完会落到同一个化学品时也不修**（`{" acetone ": A, "ACETONE": B}`）：
+    初版在这里**静默覆盖**，B 赢、A 一个字都没发出去 —— 正是本函数 docstring 自己声明要避免的
+    那个方向。review 抓到的（我自己的测试只覆盖了「两个化学品撞一个键」，没覆盖反过来）。
+    **根因值得记，它不只是这个 bug**：后端**有**这道防碰撞检查（「两个键归一到同一个名字
+    就 422」），但它只 `strip()`，而**我们这层还多 casefold 了一道** ⇒ 我们的归一化比上游宽，
+    于是我们造出来的碰撞落在**上游那道检查看不见的空间里**。
+    ⇒ **每加一层归一化，都要问一句「上游那道防碰撞的检查，还看得见我造出来的碰撞吗」。**
     """
     if not suppliers:
         return {}
@@ -294,12 +302,24 @@ def _normalize_suppliers(
         c = (c or "").strip()
         if c:
             by_folded.setdefault(c.casefold(), []).append(c)
+    # 🔴 **先按「修完会落到哪个名字」分组，再决定修不修。**（review 抓到的，见下）
+    claims: dict[str, list[str]] = {}
+    for raw_name in suppliers:
+        name = (raw_name or "").strip()
+        cands = by_folded.get(name.casefold(), [])
+        if len(cands) == 1:
+            claims.setdefault(cands[0], []).append(raw_name)
     out: dict[str, str] = {}
     for raw_name, supplier in suppliers.items():
         name = (raw_name or "").strip()
         cands = by_folded.get(name.casefold(), [])
-        # 恰好一个候选才改写；零个（编的名字）与多个（大小写歧义）都原样传给后端。
-        out[cands[0] if len(cands) == 1 else raw_name] = supplier
+        # 🔴 三种情况原样传给后端，只有第一种改写：
+        #   ①恰好一个候选**且只有我一个键认领它** → 修成逐字写法
+        #   ②零个候选（模型编的名字）→ 后端 422「not one of `chemicals`」
+        #   ③多个候选（`["Acetone","acetone"]`，他指哪个我不知道）→ 别猜
+        #   ④**两个键认领同一个候选** → 见下面那条红线
+        one = len(cands) == 1 and len(claims.get(cands[0], ())) == 1
+        out[cands[0] if one else raw_name] = supplier
     return out
 
 

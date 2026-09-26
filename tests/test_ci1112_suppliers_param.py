@@ -188,3 +188,38 @@ def test_mixing_order_deliberately_does_not_take_suppliers():
         pathlib.Path(__file__).resolve().parent.parent
         .joinpath("published_tool_surface.json").read_text())["tools"]
     assert "suppliers" not in (surface["check_mixing_order"].get("optional") or [])
+
+
+def test_two_supplier_keys_claiming_one_chemical_are_not_silently_merged():
+    """🔴 review 抓到的：初版在这里**静默覆盖** —— 后一个供应商赢，前一个一个字都没发出去，
+    正是本票声明要避免的那个方向。
+
+    🔴 **我自己的测试为什么没抓到**：上面那条 `test_case_ambiguity_is_not_guessed` 覆盖的是
+    「**两个化学品**撞同一个键」，而这条是**反过来**「两个键撞同一个化学品」。同一个碰撞
+    有两个方向，我只造了一个。
+
+    🔴 **根因值得单独记**：后端**有**这道防碰撞检查（两个键归一到同一名字就 422），但它只
+    `strip()`，而我们这层还多 casefold 了一道 ⇒ 我们的归一化**比上游宽**，造出来的碰撞落在
+    上游那道检查**看不见的空间**里。⇒ 每加一层归一化，都要问「上游那道防碰撞的检查还看得
+    见我造出来的碰撞吗」。
+
+    变异：把 `_normalize_suppliers` 里的 `claims` 分组去掉（回到 `len(cands) == 1` 就改写）。
+    """
+    body = _sent_body(server.check_chemical_compatibility, None,
+                      ["Acetone", "Toluene"],
+                      suppliers={" acetone ": "Sigma-Aldrich", "ACETONE": "Merck"})
+    sent = body["json"]["suppliers"]
+    # 两个都原样传出去 —— 后端会说不清楚（要么「not one of chemicals」，要么它自己那句
+    # 「两个键归一到同一个名字」），两种都可行动，且**一个供应商都没丢**
+    assert sent == {" acetone ": "Sigma-Aldrich", "ACETONE": "Merck"}, sent
+    assert "Sigma-Aldrich" in sent.values(), "第一个供应商被吃掉了"
+
+
+def test_a_single_key_is_still_repaired_when_no_one_else_claims_it():
+    """上一条的反面锚点：**别为了修那个 bug 把正常的修复也关掉**。
+
+    变异：把 `one` 的条件写成恒 `False`（那时本条红、而上一条仍绿 ⇒ 两条一起才钉得住）。
+    """
+    body = _sent_body(server.check_chemical_compatibility, None,
+                      ["Acetone", "Toluene"], suppliers={" acetone ": "Sigma-Aldrich"})
+    assert body["json"]["suppliers"] == {"Acetone": "Sigma-Aldrich"}, body
