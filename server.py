@@ -2220,8 +2220,7 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
             traceability = pair.get("traceability", "rule_based")
             basis_label = "Basis (rule)" if traceability == "rule_based" else "Source (SDS)"
             restrict_clause, restrict_lines = _precursor_pair_note(
-                precursor_index, pair.get("chem1"), pair.get("chem2"),
-                pair.get("cas_a"), pair.get("cas_b"))
+                precursor_index, *_pair_sides(pair))
             pair_line = (
                 f"- **{pair.get('chem1', '?')}** + **{pair.get('chem2', '?')}**: "
                 f"[{emoji}] {pair.get('level', 'unknown')}{restrict_clause}\n"
@@ -2248,8 +2247,7 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
             # CI-1099：只读 structuredContent 的客户端同样要在**这一对**上看到限制，
             # 而不是自己去顶层数组里按名字对回来（没有客户端会这么做）。
             pair_facets = _precursor_pair_facets(
-                precursor_index, pair.get("chem1"), pair.get("chem2"),
-                pair.get("cas_a"), pair.get("cas_b"))
+                precursor_index, *_pair_sides(pair))
             if pair_facets:
                 struct_pair["precursor_restrictions"] = pair_facets
             struct_pairs.append(struct_pair)
@@ -3529,26 +3527,50 @@ _PRECURSOR_VERDICT_CLAUSE = (
 )
 
 
+def _pair_sides(pair: dict) -> tuple[tuple, tuple]:
+    """一对的两侧，每侧写成 `(名字, CAS)`。
+
+    🔴 **名字与 CAS 是两种东西，别摊平成一串把手**：名字是「显示用的那个」——它必须和
+    判定行上印的字一致；CAS 只是**匹配用的**。摊平之后，名字没命中而 CAS 命中时，
+    披露行会印出一串 CAS 号，读者对不上判定行里的名字（CI-1099 review 的第三条）。
+    这一层名字为空时才退回用 CAS 当显示名。
+    """
+    return ((pair.get("chem1"), pair.get("cas_a")),
+            (pair.get("chem2"), pair.get("cas_b")))
+
+
+def _precursor_side_entries(
+    index: dict[str, list[dict]], side: tuple, done: set[int],
+) -> tuple[str, list[dict]]:
+    """一侧的 `(显示名, 本侧新命中的披露)`。`done` 跨侧去重（同一条只算一次）。"""
+    label = next((str(h) for h in side if h), "")
+    found: list[dict] = []
+    for handle in side:
+        if not handle:
+            continue
+        for e in index.get(str(handle).strip().lower(), []):
+            if id(e) not in done:
+                done.add(id(e))
+                found.append(e)
+    return label, found
+
+
 def _precursor_pair_note(
-    index: dict[str, list[dict]], *handles: object,
+    index: dict[str, list[dict]], *sides: tuple,
 ) -> tuple[str, list[str]]:
     """判定行的 `(补语, 附加行)`；没命中就是 `("", [])`，渲染端零变化。
 
     🔴 命中了但 `tier` 缺失**不许静默跳过**（同 `_precursor_disclosure_block` 记过的那条）：
-    退回一句不带清单名的披露，仍挂在判定行上。少说话在这里是错误方向。
+    退回时把**还剩下的分面**写在这儿，别把读者指回那个会被整段丢掉的披露块。
     """
     if not index:
         return "", []
     lines: list[str] = []
     done: set[int] = set()
-    for handle in handles:
-        if not handle:
-            continue
-        entries = [e for e in index.get(str(handle).strip().lower(), [])
-                   if id(e) not in done]
+    for side in sides:
+        handle, entries = _precursor_side_entries(index, side, done)
         if not entries:
             continue
-        done.update(id(e) for e in entries)
         seen: set[tuple] = set()
         cited: list[str] = []
         for e in entries:
@@ -3562,15 +3584,25 @@ def _precursor_pair_note(
             lines.append(f"  ⚠️ **{handle}** is on a regulated-precursor list: "
                          + " · ".join(cited) + ".")
         else:
-            lines.append(f"  ⚠️ **{handle}** is on a regulated-precursor list (the list "
-                         "name was not returned — see the notice for the full statement).")
+            # 🔴 CI-1099 review 抓到：这里原来写 "see the notice for the full statement"
+            # ——指回的正是本票证明了会被整段丢掉的那个块 ⇒ 在「命中但 tier 缺失」这个
+            # 子情形里，原来的失效形态原样复发。改成把**还剩下的分面**直接写在这儿；
+            # 一个都不剩时才说「清单名没拿到」，并且不再把读者指走。
+            residual = " / ".join(
+                str(v) for v in (
+                    entries[0].get("regime"), entries[0].get("authority")) if v)
+            lines.append(
+                f"  ⚠️ **{handle}** is on a regulated-precursor list"
+                + (f" ({residual})" if residual else
+                   " (the list name was not returned by the backend)")
+                + ". Treat this as a flagged listing and verify against the cited regime.")
     if not lines:
         return "", []
     return _PRECURSOR_VERDICT_CLAUSE, lines
 
 
 def _precursor_pair_facets(
-    index: dict[str, list[dict]], *handles: object,
+    index: dict[str, list[dict]], *sides: tuple,
 ) -> list[dict]:
     """structuredContent 侧的同一件事：把限制挂到**这一对**上，不只顶层那个数组。
 
@@ -3579,16 +3611,27 @@ def _precursor_pair_facets(
     """
     out: list[dict] = []
     done: set[int] = set()
-    for handle in handles:
-        if not handle:
-            continue
-        for e in index.get(str(handle).strip().lower(), []):
-            if id(e) in done:
-                continue
-            done.add(id(e))
-            out.append({"chemical": str(handle), "cas": e.get("cas"),
+    for side in sides:
+        label, entries = _precursor_side_entries(index, side, done)
+        for e in entries:
+            out.append({"chemical": label, "cas": e.get("cas"),
                         "regime": e.get("regime"), "tier": e.get("tier"),
                         "note": e.get("note")})
+    return out
+
+
+def _batch_pair_structured(pair: dict, index: dict[str, list[dict]]) -> dict:
+    """batch 的结构化 pair：透传 + CI-1099 的 `precursor_restrictions`。
+
+    单独拎成函数只为一件事——让两个工具的结构化面**共用同一段挂载逻辑**。此前它是
+    列表推导里的一行 `_expose(...)`，于是「给 pair 挂东西」这件事在本文件里有了两处
+    互不相干的写法，而漏掉的那处不会报错。
+    """
+    out = _expose(pair, rename={"chem1": "chemical_a", "chem2": "chemical_b"},
+                  override={"traceability": pair.get("traceability", "rule_based")})
+    facets = _precursor_pair_facets(index, *_pair_sides(pair))
+    if facets:
+        out["precursor_restrictions"] = facets
     return out
 
 
@@ -4361,8 +4404,7 @@ async def _mixing_order_grounded_fallback(
         tag = {"compatible": "OK", "caution": "CAUTION",
                "incompatible": "DANGER"}.get(level, level.upper())
         restrict_clause, restrict_lines = _precursor_pair_note(
-            order_precursor_index, pair.get("chem1"), pair.get("chem2"),
-            pair.get("cas_a"), pair.get("cas_b"))
+            order_precursor_index, *_pair_sides(pair))
         lines.append(
             f"- **{pair.get('chem1', chemical_a)}** + **{pair.get('chem2', chemical_b)}**: "
             f"[{tag}] {pair.get('level', 'unknown')}{restrict_clause}\n"
@@ -5271,8 +5313,7 @@ async def batch_safety_check(
             traceability = pair.get("traceability", "rule_based")
             basis_label = "Basis (rule)" if traceability == "rule_based" else "Source (SDS)"
             restrict_clause, restrict_lines = _precursor_pair_note(
-                batch_precursor_index, pair.get("chem1"), pair.get("chem2"),
-                pair.get("cas_a"), pair.get("cas_b"))
+                batch_precursor_index, *_pair_sides(pair))
             line = (
                 f"- **{pair.get('chem1', '?')}** + **{pair.get('chem2', '?')}**: "
                 f"{level} — {pair.get('reason', 'N/A')}  [{basis_label}]{restrict_clause}"
@@ -5325,9 +5366,12 @@ async def batch_safety_check(
                 "summary": compat.get("summary", {}),
                 # 透传：此前 11 个字段只透出 5 个，丢的是 cas_a/cas_b/citation/source/
                 # source_detail/verdict —— 全是可追溯性字段
+                # 🔴 CI-1099 review 抓到：文本面挂了、结构化面漏了。而下面 CI-570 那条
+                # 注释正写着**这个工具**有只读 structuredContent 的消费者（claude.ai
+                # 连接器）⇒ 漏这一处等于 CI-1096 的失效形态从这个端点原样复发。
+                # 「两个面各挂一次」是本票的固有形状，别只改自己正在看的那一面。
                 "pairs": [
-                    _expose(p, rename={"chem1": "chemical_a", "chem2": "chemical_b"},
-                            override={"traceability": p.get("traceability", "rule_based")})
+                    _batch_pair_structured(p, batch_precursor_index)
                     for p in compat.get("pairs", [])
                 ],
             },

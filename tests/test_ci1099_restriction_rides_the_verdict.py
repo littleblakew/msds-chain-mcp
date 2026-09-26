@@ -167,10 +167,13 @@ def test_a_pair_with_no_listed_chemical_is_untouched():
 def test_hit_without_tier_is_still_disclosed_on_the_verdict():
     """命中了但 `tier` 缺失不许静默跳过——那正是最该说话的时候（同 `_precursor_disclosure_block`
     的 `statement` 缺失分支）。变异：把 `_precursor_pair_note` 的 else 分支删掉。
+
+    🔴 「一个分面都不剩」才说「清单名没拿到」；还剩 regime / authority 时要印它们
+    （见下面 review ② 那条）。本条只钉「判定行仍被标成有条件」这一半。
     """
     payload = dict(COMPAT_GREEN)
     payload["precursor_disclosure"] = [
-        {**DISCLOSURE[0], "tier": "", "note": ""},
+        {**DISCLOSURE[0], "tier": "", "note": "", "regime": "", "authority": ""},
     ]
     out = _text(server.check_chemical_compatibility, "_direct_compat", payload,
                 ["hydrogen peroxide", "water"])
@@ -199,3 +202,68 @@ def test_one_chemical_is_not_disclosed_twice_on_one_verdict():
     out = _text(server.check_chemical_compatibility, "_direct_compat", COMPAT_GREEN,
                 ["hydrogen peroxide", "water"])
     assert out.count("is on a regulated-precursor list") == 1, out
+
+
+# ─────────────────── review 抓到的三条，各钉一个守卫 ───────────────────
+# 🔴 三条的共同形状值得单记：**同一件事有两个面 / 两个子情形，我只做了自己正在看的那个**。
+# ①文本面挂了、结构化面漏了 ②主路径挂了、tier 缺失那条子路径把读者指回可丢弃的块
+# ③覆盖对了、但显示名对不上判定行。三条都不会报错。
+
+def test_batch_structured_pairs_also_carry_the_restriction():
+    """review ①：`batch_safety_check` 的结构化 `compatibility.pairs` 此前没挂上，
+    而它旁边 CI-570 那条注释正写着**这个工具**有只读 structuredContent 的消费者
+    （claude.ai 连接器）⇒ 漏这一处等于 CI-1096 从这个端点原样复发。
+
+    变异：把 `_batch_pair_structured` 换回裸 `_expose(...)`。
+    """
+    res = _run(server.batch_safety_check, "_direct_batch", BATCH_GREEN,
+               ["hydrogen peroxide", "water"])
+    pairs = res.structured_content["compatibility"]["pairs"]
+    hits = pairs[0]["precursor_restrictions"]
+    assert [h["tier"] for h in hits] == ["EU 2019/1148 Annex I"], hits
+
+
+def test_tier_missing_fallback_does_not_point_back_at_the_droppable_block():
+    """review ②：tier 缺失时的兜底句原来写 "see the notice for the full statement"
+    ——指回的正是本票证明了会被整段丢掉的那块。它必须自带还剩下的分面。
+
+    变异：把 residual 那段删掉 / 把 "see the notice" 加回去。
+    """
+    payload = dict(COMPAT_GREEN)
+    payload["precursor_disclosure"] = [{
+        **DISCLOSURE[0], "tier": "", "note": "",
+        "regime": "explosive_precursor", "authority": "European Commission",
+    }]
+    out = _text(server.check_chemical_compatibility, "_direct_compat", payload,
+                ["hydrogen peroxide", "water"])
+    assert "see the notice" not in out, out
+    # 分面必须活在**判定行的紧邻上下文**里，而不是只在那个可丢弃的块里
+    survived = "\n".join(l for l in out.splitlines()
+                         if "Regulated-precursor notice" not in l)
+    assert "explosive_precursor" in survived, survived
+    assert "European Commission" in survived, survived
+
+
+def test_the_label_is_the_name_on_the_verdict_line_not_the_cas():
+    """review ③：名字没命中而 CAS 命中时（后端按 CAS 去重 ⇒ 第二个别名没有自己的条目），
+    披露行不许印出一串 CAS 号——读者对不上判定行里的名字。
+
+    变异：把 `_pair_sides` 摊平回一串把手（名字与 CAS 不分层）。
+    """
+    payload = dict(COMPAT_GREEN)
+    # 判定行用别名 `H2O2`，而披露条目的 query_name/matched_name 都不是它
+    payload["pairs"] = [{**COMPAT_GREEN["pairs"][0], "chem1": "H2O2"}]
+    payload["precursor_disclosure"] = [{
+        **DISCLOSURE[0], "query_name": "hydrogen peroxide",
+        "matched_name": "Hydrogen peroxide",
+    }]
+    out = _text(server.check_chemical_compatibility, "_direct_compat", payload,
+                ["H2O2", "water"])
+    line = next(l for l in out.splitlines() if "is on a regulated-precursor list" in l)
+    assert "**H2O2**" in line, line
+    assert "7722-84-1" not in line, line
+    res = _run(server.check_chemical_compatibility, "_direct_compat", payload,
+               ["H2O2", "water"])
+    facet = res.structured_content["pairs"][0]["precursor_restrictions"][0]
+    assert facet["chemical"] == "H2O2", facet
+    assert facet["cas"] == "7722-84-1", facet   # CAS 仍在，只是不当显示名
