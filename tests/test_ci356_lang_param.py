@@ -257,7 +257,15 @@ def test_lang_forwarding_has_exactly_one_spelling():
         f"只扫到 {len(shapes)} 种写法：{shapes} —— 先查这个扫描为什么没找到，"
         "别把它读成「都合规」")
 
-    allowed = {"_normalize_lang(lang or LANG)", "LANG"}
+    # 🔴 CI-361 ⑥ 起有**第三种合法写法**，理由是「`lang` 按端点不是全局」（同 CI-1095）：
+    # 报告那条路（`get_audit_report` → `/report/signed-url`）支持 en/zh/ja/de/id 五种，
+    # 因为 PDF 标签是**静态译好的**；而 `_BACKEND_LANGS` 描述的 quick-chat 一族实测只有
+    # en/zh 真照做。共用 `_normalize_lang` 会把一个真能出德语报告的通道压成英文且不报错。
+    # ⚠️ 放它进来**不放松本条守卫要的那件事**：它同样盖住 `LANG` 那一侧
+    # （`lang or LANG`），所以「MSDS_LANG 配了非法值会被原样转发」这个后果仍被挡住。
+    # 🔴 新增语言族时别往这里加第四种写法，除非它也满足那一条。
+    allowed = {"_normalize_lang(lang or LANG)", "LANG",
+               "_normalize_report_lang(lang or LANG)"}
     extra = shapes - allowed
     assert not extra, (
         f"出现了第三种转发 lang 的写法：{extra}。"

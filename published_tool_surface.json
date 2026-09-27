@@ -103,6 +103,7 @@
     "get_audit_report": {
       "required": [],
       "optional": [
+        "lang",
         "session_id"
       ]
     },

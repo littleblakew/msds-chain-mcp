@@ -258,6 +258,33 @@ Lang = Annotated[str | None, Field(
 )]
 
 
+# 🔴 CI-361 ⑥：**报告那条路支持的语言比 `_BACKEND_LANGS` 多，别共用那个元组。**
+# `_BACKEND_LANGS` 描述的是 quick-chat 那一族（答案由 LLM 现写，实测只有 en/zh 真的
+# 照做）；而 PDF 报告的标签是**静态译好的**（后端 `REPORT_TRANSLATIONS` 五种语言各 49 个
+# key），动态段走翻译服务 ⇒ 五种都是真的。⑦ 在 Prod 上实测过 `id`：静态标签与动态段都出来了。
+# 🔴 所以 `lang` 是**按端点**的不是全局的（同 CI-1095 的结论）——拿 `_normalize_lang`
+# 去卡报告，等于把一个真能出德语报告的通道压成英文，**而且不报错**。
+#
+# ⚠️ 这五个字符串是后端那份清单的**副本**（两个仓，import 不到）。副本会漂，但漂的方向
+# 是**良性的**：后端新增第六种语言时这里不认 ⇒ 退英文（今天的行为），不是坏掉。
+# 判据别写成「和后端逐字相同」——那是验不了的；要验就在 Prod 上拉一份该语言的报告数字符。
+_REPORT_LANGS = ("en", "zh", "ja", "de", "id")
+
+
+def _normalize_report_lang(lang: str | None) -> str:
+    """报告语言：认识的原样过，其余一律英文（与后端 `REPORT_LANG_PATTERN` 的拒绝面对齐）。"""
+    if lang and lang.strip().lower() in _REPORT_LANGS:
+        return lang.strip().lower()
+    return "en"
+
+
+ReportLang = Annotated[str | None, Field(
+    description='Report language — pass the language THIS conversation is in. Supported: '
+                '"en", "zh", "ja", "de", "id" (the PDF labels are professionally '
+                'translated for all five). Anything else, or omitted, gives English.',
+)]
+
+
 ChemicalList = Annotated[list[str], Field(
     description='List of chemical names or CAS numbers, e.g. ["acetone", "sulfuric acid"] '
                 'or ["67-64-1", "67-56-1"]. Names and CAS numbers can be mixed.',
@@ -3161,11 +3188,14 @@ async def create_audit_session(
 @mcp.tool(annotations=ToolAnnotations(title="Get Audit Report", read_only_hint=False, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
-async def get_audit_report(session_id: Annotated[str | None, Field(
-    description='The session id returned by `create_audit_session`, e.g. "DEMO-A1B2C3D4". '
-                'OMIT IT to report on what this user has already analysed in the last 7 '
-                'days — no session needed, nothing to restate.',
-)] = None) -> str:
+async def get_audit_report(
+    session_id: Annotated[str | None, Field(
+        description='The session id returned by `create_audit_session`, e.g. "DEMO-A1B2C3D4". '
+                    'OMIT IT to report on what this user has already analysed in the last 7 '
+                    'days — no session needed, nothing to restate.',
+    )] = None,
+    lang: ReportLang = None,
+) -> str:
     """
     Get a short-lived signed URL to download an archivable PDF safety report.
 
@@ -3251,6 +3281,16 @@ async def get_audit_report(session_id: Annotated[str | None, Field(
             res = await client.get(
                 f"{API_URL}/sessions/{session_id}/report/signed-url",
                 headers=_headers(),
+                # 🔴 CI-361 ⑥：这个参数**决定用户下载到的那份 PDF 是什么语言**。
+                # 在它之前，这条通道压根没传 `lang` ⇒ 经 MCP 拿报告的人永远只拿得到
+                # 英文，而后端那侧也不报错（未知 query 参数被丢弃）。
+                # ⚠️ **后端先于本仓上是安全的、反过来也是**：旧后端忽略这个参数 ⇒
+                # 退回英文（今天的行为），不是 422。所以两个仓不必卡时序。
+                # 🔴 `or LANG` 不能省（本仓守卫 `test_lang_forwarding_has_exactly_one_spelling`
+                # 抓到我第一版漏了它）：`LANG` 是 `MSDS_LANG` 那个服务端默认语言。
+                # 漏掉它的后果是**自托管者设了 `MSDS_LANG=de` 时，别的工具答德语、
+                # 报告却给英文** —— 一个只在配置过默认语言的部署上才出现的不一致。
+                params={"lang": _normalize_report_lang(lang or LANG)},
             )
             if res.status_code == 403:
                 return (
