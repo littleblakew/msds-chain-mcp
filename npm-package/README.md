@@ -46,8 +46,8 @@ Get a free API key (100 calls/month) at [msdschain.lagentbot.com](https://msdsch
 | `get_emergency_response` | Spill, fire, or exposure procedures |
 | `get_exposure_limits` | OEL/TLV/PEL across US, EU, JP, CN, INT |
 | `get_transport_classification` | UN number, hazard class, packing group |
-| `check_regulatory_compliance` | EU, US, CN, JP, CA, AU, SG list-backed; KR/TW accepted but no list wired |
-| `check_regulatory_lists` | Cross-reference a chemical against 23 regulatory watch lists across 8 jegions |
+| `check_regulatory_compliance` | Multi-region compliance status, list-backed for EU, US, CN, JP, CA, AU, SG |
+| `check_regulatory_lists` | Cross-reference a chemical against 23 regulatory watch lists across major jurisdictions |
 | `get_chemical_alternatives` | Safer substitutes for restricted chemicals |
 | `get_sds_section` | Query specific SDS sections (1-16) |
 | `get_sds_document` | Signed download URL (~5 min) for the original SDS/MSDS PDF |

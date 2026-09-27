@@ -20,12 +20,10 @@ Prompt the user:
 > ```
 >
 > Then restart Claude Code. This connects to MSDS Chain's cloud API (free tier: 100 calls/month, no API key needed for basic queries). For older clients that only speak SSE, use `--transport sse https://mcp.lagentbot.com/sse` instead.
->
-> For local/offline use:
-> ```bash
-> pip install msds-chain-mcp
-> claude mcp add msds-chain -- python -m msds_chain_mcp
-> ```
+
+🔴 There is no `pip install msds-chain-mcp` and no offline mode (CI-1118). This block
+used to offer both; the PyPI name has never been published (404) and every tool call
+reaches our backend regardless of where the process runs.
 
 After the user installs, ask them to restart and retry their request.
 
@@ -68,12 +66,11 @@ The MCP server supports 5 languages: English (en), Chinese (zh), Japanese (ja), 
 
 The language is read from the **server process's** `MSDS_LANG` environment variable at
 startup (`server.py`), so a remote client cannot change it: the hosted endpoint at
-`mcp.lagentbot.com` answers in English. To get another language, self-host the core and
-set it there:
-
-```bash
-docker run -p 8080:8080 -e MSDS_API_KEY=sk-msds-xxx -e MSDS_LANG=zh msds-chain-mcp
-```
+`mcp.lagentbot.com` answers in English.
 
 This does not matter much in practice — the skill should match the user's conversation
 language regardless of the server's setting.
+
+🔴 Do not tell users to self-host for another language (CI-1118). Running the core
+yourself is not an offered path: it holds no data, still needs an `sk-msds-` key, and
+still reaches our backend, so the only thing it buys is a language flag.
