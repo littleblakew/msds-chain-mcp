@@ -1346,7 +1346,11 @@ def _reported(fn):
         t0 = time.monotonic()
         success, error_msg, result = True, None, None
         try:
-            result = await fn(*args, **kwargs)
+            # CI-1133：在这里抬 `language_note` 是为了**成员自己发现**——每个工具都戴着
+            # 这个装饰器，新工具不必记得补一行。理由与代价见 `_relay_language_note`。
+            # 🔴 赋回 `result` 是必须的：`finally` 里 `_response_text(result)` 记的就该是
+            # **我们真正发出去的那串文本**，否则调用日志与客户端看到的不是一回事。
+            result = _relay_language_note(await fn(*args, **kwargs))
             return result
         except Exception as e:  # noqa: BLE001 — 记完再抛，行为不变
             success, error_msg = False, _error_text(e)
@@ -1606,6 +1610,76 @@ def _with_usage(result: "CallToolResult", data: dict) -> "CallToolResult":
     if sc is not None:
         sc = {**sc, "usage": usage}
     return CallToolResult(content=content, structured_content=sc)
+
+
+# ---------------------------------------------------------------------------
+# CI-1133：把后端的 `language_note` 从 structuredContent 抬到**文本面**
+# ---------------------------------------------------------------------------
+# 上游 CI-1123 让 `/api/v2` 在这一轮确实读过「只有 en/zh 两份」的文案表时回一个顶层
+# `language_note`。`_expose()` 默认全透 ⇒ 那个键**已经在** structuredContent 里；而
+# 模型与多数客户端读的是 `TextContent`，它是各工具逐字段显式拼出来的 ⇒ 没人提的键
+# 永远不出现。同族：CI-553（`precursor_disclosure`）· CI-360（`insufficient_reason`）。
+#
+# 🔴 **一处，不是 23 个渲染器各补一行** —— 与后端把它做成路由类（`LanguageNoteRoute`）
+# 是同一条理由：逐渲染器补＝23 份推导不出来的副本，而第 24 个工具出生时**没有任何东西
+# 会红**。这里挂在 `_reported` 上，它包着每一个工具 ⇒ 成员自己发现。
+# 🔴 它是「披露」不是「内容」：措辞由后端确定性给出（五语言一张表），本模块只负责把它
+# 搬到文本面并配一条禁令——CI-1096 已证明散文层保证不了任何具体字符串到达用户，
+# 所以判据只能打在**我们返回的文本**上（本票的验收就是这么写的）。
+# 🔴 放在**最前**：CI-89-followup 实测靠后的内容会被客户端模型丢掉，而这句话的全部价值
+# 在于用户看见它（看不见时他会以为是自己参数传错了，那正是 CI-1123 要消灭的误解）。
+_LANGUAGE_NOTE_DIRECTIVE = (
+    "[language] {note}\n"
+    "Relay that sentence to the user verbatim, in the language it is written in, "
+    "before anything else. Do not translate it, do not drop it when summarizing, and "
+    "do not restate it as \"this language is not supported\" — the rest of this answer "
+    "is still in the requested language wherever we have it.\n\n"
+)
+
+
+def _language_note_of(items) -> dict:
+    """从一组后端响应里把那句披露抬到顶层 —— 给**扇出 N 次**的工具用。
+
+    🔴 这不是第二份副本：那句话就在 `items` 里，这里只把它搬到 `_relay_language_note`
+    够得着的位置（顶层）。手拼 structuredContent 白名单的工具**不会**自动带上新键
+    （CI-342 记过的那条），而 `check_regulatory_compliance` 恰好是 CI-1123 在 Prod 上
+    验过会播那句话的两个端点之一 ⇒ 不补这一手，最该说话的那个工具正好是哑的。
+    🔴 取第一条非空的就够：扇出里各条是**同一个 lang、同一张表**，后端给的是同一句。
+    """
+    for item in items or []:
+        if isinstance(item, dict):
+            note = item.get("language_note")
+            if isinstance(note, str) and note.strip():
+                return {"language_note": note}
+    return {}
+
+
+def _relay_language_note(result):
+    """文本面补上那句「有部分内容只有英文」。没有这个键时**一个字节都不改**。
+
+    🔴 幂等：正文里已经逐字有这句话就原样返回（哪天某个渲染器自己渲染了它，这里不该
+    再播一遍；后端那一层同样是 `setdefault`，两边对「更具体的那句优先」口径一致）。
+    """
+    sc = getattr(result, "structured_content", None)
+    if not isinstance(sc, dict):
+        return result
+    note = sc.get("language_note")
+    if not isinstance(note, str) or not note.strip():
+        return result
+    content = list(getattr(result, "content", None) or [])
+    # 🔴 首块不是文本就放过：这条通道只负责**文本面**，硬塞一个 TextContent 进去会改变
+    # 返回形状，而形状是对外契约（CI-919 那批适配器按块类型读）。
+    if not content or not isinstance(content[0], TextContent):
+        return result
+    if note in content[0].text:
+        return result
+    return CallToolResult(
+        content=[TextContent(type="text",
+                             text=_LANGUAGE_NOTE_DIRECTIVE.format(note=note)
+                                  + content[0].text)] + content[1:],
+        structured_content=sc,
+        is_error=bool(getattr(result, "is_error", False)),
+    )
 
 
 def _strip_usage(data: dict) -> dict:
@@ -2624,6 +2698,10 @@ async def check_regulatory_compliance(
                 "regions": effective_regions,
                 "regions_defaulted": not regions,
                 "results": results,
+                # CI-1133：本工具的 structuredContent 是**手拼白名单**（CI-342 记过：
+                # 后端新增的键不会自动带上，也不会报错）⇒ 顶层那句 `language_note`
+                # 要显式从 `results` 里推出来，`_relay_language_note` 才够得着文本面。
+                **_language_note_of(results),
             },
         ), {"_usage": _usage})
     finally:
