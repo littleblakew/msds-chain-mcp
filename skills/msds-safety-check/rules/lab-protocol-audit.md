@@ -20,7 +20,10 @@ If chemicals are already identified from auto-detect, use those. Otherwise:
 
 ### Step 2: Batch Safety Check
 
-Call once to get compatibility + PPE + storage in a single response:
+Call once for the pairwise picture — compatibility matrix + key risk warnings with the
+source SDS for each. 🔴 It does **not** return PPE or storage grouping; those are
+separate calls (`get_ppe_recommendation` / `get_storage_guidance`), so do not present
+them as already covered:
 ```
 batch_safety_check(chemicals=["Chemical A", "Chemical B", "Chemical C"])
 ```
@@ -53,9 +56,18 @@ get_chemical_alternatives(chemical="Chloroform", use_case="DNA extraction solven
 ### Emergency Response
 When the user asks about emergency procedures:
 ```
-get_emergency_response(chemical="Hydrofluoric acid", scenario="skin contact")
+# 用户说的是「HF 溅到手上」⇒ 人沾到了 ⇒ exposure（不是 spill，也不是 skin contact）
+get_emergency_response(chemical="Hydrofluoric acid", scenario="exposure")
 ```
-Valid scenarios: `spill`, `fire`, `inhalation`, `skin contact`, `eye contact`, `ingestion`.
+Valid scenarios: **exactly three** — `spill`, `fire`, `exposure`. Anything else is
+rejected by the tool, so map the incident before calling.
+
+🔴 **PERSON FIRST (CI-1020):** if the material reached a person, use `exposure` even if
+the incident is also a spill and the user said "spilled". Skin contact, splash,
+inhalation, eye contact and ingestion all map to `exposure`; a burn *on a person* is
+`exposure`, not `fire`. Only `exposure` returns the substance-specific first-aid
+protocol (e.g. calcium gluconate for HF) — picking `spill` for a contact incident
+silently returns cleanup guidance instead of the antidote.
 
 ### Full Audit Session (Requires API Key)
 When the user requests a formal audit:
