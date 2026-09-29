@@ -34,6 +34,11 @@ structuredContent 里；而模型与多数客户端读的是 `TextContent`，那
   同一条测试红，但**只被点名那两个断言抓到**：它掉出 `carried` 之后
   `assert not missing` 是绿的（它压根不在集合里），`len(carried) >= 10` 也绿（17→16）。
   🔴 这就是为什么那里要点名 —— 一条「条件成立才检查」的不变式，**对「条件不再成立」失明**。
+- 🔴 **被替换掉的那条守卫，它的变异记录也一起换掉了**（改测试留旧记录 ＝ 让人以为某个
+  场景有验过的守卫）：原来这里有一条「lang 还被夹着 ⇒ 本中继 inert」的前向红线，
+  CI-1095 放开 catalog 族之后它**该红却全绿**（它钉的是 quick-chat 族的符号，而那一族
+  没动）。现在换成 `test_catalog_lang_is_forwarded_so_the_relay_can_actually_fire`，
+  变异＝把 `_direct_risk` 的 `_normalize_catalog_lang` 换回 `_normalize_lang` ⇒ 它红。
 - 🔴 变异方向是「**集合变大**」而不是「撤回改动」：往 `_PAYLOAD` 里加一个**新工具也会
   读到的**载荷键测不出任何东西；真正该造的变异是**加一个新工具**（它应当自动出现在
   覆盖面里）。本文件按 `list_tools()` 发现成员，所以这条是结构性成立的，不是我声称的。
@@ -245,25 +250,48 @@ def test_relay_leaves_non_text_and_noteless_results_alone():
         "返回裸字符串的工具不该被这一层动到"
 
 
-def test_v2_lang_is_still_clamped_so_the_relay_is_not_live_yet():
-    """🔴 **前向红线，不是一条普通断言** —— 本文件守的通道今天一个真实用户也到不了。
+def test_catalog_lang_is_forwarded_so_the_relay_can_actually_fire():
+    """🔴 这条**替换**了原来那条「lang 还被夹着，所以本中继是 inert 的」前向红线。
 
-    `_normalize_lang` 把 `ja`/`de`/`id` 夹成 `en` 再打 `/api/v2`（`_BACKEND_LANGS`），
-    而后端只对 en|zh 之外的语言播 `language_note` ⇒ 两个条件**互斥**，MCP 面永远
-    收不到那个键。两侧各量过一次：后端对 `lang=ja` 播、对 `lang=en` 不播；而本仓把
-    `lang="ja"` 传给每个工具时，发出去的 v2 请求体里**全是 `lang=en`**。
-    阳性对照：同一次里报告那条路的 `…/report/signed-url?lang=ja` **确实带着 ja**
-    ⇒ 探针看得见非 en 的 lang，v2 上那个 `en` 是真的，不是探针读漏了。
+    本文件刚写下时，`/api/v2` 收到的 `lang` 被夹成 `en|zh`，而后端只对 en|zh **之外**
+    的语言播 `language_note` ⇒ 两个条件互斥，中继一个用户也够不到。CI-1095 把
+    catalog 族放开成五种之后，那个互斥消失了 —— 本条钉住**放开的方向不许被退回去**：
+    退回去的表现不是报错，是这一整个文件的守卫**全绿而中继永远不触发**。
 
-    ⇒ 放开转发是 **[[CI-1095]]** 的活。**这条会在那一刻变红**，那正是它的用途：
-    届时请回去跑 CI-1133 票面的 Prod 判据（真实 MCP 会话 + `lang=ja`，
-    TextContent 正文里逐字出现那句披露），再把这条改成「已放开」的形态。
-    🔴 **别把这条当碍事的断言删掉** —— 删了它，CI-1095 落地时没有任何东西会提醒
-    「CI-1133 现在才第一次真的可验」，而「守卫全绿」与「从没送达过任何人」同形。
+    🔴🔴 **原来那条红线没能在该红的时刻红，原因值得记下来**：它断言的是
+    `_normalize_lang("ja") == "en"` 和 `_BACKEND_LANGS == ("en", "zh")` ——
+    而 CI-1095 是**新增了 catalog 族**，那两个符号描述的 quick-chat 族**一个字没动**
+    ⇒ 红线全绿，而它存在的唯一理由正好在那一刻兑现了。
+    **教训：前向红线要钉在「被解除的那个条件」上，不是钉在「我当时手边的那个符号」上。**
+    这里改成直接问被测通道本身：catalog 族发出去的 `lang` 是不是原样的 `ja`。
     """
-    assert server._normalize_lang("ja") == "en"
-    assert server._normalize_lang("de") == "en"
-    assert server._BACKEND_LANGS == ("en", "zh")
+    sent = []
+
+    class _C:
+        def __init__(self, *a, **k): ...
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+
+        async def post(self, url=None, *a, json=None, **k):
+            sent.append((str(url), (json or {}).get("lang")))
+            return _Resp()
+
+        async def get(self, url=None, *a, **k):
+            sent.append((str(url), None))
+            return _Resp()
+
+    orig = server.httpx.AsyncClient
+    server.httpx.AsyncClient = _C
+    try:
+        asyncio.run(server.get_chemical_risk_warnings(chemicals=["acetone"], lang="ja"))
+    finally:
+        server.httpx.AsyncClient = orig
+
+    v2 = [lg for u, lg in sent if "/api/v2/" in u]
+    assert v2, f"没抓到任何 /api/v2 请求（抓到 {sent}）—— 先查这个探针，别读成「通过」"
+    assert all(lg == "ja" for lg in v2), (
+        f"catalog 族把 lang 夹掉了（发出 {v2}）⇒ 后端不会播 language_note，"
+        f"本文件所有守卫都会变成永远不触发的绿灯。见 CI-1095。")
 
 
 def test_relay_keeps_the_error_flag():

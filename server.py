@@ -230,31 +230,61 @@ mcp = MCPServer(
 # ChatGPT/Claude 里用中文问，拿到的安全答复是英文的。不是检测错了，是根本没有检测，
 # AI 也没有地方可以表达。它正在用那个语言对话，它最清楚要什么语言。
 #
-# 🔴 **后端今天只真的支持 en 和 zh**（逐语言实测过，别信下面 `LANG` 那行注释
-# 曾经写的 `en|zh|ja|de|id`——那是愿望不是事实）。v2 端点的行为是**二元**的：
-# `lang == "en"` → 英文，**其他任何值**（`ja`/`de`/`id`/`fr`/`zh-CN`/空串）→ **中文**；
-# quick-chat 同样（`lang=ja` 实测返回 343 个汉字、零假名）。
+# 🔴🔴 **CI-1095：`lang` 是按「后端表面」分族的，不是全局的。** 本文件有两族，
+# 分界线**不是端点路径，是「这段文字谁写的」**：
 #
-# ⇒ 所以**归一化必须放在我们这一层**：不归一的话，一个日语用户会拿到**中文**——
-# 比现在的英文更糟（看不懂 + 误以为系统支持日语）。归一之后，参数描述里那句
-# 「其他值回退英文」才是真的，而不是一句照抄自 CI-258 却没人验过的承诺。
+#   ① **catalog 族（`/api/v2` 的确定性端点）** —— 文案由后端按 i18n 表渲染，
+#      五种语言都是**静态译好的** ⇒ 逐端点逐语言实测：`ja` 的每一个 CJK 字段都带假名
+#      （**零个纯汉字字段**）、`de`/`id` 是目标语言、**没有中文泄漏**；译文缺失时后端
+#      回英文并附一句 `language_note` 披露（CI-1123）⇒ **五种全转发**。
+#   ② **quick-chat 族** —— 答案是 LLM **现写**的，语言由 prompt 约束而非模板保证。
+#      同一把尺子采样 12 次：`ja` 有 1/6、`de` 有 1/6 **把中文混进正文**（`id` 0/6）
+#      ⇒ 对一个化学安全产品，「偶尔回一门用户读不懂的语言」比「稳定回英文」更糟，
+#      且**这一族不播 `language_note`**（那是 `/api/v2` 路由类的事）⇒ 用户拿到中文时
+#      没有任何信号 ⇒ **仍只转发 en/zh**。残余缺陷归后端 prompt，不在 MCP 层糊。
 #
-# 🔴 **要加语言，判据是「实测那个语言真的出来了」**，不是「后端文档说支持」，
-# 也不是「往这个元组里加一行」。
+# 🔴 **归一化必须留在我们这一层**：不归一的话，非目标语言会原样转发给后端，而
+# 「后端拿一个它不认的值会做什么」不是我们能保证的事。
+# 🔴 **要往任一族加语言，判据是「实测那个语言真的出来了」**——不是后端文档说支持，
+# 更不是往元组里加一行。catalog 族要逐字段看（**只数汉字分不开日文漢字与中文**，
+# 必须单独数假名）；quick-chat 族**一次运行不算数**（LLM 现写，要多采几次）。
 _BACKEND_LANGS = ("en", "zh")
+_CATALOG_LANGS = ("en", "zh", "ja", "de", "id")
 
 
 def _normalize_lang(lang: str | None) -> str:
-    """把调用方给的语言码收敛成后端**真的**会照做的那几个；其余一律英文。"""
+    """**quick-chat 族**：收敛成 LLM 实测会稳定照做的那几个；其余一律英文。"""
     if lang and lang.strip().lower() in _BACKEND_LANGS:
+        return lang.strip().lower()
+    return "en"
+
+
+def _normalize_catalog_lang(lang: str | None) -> str:
+    """**catalog 族（`/api/v2`）**：静态译好的五种原样过，其余一律英文。
+
+    🔴 与 `_normalize_lang` 的区别只有支持集合，**别把两者合并**：合并等于把一族的
+    实测结论套到另一族头上，而那正是 CI-1095 要拆开的东西（两族的失败方式不同——
+    catalog 缺译文会**回英文并披露**，quick-chat 回错语言是**静默的**）。
+    """
+    if lang and lang.strip().lower() in _CATALOG_LANGS:
         return lang.strip().lower()
     return "en"
 
 
 Lang = Annotated[str | None, Field(
     description='Answer language — pass the language THIS conversation is in, not the '
-                'user\'s country. Currently supported: "en", "zh". Anything else, or '
-                'omitted, is answered in English.',
+                'user\'s country. Supported: "en", "zh", "ja", "de", "id". Anything '
+                'else, or omitted, is answered in English. Parts we have not translated '
+                'yet are returned in English with an explicit note saying so.',
+)]
+
+# 🔴 quick-chat 一族单独一个注解：它支持的语言**比 `Lang` 少**（见上面的分族理由）。
+# 共用 `Lang` 会让模型以为 `ask_chemical_safety` 也能出日语 —— 而那是 schema 承诺一件
+# 实测做不稳的事（CI-521 那条「描述与实现要逐字对得上」的同一条规矩）。
+QuickLang = Annotated[str | None, Field(
+    description='Answer language — pass the language THIS conversation is in, not the '
+                'user\'s country. Supported: "en", "zh". Anything else, or omitted, is '
+                'answered in English.',
 )]
 
 
@@ -1754,7 +1784,7 @@ async def _direct_compat(chemicals: list[str], lang: str | None = None,
         res = await client.post(
             f"{API_URL}/api/v2/compatibility/check",
             json=_with_suppliers(
-                {"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
+                {"chemicals": chemicals, "lang": _normalize_catalog_lang(lang or LANG)},
                 chemicals, suppliers),
             headers=_headers(),
         )
@@ -1768,7 +1798,7 @@ async def _direct_risk(chemicals: list[str], lang: str | None = None,
         res = await client.post(
             f"{API_URL}/api/v2/risk-warnings",
             json=_with_suppliers(
-                {"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
+                {"chemicals": chemicals, "lang": _normalize_catalog_lang(lang or LANG)},
                 chemicals, suppliers),
             headers=_headers(),
         )
@@ -1782,7 +1812,7 @@ async def _direct_batch(chemicals: list[str], lang: str | None = None,
         res = await client.post(
             f"{API_URL}/api/v2/batch-safety",
             json=_with_suppliers(
-                {"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
+                {"chemicals": chemicals, "lang": _normalize_catalog_lang(lang or LANG)},
                 chemicals, suppliers),
             headers=_headers(),
         )
@@ -1796,7 +1826,7 @@ async def _direct_ppe(chemicals: list[str], lang: str | None = None,
         res = await client.post(
             f"{API_URL}/api/v2/ppe-recommendation",
             json=_with_suppliers(
-                {"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
+                {"chemicals": chemicals, "lang": _normalize_catalog_lang(lang or LANG)},
                 chemicals, suppliers),
             headers=_headers(),
         )
@@ -1810,7 +1840,7 @@ async def _direct_storage(chemicals: list[str], lang: str | None = None,
         res = await client.post(
             f"{API_URL}/api/v2/storage-guidance",
             json=_with_suppliers(
-                {"chemicals": chemicals, "lang": _normalize_lang(lang or LANG)},
+                {"chemicals": chemicals, "lang": _normalize_catalog_lang(lang or LANG)},
                 chemicals, suppliers),
             headers=_headers(),
         )
@@ -1822,7 +1852,7 @@ async def _direct_emergency(chemical: str, scenario: str, lang: str | None = Non
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         res = await client.post(
             f"{API_URL}/api/v2/emergency-response",
-            json={"chemical": chemical, "scenario": scenario, "lang": _normalize_lang(lang or LANG)},
+            json={"chemical": chemical, "scenario": scenario, "lang": _normalize_catalog_lang(lang or LANG)},
             headers=_headers(),
         )
         return _billed_json(res)
@@ -1835,9 +1865,10 @@ async def _direct_compliance(chemical: str, regions: list[str],
     🔴 CI-361：`lang` 此前发的是模块级 `LANG`（服务端环境变量，托管网关上**恒 `en`**）
     ⇒ 调用方说什么语言都没用。
 
-    🔴 写法必须逐字是 `_normalize_lang(lang or LANG)` —— **归一化要盖住 `LANG` 那一侧**，
-    不是只盖住调用方给的值。`MSDS_LANG` 被配成后端不认的值时，**只归一化调用方那一侧、
-    让 `LANG` 直通**的写法会把那个非法值原样转发，而别的工具都会把它夹成 `en`。
+    🔴 写法必须逐字是 `_normalize_catalog_lang(lang or LANG)`（CI-1095 起本端点属
+    **catalog 族**）—— **归一化要盖住 `LANG` 那一侧**，不是只盖住调用方给的值。
+    `MSDS_LANG` 被配成后端不认的值时，**只归一化调用方那一侧、让 `LANG` 直通**的写法
+    会把那个非法值原样转发，而别的工具都会把它夹成 `en`。
     ⚠️ 今天 `LANG` 恒 `en` 所以两种写法行为相同 ——**这正是它不会被任何测试抓到的原因**。
     守卫 `test_ci356_lang_param.py::test_lang_forwarding_has_exactly_one_spelling`
     钉住只能有这一种拼写。
@@ -1848,7 +1879,7 @@ async def _direct_compliance(chemical: str, regions: list[str],
         res = await client.post(
             f"{API_URL}/api/v2/compliance",
             json={"chemical": chemical, "regions": regions,
-                  "lang": _normalize_lang(lang or LANG)},
+                  "lang": _normalize_catalog_lang(lang or LANG)},
             headers=_headers(),
         )
         return _billed_json(res)
@@ -1867,6 +1898,21 @@ _REG_LIST_COVERAGE_NOTE = {
     "zh": "覆盖范围说明：这是我们整理的 23 份清单副本，不是实时监管数据源，"
           "且不含台湾与 IARC 数据。某份清单没命中只代表「我们这份副本里没有」，"
           "绝不等于「不受监管」。",
+    # 🔴 **每一门语言都必须点名台湾与 IARC**（CI-523 的前向红线：营销面可以模糊，
+    # runtime 必须精确）。翻译时这两个名字和那句「没命中 ≠ 不受监管」一起搬，
+    # 少掉任何一半都会把一句限定说明变成一句担保。
+    "ja": ("カバレッジに関する注記：これは当社が整理した 23 リストの写しであり、"
+           "リアルタイムの規制フィードではありません。台湾および IARC のデータは"
+           "含まれていません。リストに一致がないことは「当社の写しに見つからない」"
+           "という意味であり、「規制対象外」という意味では決してありません。"),
+    "de": ("Hinweis zur Abdeckung: Dies ist unsere kuratierte Kopie der 23 Listen, "
+           "kein Live-Regulierungs-Feed, und sie enthält keine Daten zu Taiwan und "
+           "keine IARC-Daten. Eine fehlende Liste bedeutet „in unserer Kopie nicht "
+           "gefunden“ und niemals „nicht reguliert“."),
+    "id": ("Catatan cakupan: ini adalah salinan kurasi kami atas 23 daftar, bukan "
+           "umpan regulasi langsung, dan tidak memuat data Taiwan maupun IARC. "
+           "Daftar yang tidak cocok berarti \"tidak ditemukan dalam salinan kami\", "
+           "bukan berarti \"tidak diatur\"."),
 }
 _REG_LIST_STRINGS = {
     "en": {"title": "Regulatory Lists", "not_checked": "⚠️ **Not checked.**",
@@ -1879,6 +1925,24 @@ _REG_LIST_STRINGS = {
            "near": "库中的近似命中", "cas": "CAS",
            "count": "命中清单数", "unknown": "未知清单",
            "none": "在我们那份 23 清单副本中没有命中。"},
+    # 🔴 CI-1095：catalog 族放开五语之后，**后端回日文而这里只有英文**＝新造一种
+    # 混语言输出，而且它不在 CI-1123 那句 `language_note` 的覆盖里（那一句只描述
+    # **后端自己**的回退）⇒ 用户看不出哪半是我们没翻。review 抓到的。
+    "ja": {"title": "規制リスト", "not_checked": "⚠️ **未確認。**",
+           "status": "ステータス",
+           "near": "データベース内の近似一致", "cas": "CAS",
+           "count": "一致したリスト数", "unknown": "不明なリスト",
+           "none": "当社が保有する 23 リストの写しには一致がありませんでした。"},
+    "de": {"title": "Regulatorische Listen", "not_checked": "⚠️ **Nicht geprüft.**",
+           "status": "Status",
+           "near": "Ähnliche Treffer in der Datenbank", "cas": "CAS",
+           "count": "Treffer in Listen", "unknown": "Unbekannte Liste",
+           "none": "Kein Treffer in unserer Kopie der 23 Listen."},
+    "id": {"title": "Daftar Regulasi", "not_checked": "⚠️ **Belum diperiksa.**",
+           "status": "Status",
+           "near": "Kecocokan mirip dalam basis data", "cas": "CAS",
+           "count": "Jumlah daftar yang cocok", "unknown": "Daftar tidak dikenal",
+           "none": "Tidak ada kecocokan dalam salinan 23 daftar milik kami."},
 }
 
 
@@ -1887,16 +1951,24 @@ _REG_LIST_STRINGS = {
 # 同族 [[CI-572]]「格式留两份 ⇒ 改一处漏另一处」）。
 # 🔴 zh 也要有：`_format_regulatory_lists` 那条路按调用方语言渲染，只给英文等于
 # 在中文面上留一句原样的「库中未收录。」。
+# 🔴 **极性是这句话的全部**：说的是「我们没解析出来」，**不是**「库里没有」。
+# 翻译时任何一门语言把这层否定丢掉，都会变成一句我们无权说的断言（CI-243/322/334 同形）。
 _UNRESOLVED_BOOLEAN_NOTE = {
     "en": ("We could not resolve this input to a record — this is NOT a statement that "
            "the database has no record for it."),
     "zh": "我们没能把这个输入解析到一条记录 —— 这**不**代表库中没有它。",
+    "ja": ("この入力をレコードに紐付けできませんでした —— これはデータベースに該当する"
+           "レコードが**存在しない**という意味では**ありません**。"),
+    "de": ("Wir konnten diese Eingabe keinem Datensatz zuordnen — das ist **keine** "
+           "Aussage darüber, dass die Datenbank keinen Datensatz dazu hat."),
+    "id": ("Kami tidak dapat mencocokkan masukan ini dengan suatu rekaman — ini **bukan** "
+           "pernyataan bahwa basis data tidak memiliki rekaman untuknya."),
 }
 
 
 def _unresolved_boolean_note(lang: str | None = None) -> str:
     """CI-714: 对「只有一个布尔」的未解析载荷，我们唯一说得出口的那句话。"""
-    return _UNRESOLVED_BOOLEAN_NOTE.get(_normalize_lang(lang or LANG),
+    return _UNRESOLVED_BOOLEAN_NOTE.get(_normalize_catalog_lang(lang or LANG),
                                         _UNRESOLVED_BOOLEAN_NOTE["en"])
 
 
@@ -1918,7 +1990,7 @@ def _unresolved_reason_note(data: dict, lang: str | None = None) -> str:
     """
     detail = data.get("unresolved_detail")
     if isinstance(detail, dict):
-        key = "reason" if _normalize_lang(lang or LANG) == "zh" else "reason_en"
+        key = "reason" if _normalize_catalog_lang(lang or LANG) == "zh" else "reason_en"
         reason = (detail.get(key) or "").strip()
         if reason:
             return reason
@@ -1939,7 +2011,7 @@ def _format_regulatory_lists(data: dict, chemical: str, lang: str | None = None)
         dead-ending.
       - resolved with zero hits → "not found in our copy", never "not regulated".
     """
-    lg = _normalize_lang(lang or LANG)
+    lg = _normalize_catalog_lang(lang or LANG)
     s = _REG_LIST_STRINGS.get(lg, _REG_LIST_STRINGS["en"])
     lists = data.get("lists") or []
     lines = [f"**{s['title']} — {data.get('chemical') or chemical}**\n"]
@@ -1977,7 +2049,7 @@ async def _direct_regulatory_lists(chemical: str, lang: str | None = None) -> di
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         res = await client.post(
             f"{API_URL}/api/v2/regulatory-lists",
-            json={"chemical": chemical, "lang": _normalize_lang(lang or LANG)},
+            json={"chemical": chemical, "lang": _normalize_catalog_lang(lang or LANG)},
             headers=_headers(),
         )
         return _billed_json(res)
@@ -2038,7 +2110,7 @@ async def _direct_sds_section(chemical: str, section: int, lang: str | None = No
         res = await client.post(
             f"{API_URL}/api/v2/sds-section",
             json={"chemical": chemical, "section": section,
-                  "lang": _normalize_lang(lang or LANG)},
+                  "lang": _normalize_catalog_lang(lang or LANG)},
             headers=_headers(),
         )
         return _billed_json(res)
@@ -2102,7 +2174,7 @@ async def _direct_alternatives(chemical: str, use_case: str = "", lang: str | No
         res = await client.post(
             f"{API_URL}/api/v2/chemical-alternatives",
             json={"chemical": chemical, "use_case": use_case or "general",
-                  "lang": _normalize_lang(lang or LANG)},
+                  "lang": _normalize_catalog_lang(lang or LANG)},
             headers=_headers(),
         )
         return _billed_json(res)
@@ -2718,7 +2790,7 @@ async def ask_chemical_safety(
                 'hazards and PPE for TMAH?", "How should I store acetone and methanol in '
                 'the same cabinet?", "A worker got hydrofluoric acid on their skin — first aid?"',
     )],
-    lang: Lang = None,
+    lang: QuickLang = None,
 ) -> str:
     """
     PREFERRED first tool for any general chemical-safety question — hazards, PPE,
@@ -4454,6 +4526,10 @@ async def get_chemical_alternatives(
         # 这个工具在那之后没有调用记录 ⇒ 「没人用 zh」是猜的，不是测的。所以按原则走保守。
         # ⏭ 退出条件：curated 表本地化（[[CI-361]] 的地盘）+ handler 真的读 `use_case`
         # 之后，删掉这个回退、全部走直连。
+        # 🔴 CI-1095 review 抓到：这一行判的是**要不要回退到 quick-chat**，所以它必须用
+        # **quick-chat 族**的归一化。用 catalog 族会让 `ja`/`de`/`id` 判成「非英文」而走进
+        # LLM 那条路，可 `_quick_chat` 进门就把语言夹回 `en` ⇒ 同样的英文答案、慢 30 倍
+        # （9.7s vs 0.3s），**而且没有任何东西会红**（本文件的既有用例只覆盖 `zh`）。
         wants_more_than_curated = bool(use_case) or _normalize_lang(lang or LANG) != "en"
         if wants_more_than_curated:
             ctx = f" It is being used as: {use_case}." if use_case else ""
@@ -4495,7 +4571,7 @@ async def validate_protocol_chemicals(
                     "code such as an Opentrons Python protocol. Chemical names are extracted "
                     "from it automatically. Maximum ~4000 characters.",
     )],
-    lang: Lang = None,
+    lang: QuickLang = None,
 ) -> str:
     """
     Extract and validate chemical names from a protocol or experiment description.
@@ -4768,7 +4844,7 @@ async def check_mixing_order(
         description='Optional context about the procedure, e.g. "diluting for titration" '
                     'or "quenching a reaction".',
     )] = "",
-    lang: Lang = None,
+    lang: QuickLang = None,
 ) -> str:
     """
     Determine the safe order for mixing/adding two chemicals.
