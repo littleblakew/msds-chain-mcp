@@ -193,10 +193,29 @@ def test_supported_set_matches_what_the_backend_actually_does():
 
 
 def test_normalized_value_is_what_hits_the_wire(sent):
-    """归一化必须发生在**发出去之前**——在工具层归一、在 payload 里又用原值等于没归一。"""
+    """归一化必须发生在**发出去之前**——在工具层归一、在 payload 里又用原值等于没归一。
+
+    🔴 CI-1095 起判据按族分开，**两族都要测**，否则只测一族时另一族改错了也不会红：
+    · catalog 族（`/api/v2`）：`ja` **原样发出去**（后端那五种是静态译好的）；
+    · quick-chat 族：`ja` 仍**夹成 `en`**（答案是 LLM 现写的，实测会偶发混入中文）。
+    两族都要验「非法值被夹掉」，那才是本条原本守的东西。
+    """
     asyncio.run(server.get_chemical_risk_warnings(chemicals=["a"], lang="ja"))
     langs = [b.get("lang") for _, b in sent if "lang" in b]
-    assert langs and all(l == "en" for l in langs), f"lang=ja 应归一成 en，实际发出 {langs}"
+    assert langs and all(l == "ja" for l in langs), (
+        f"catalog 族应原样转发 ja，实际发出 {langs}")
+
+    sent.clear()
+    asyncio.run(server.ask_chemical_safety(question="q", lang="ja"))
+    langs = [b.get("lang") for _, b in sent if "lang" in b]
+    assert langs and all(l == "en" for l in langs), (
+        f"quick-chat 族的 ja 应夹成 en，实际发出 {langs}")
+
+    sent.clear()
+    asyncio.run(server.get_chemical_risk_warnings(chemicals=["a"], lang="fr"))
+    langs = [b.get("lang") for _, b in sent if "lang" in b]
+    assert langs and all(l == "en" for l in langs), (
+        f"两族都不认的值必须夹成 en，实际发出 {langs}")
 
 
 def test_compliance_tool_actually_forwards_lang_to_the_backend(monkeypatch):
@@ -263,9 +282,13 @@ def test_lang_forwarding_has_exactly_one_spelling():
     # en/zh 真照做。共用 `_normalize_lang` 会把一个真能出德语报告的通道压成英文且不报错。
     # ⚠️ 放它进来**不放松本条守卫要的那件事**：它同样盖住 `LANG` 那一侧
     # （`lang or LANG`），所以「MSDS_LANG 配了非法值会被原样转发」这个后果仍被挡住。
-    # 🔴 新增语言族时别往这里加第四种写法，除非它也满足那一条。
+    # 🔴 CI-1095 起有**第四种**：`_normalize_catalog_lang(lang or LANG)`，
+    # 族是 `/api/v2` 的确定性端点（文案由后端按 i18n 表静态渲染，五语都是译好的）。
+    # 它与 `_normalize_lang` 的区别**只有支持集合**，同样盖住 `LANG` 那一侧。
+    # 🔴 再新增语言族时别往这里加第五种写法，除非它也满足那一条。
     allowed = {"_normalize_lang(lang or LANG)", "LANG",
-               "_normalize_report_lang(lang or LANG)"}
+               "_normalize_report_lang(lang or LANG)",
+               "_normalize_catalog_lang(lang or LANG)"}
     extra = shapes - allowed
     assert not extra, (
         f"出现了第三种转发 lang 的写法：{extra}。"
