@@ -1898,6 +1898,21 @@ _REG_LIST_COVERAGE_NOTE = {
     "zh": "覆盖范围说明：这是我们整理的 23 份清单副本，不是实时监管数据源，"
           "且不含台湾与 IARC 数据。某份清单没命中只代表「我们这份副本里没有」，"
           "绝不等于「不受监管」。",
+    # 🔴 **每一门语言都必须点名台湾与 IARC**（CI-523 的前向红线：营销面可以模糊，
+    # runtime 必须精确）。翻译时这两个名字和那句「没命中 ≠ 不受监管」一起搬，
+    # 少掉任何一半都会把一句限定说明变成一句担保。
+    "ja": ("カバレッジに関する注記：これは当社が整理した 23 リストの写しであり、"
+           "リアルタイムの規制フィードではありません。台湾および IARC のデータは"
+           "含まれていません。リストに一致がないことは「当社の写しに見つからない」"
+           "という意味であり、「規制対象外」という意味では決してありません。"),
+    "de": ("Hinweis zur Abdeckung: Dies ist unsere kuratierte Kopie der 23 Listen, "
+           "kein Live-Regulierungs-Feed, und sie enthält keine Daten zu Taiwan und "
+           "keine IARC-Daten. Eine fehlende Liste bedeutet „in unserer Kopie nicht "
+           "gefunden“ und niemals „nicht reguliert“."),
+    "id": ("Catatan cakupan: ini adalah salinan kurasi kami atas 23 daftar, bukan "
+           "umpan regulasi langsung, dan tidak memuat data Taiwan maupun IARC. "
+           "Daftar yang tidak cocok berarti \"tidak ditemukan dalam salinan kami\", "
+           "bukan berarti \"tidak diatur\"."),
 }
 _REG_LIST_STRINGS = {
     "en": {"title": "Regulatory Lists", "not_checked": "⚠️ **Not checked.**",
@@ -1910,6 +1925,24 @@ _REG_LIST_STRINGS = {
            "near": "库中的近似命中", "cas": "CAS",
            "count": "命中清单数", "unknown": "未知清单",
            "none": "在我们那份 23 清单副本中没有命中。"},
+    # 🔴 CI-1095：catalog 族放开五语之后，**后端回日文而这里只有英文**＝新造一种
+    # 混语言输出，而且它不在 CI-1123 那句 `language_note` 的覆盖里（那一句只描述
+    # **后端自己**的回退）⇒ 用户看不出哪半是我们没翻。review 抓到的。
+    "ja": {"title": "規制リスト", "not_checked": "⚠️ **未確認。**",
+           "status": "ステータス",
+           "near": "データベース内の近似一致", "cas": "CAS",
+           "count": "一致したリスト数", "unknown": "不明なリスト",
+           "none": "当社が保有する 23 リストの写しには一致がありませんでした。"},
+    "de": {"title": "Regulatorische Listen", "not_checked": "⚠️ **Nicht geprüft.**",
+           "status": "Status",
+           "near": "Ähnliche Treffer in der Datenbank", "cas": "CAS",
+           "count": "Treffer in Listen", "unknown": "Unbekannte Liste",
+           "none": "Kein Treffer in unserer Kopie der 23 Listen."},
+    "id": {"title": "Daftar Regulasi", "not_checked": "⚠️ **Belum diperiksa.**",
+           "status": "Status",
+           "near": "Kecocokan mirip dalam basis data", "cas": "CAS",
+           "count": "Jumlah daftar yang cocok", "unknown": "Daftar tidak dikenal",
+           "none": "Tidak ada kecocokan dalam salinan 23 daftar milik kami."},
 }
 
 
@@ -1918,10 +1951,18 @@ _REG_LIST_STRINGS = {
 # 同族 [[CI-572]]「格式留两份 ⇒ 改一处漏另一处」）。
 # 🔴 zh 也要有：`_format_regulatory_lists` 那条路按调用方语言渲染，只给英文等于
 # 在中文面上留一句原样的「库中未收录。」。
+# 🔴 **极性是这句话的全部**：说的是「我们没解析出来」，**不是**「库里没有」。
+# 翻译时任何一门语言把这层否定丢掉，都会变成一句我们无权说的断言（CI-243/322/334 同形）。
 _UNRESOLVED_BOOLEAN_NOTE = {
     "en": ("We could not resolve this input to a record — this is NOT a statement that "
            "the database has no record for it."),
     "zh": "我们没能把这个输入解析到一条记录 —— 这**不**代表库中没有它。",
+    "ja": ("この入力をレコードに紐付けできませんでした —— これはデータベースに該当する"
+           "レコードが**存在しない**という意味では**ありません**。"),
+    "de": ("Wir konnten diese Eingabe keinem Datensatz zuordnen — das ist **keine** "
+           "Aussage darüber, dass die Datenbank keinen Datensatz dazu hat."),
+    "id": ("Kami tidak dapat mencocokkan masukan ini dengan suatu rekaman — ini **bukan** "
+           "pernyataan bahwa basis data tidak memiliki rekaman untuknya."),
 }
 
 
@@ -4485,7 +4526,11 @@ async def get_chemical_alternatives(
         # 这个工具在那之后没有调用记录 ⇒ 「没人用 zh」是猜的，不是测的。所以按原则走保守。
         # ⏭ 退出条件：curated 表本地化（[[CI-361]] 的地盘）+ handler 真的读 `use_case`
         # 之后，删掉这个回退、全部走直连。
-        wants_more_than_curated = bool(use_case) or _normalize_catalog_lang(lang or LANG) != "en"
+        # 🔴 CI-1095 review 抓到：这一行判的是**要不要回退到 quick-chat**，所以它必须用
+        # **quick-chat 族**的归一化。用 catalog 族会让 `ja`/`de`/`id` 判成「非英文」而走进
+        # LLM 那条路，可 `_quick_chat` 进门就把语言夹回 `en` ⇒ 同样的英文答案、慢 30 倍
+        # （9.7s vs 0.3s），**而且没有任何东西会红**（本文件的既有用例只覆盖 `zh`）。
+        wants_more_than_curated = bool(use_case) or _normalize_lang(lang or LANG) != "en"
         if wants_more_than_curated:
             ctx = f" It is being used as: {use_case}." if use_case else ""
             message = (
