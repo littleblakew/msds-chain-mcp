@@ -31,6 +31,20 @@ host 的 agent 当步骤执行 ⇒ 里面写错一个工具名或一个参数名
   ⇒ `test_incident_response_answers_before_provenance` 红。
 - 往任一 prompt 里写 "not in our database"
   ⇒ `test_prompts_never_assert_absence` 红（那是断言一件我们没验证过的事）。
+- **把 `scenario` 的合法值退回「六值且不含 `exposure`」那个旧写法**（`/code-review` 实际
+  抓到的那次缺陷）⇒ `test_prompt_lists_every_allowed_value_of_a_literal_param` 与
+  `test_incident_response_carries_the_person_first_rule` **两条都红**。
+  🔴🔴 **第一次造这条变异时，通用那条没红、只有专门那条红了** —— 因为
+  `_literal_params` 读的是 `inspect.signature().annotation`，而 `server.py` 有
+  `from __future__ import annotations` ⇒ 注解是**字符串**、`get_origin()` 恒 `None`
+  ⇒ 提取器**返回空表，守卫恒绿**。改用 `get_type_hints(..., include_extras=True)`
+  并补了阳性对照 `test_the_literal_extractor_is_not_returning_nothing`。
+  📌 **那一轮「另一条守卫红了」差点让我以为覆盖面是够的** —— 两条守卫覆盖的是
+  同一个缺陷的两个面，**其中一条红不构成另一条有效的证据**。
+- 📌 **修好提取器之后，它当场又抓出第二处真实缺陷**：`lab_protocol_audit` 在 step 4 教
+  agent 调 `get_emergency_response(..., scenario=...)` 却**一个合法值都没列**。
+  ⇒ 这条守卫不是为了钉住我写的那三段文案，是为了钉住「**只要教 agent 调受约束的参数，
+  就必须把约束一起给它**」。
 - 🔴 **变异方向是「集合变大」**：真正该造的是**加一个新 prompt**（它应当自动进入全部
   检查）。本文件按 `list_prompts()` 发现成员，所以这条是结构性成立的，不是我声称的。
 """
@@ -228,3 +242,87 @@ def test_default_regions_are_disclosed_as_a_default():
 # 共 6 条。🔴 **那 6 条单独跑、两文件一起跑都是绿的，只有全量一起跑才炸**，
 # 而 **2.2.0 上全绿** ⇒ 三个「绿」都不构成安全的证据。
 # ⇒ **要加 `live_client` 用例，就加进已经在用它的那个文件。**
+
+
+def _literal_params(tool_name: str) -> dict[str, tuple]:
+    """该工具有 `Literal[...]` 约束的参数 → 它允许的值。
+
+    🔴 **必须走 `get_type_hints(..., include_extras=True)`，不能读
+    `inspect.signature().parameters[...].annotation`**：`server.py` 有
+    `from __future__ import annotations`，签名里的注解是**字符串**
+    ⇒ `typing.get_origin()` 恒 `None`、`get_args()` 恒空
+    ⇒ 本函数会**返回空表，而守卫据此全绿**（与「文案全都对」完全同形）。
+    我的第一版就是这样，靠变异才发现——**它空跑了一整轮**。
+    📌 上面那条只比对**参数名**的守卫不受影响（名字不需要求值注解），
+    所以「另一条守卫是好的」也不构成这一条是好的证据。
+    """
+    import typing
+    try:
+        hints = typing.get_type_hints(getattr(server, tool_name), include_extras=True)
+    except Exception:                     # 解析不了就别假装查过
+        return {}
+    out = {}
+    for pname, ann in hints.items():
+        for cand in (ann, *typing.get_args(ann)):
+            if typing.get_origin(cand) is typing.Literal:
+                out[pname] = typing.get_args(cand)
+                break
+    return out
+
+
+def test_the_literal_extractor_is_not_returning_nothing():
+    """🔴 阳性对照：上面那条「合法值列全了没」是**没找到就绿**。
+
+    `_literal_params` 返回空表时它恒绿，而那与「文案全都对」完全同形
+    ——我的第一版正是这样空跑的。这条钉住「至少抽得出一个已知的 Literal」。
+    """
+    got = _literal_params("get_emergency_response")
+    assert "scenario" in got, f"抽不出 scenario 的 Literal：{got} —— 先查提取器"
+    assert set(got["scenario"]) == {"spill", "fire", "exposure"}, got["scenario"]
+
+
+def test_prompt_lists_every_allowed_value_of_a_literal_param():
+    """🔴 `/code-review` 抓到的那一类：**工具名对、参数名对、而「合法取值」是错的**。
+
+    上面两条只查名字存在，查不了**契约**。实际被抓到的缺陷：`incident_response` 把
+    `scenario` 的合法值列成六个（spill / fire / inhalation / skin contact / eye contact /
+    ingestion），而真实签名是 `Literal["spill", "fire", "exposure"]` ⇒ agent 会把
+    `"skin contact"` 原样传进去被拒 —— 发生在**唯一一个以「先给可执行步骤」为存在理由**
+    的 prompt 上。
+
+    判据：**prompt 只要提到某个 `Literal` 参数，就必须把它的每一个合法值都写出来。**
+    这条恰好抓得住那次缺陷（旧文案里 `exposure` **压根没出现**），而且它是机械的
+    ——工具改 `Literal` 时这里会跟着红，不靠人记得回来改文案。
+    """
+    tools = _tool_names()
+    bad = {}
+    for p in _prompts():
+        text = _render(p.name)
+        for tool in {m for m in _CALL.findall(text) if m in tools}:
+            for pname, allowed in _literal_params(tool).items():
+                if pname not in text:
+                    continue      # 没提这个参数就不管
+                missing = [v for v in allowed if str(v) not in text]
+                if missing:
+                    bad.setdefault(p.name, []).append(
+                        f"{tool}.{pname} 缺 {missing}（合法值只有 {list(allowed)}）")
+    assert not bad, (
+        f"这些 prompt 提到了受 `Literal` 约束的参数，却没把合法值列全：{bad}。"
+        f"少列一个就等于教 agent 用别的值，而那会被签名当场拒掉。")
+
+
+def test_incident_response_carries_the_person_first_rule():
+    """🔴 前向红线（CI-1020）：`scenario` 选错会**静默**返回清理指南而不是解毒方案。
+
+    `get_emergency_response` 的参数描述里写死了「人沾到了就用 exposure，哪怕用户说的是
+    spilled」「人被烧伤是 exposure 不是 fire」——因为**只有 `exposure` 返回物质特异性
+    急救方案**（HF 的葡萄糖酸钙）。剧本必须把这条一起带过去：agent 读的是剧本，
+    而剧本沉默时它会照用户的用词去选。
+    """
+    text = _render("incident_response")
+    assert "exposure" in text, "连 exposure 这个值都没出现"
+    assert re.search(r"PERSON FIRST|reached a person", text), (
+        "没把「人沾到了就用 exposure」这条带进剧本 —— 选错会静默拿到清理指南")
+    assert re.search(r"calcium gluconate|antidote", text, re.I), (
+        "没说清选错的后果（拿到清理指南而不是解毒方案）—— 只给规则不给后果，"
+        "模型在与用户用词冲突时会倒向用户的用词")
