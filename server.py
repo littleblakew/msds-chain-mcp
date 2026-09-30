@@ -20,8 +20,10 @@ Claude Code integration (~/.claude/settings.json):
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
+import contextlib
 import functools
 import inspect
 import json
@@ -5532,6 +5534,45 @@ async def upload_msds_pdf(
                     success=success, error_message=error_msg)
 
 
+# ---------------------------------------------------------------------------
+# CI-1135：批量分析的**副产物** —— 会话容器
+# ---------------------------------------------------------------------------
+# 同一个「会话＝分析容器」在 Web 上是主力（90 天 1200 个 / 26 人），在 MCP 上是 0：
+# 外部真人多化学品分析 206 次 / 25 人，而 `create_audit_session` **一次都没有**。
+#
+# 🔴 **前两次尝试的共同形状是「还要求用户多走一步」**，两次都零效果：
+#   ① day-1：在返回里挂一句「想要签名报告就调 `create_audit_session`」⇒ 6 个外部用户、0 个会话
+#   ② [[CI-174]]：`get_audit_report()` 零参也能调，自动从最近分析建会话 ⇒ 至今外部 1 次
+# ⇒ 本票**取消这一步**：会话是批量分析的副产物，不是一个要用户去点的下一步。
+# **在 MCP 里编排权永远在 host 的 agent，任何要求多走一步的设计都会被它省掉。**
+#
+# 🔴 **三条硬约束，缺一条这个设计就有害**：
+#   · **并发，不串行**：会话那条路与 batch 各自最多吃 `TIMEOUT_MULTI`；串起来等于把这个
+#     工具的延迟预算翻倍。两者互不依赖 ⇒ `asyncio.gather`。
+#   · **失败绝不影响答案**：会话是副产物，它超时/报错时用户照样要拿到安全数据。
+#     ⇒ 整段裹在 `except Exception` 里，只丢掉副产物。
+#   · **只在有调用方凭证时落**：`POST /sessions` 把会话绑到 key 的所有者；匿名调用建出来的
+#     会话没有归属、用户也取不到报告，只会往 `demo.sessions` 里堆垃圾行。
+#
+# 🔴 **它今天不额外收费**（`create_audit_session` 在后端是 `_zero_priced("session_create")`），
+# 而那是**配置不是代码** —— 后端那段注释明写「把 `VALUE_CREDITS[result_type]` 改成非 0
+# 就开始收费，不需要改任何代码」。守卫 `test_ci1135_session_side_effect.py` 钉住这个前提：
+# 定价那天必须先决定「批量分析可不可以静默产生一笔费用」，**而不是让它静默发生**。
+async def _session_from_batch(chemicals: list[str]) -> str | None:
+    """把这次批量分析落成一个会话，返回 session_id；拿不到就返回 None（绝不抛）。"""
+    if not get_caller_credential():
+        return None
+    try:
+        built = await _build_audit_session(
+            experiment_name=f"Batch safety check — {len(chemicals)} chemicals",
+            chemicals=chemicals,
+        )
+        sid = (built or {}).get("session_id")
+        return str(sid) if sid else None
+    except Exception:  # noqa: BLE001 —— 副产物，绝不许拖垮答案
+        return None
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Batch Safety Check", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
@@ -5571,7 +5612,31 @@ async def batch_safety_check(
         if len(chemicals) > 20:
             return "Maximum 20 chemicals per batch check. Please split into smaller groups."
 
-        data = await _direct_batch(chemicals, lang=lang, suppliers=suppliers)
+        # CI-1135：批量分析与会话容器**并发**跑 —— 两者互不依赖，串起来会把这个工具的
+        # 延迟预算翻倍（各自最多吃 `TIMEOUT_MULTI`）。会话是副产物：它失败只丢副产物。
+        #
+        # 🔴 **不能用裸 `asyncio.gather`**（`/code-review` 抓到，而这正是我那条不变式的
+        # 反面）：`gather` 默认 `return_exceptions=False` ⇒ 主路抛异常时异常立刻传播，
+        # **兄弟 task 不会被取消**，它会继续打 `/sessions` 三个端点（各自 `TIMEOUT_MULTI`，
+        # 合计约 135s）—— **恰好在后端已经撑不住的时候继续给它加压**，而且建出来的会话
+        # 没有任何人看得到（工具已经带着错误返回了）。
+        # ⚠️ 我原来只写了「会话失败不影响答案」，漏掉的是「**答案失败而会话还在跑**」。
+        # 🔴 也不能改成 `return_exceptions=True`：那会让主路的错误**等到副产物跑完才返回**
+        # （最坏 +135s），把一个快速失败变成一次超长挂起。
+        _batch_task = asyncio.create_task(
+            _direct_batch(chemicals, lang=lang, suppliers=suppliers))
+        _session_task = asyncio.create_task(_session_from_batch(chemicals))
+        try:
+            data = await _batch_task
+        except BaseException:
+            # 🔴 `BaseException` 而不是 `Exception`：本工具外层套着 `_graceful_timeout`，
+            # 取消/超时走的是 `CancelledError`（BaseException 的子类）—— 只接 `Exception`
+            # 会让那条路径把副产物 task 漏在后台。
+            _session_task.cancel()
+            with contextlib.suppress(BaseException):
+                await _session_task          # 让取消落地，别留 pending task 警告
+            raise
+        session_id = await _session_task
         sections = []
 
         sections.append("# Batch Safety Report")
@@ -5688,6 +5753,16 @@ async def batch_safety_check(
             # （claude.ai 连接器）读到的仍是一份声称覆盖 20 个的报告。
             "not_analysed": _batch_not_analysed(data, chemicals),
         }
+        # CI-1135：会话是**已经建好的**，所以这里陈述事实、不提要求。
+        # 🔴 前两次失败都是因为这句话是「请你再调一个工具」——那一步会被 agent 省掉。
+        # 匿名调用没有会话（没有归属），那时一个字都不加。
+        if session_id:
+            structured["session_id"] = session_id
+            sections.append(
+                f"\n---\n📋 This analysis was saved as audit session `{session_id}`. "
+                f"A signed PDF report of it can be fetched with "
+                f"`get_audit_report(session_id=\"{session_id}\")`."
+            )
         return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(sections))],
             structured_content=structured,
