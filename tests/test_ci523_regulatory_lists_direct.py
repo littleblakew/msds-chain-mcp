@@ -56,7 +56,7 @@ def test_zero_hits_is_worded_as_not_found_in_our_copy():
 def test_coverage_caveat_also_appears_when_there_ARE_hits():
     """🔴 有命中时更需要这句。
 
-    只在零命中时说「我们的副本不含台湾/IARC」，等于把「查到了 EU 两条」放任
+    只在零命中时说「台湾只有一份、没有 IARC」，等于把「查到了 EU 两条」放任
     被读成「其他辖区没事」——而恰恰是有命中的那次，调用方最可能直接照抄结论。
     """
     out = _fmt({"chemical": "benzene", "cas": "71-43-2", "count": 1, "lists": [
