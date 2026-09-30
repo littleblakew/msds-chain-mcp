@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextlib
 import functools
 import inspect
 import json
@@ -5613,10 +5614,29 @@ async def batch_safety_check(
 
         # CI-1135：批量分析与会话容器**并发**跑 —— 两者互不依赖，串起来会把这个工具的
         # 延迟预算翻倍（各自最多吃 `TIMEOUT_MULTI`）。会话是副产物：它失败只丢副产物。
-        data, session_id = await asyncio.gather(
-            _direct_batch(chemicals, lang=lang, suppliers=suppliers),
-            _session_from_batch(chemicals),
-        )
+        #
+        # 🔴 **不能用裸 `asyncio.gather`**（`/code-review` 抓到，而这正是我那条不变式的
+        # 反面）：`gather` 默认 `return_exceptions=False` ⇒ 主路抛异常时异常立刻传播，
+        # **兄弟 task 不会被取消**，它会继续打 `/sessions` 三个端点（各自 `TIMEOUT_MULTI`，
+        # 合计约 135s）—— **恰好在后端已经撑不住的时候继续给它加压**，而且建出来的会话
+        # 没有任何人看得到（工具已经带着错误返回了）。
+        # ⚠️ 我原来只写了「会话失败不影响答案」，漏掉的是「**答案失败而会话还在跑**」。
+        # 🔴 也不能改成 `return_exceptions=True`：那会让主路的错误**等到副产物跑完才返回**
+        # （最坏 +135s），把一个快速失败变成一次超长挂起。
+        _batch_task = asyncio.create_task(
+            _direct_batch(chemicals, lang=lang, suppliers=suppliers))
+        _session_task = asyncio.create_task(_session_from_batch(chemicals))
+        try:
+            data = await _batch_task
+        except BaseException:
+            # 🔴 `BaseException` 而不是 `Exception`：本工具外层套着 `_graceful_timeout`，
+            # 取消/超时走的是 `CancelledError`（BaseException 的子类）—— 只接 `Exception`
+            # 会让那条路径把副产物 task 漏在后台。
+            _session_task.cancel()
+            with contextlib.suppress(BaseException):
+                await _session_task          # 让取消落地，别留 pending task 警告
+            raise
+        session_id = await _session_task
         sections = []
 
         sections.append("# Batch Safety Report")

@@ -23,7 +23,13 @@
 
 ## 🔴 变异记录（没记变异的守卫默认当它不存在）
 
-- 把 `asyncio.gather(...)` 拆成两个顺序 `await` ⇒ `test_batch_and_session_run_concurrently` 红。
+- 把并发拆成两个顺序 `await` ⇒ `test_batch_and_session_run_concurrently` 红。
+- 把 `create_task` + `cancel` 退回裸 `asyncio.gather` ⇒
+  `test_primary_failure_cancels_the_side_effect` 红（**这一条是 review 抓出来的**：
+  我原来的不变式只写了「会话失败不影响答案」，漏掉「答案失败而会话还在跑」）。
+- 把 `except BaseException` 收窄成 `except Exception` ⇒ 同一条红（`_graceful_timeout`
+  那条路走 `CancelledError`，属 BaseException，只接 Exception 就漏掉超时这个
+  **最需要取消**的场景）。
 - 把 `except Exception` 收窄成 `except ValueError` ⇒
   `test_session_failure_never_breaks_the_answer[TimeoutError]` 与 `[RuntimeError]` 红。
 - 把尾部改回「请你去调 `create_audit_session`」⇒ `test_the_tail_states_a_fact_not_a_request` 红。
@@ -61,11 +67,36 @@ def test_batch_and_session_run_concurrently():
     而返回值、字段、文案**一模一样** ⇒ 没有任何功能测试会红，用户只会觉得「有点慢」。
     """
     src = inspect.getsource(server.batch_safety_check)
-    assert "asyncio.gather(" in src, (
+    assert "asyncio.create_task(" in src, (
         "批量分析与会话容器不再并发 —— 串行不会改变任何输出，只会把这个工具的延迟预算"
         "翻倍（两条路各自 TIMEOUT_MULTI），而那不会被任何功能测试抓到。")
     # 阳性对照：确认我们真的读到了函数体（装饰器换了写法时这条会红，而不是静默空跑）
     assert "_direct_batch(" in src and "_session_from_batch(" in src, src[:200]
+
+
+def test_primary_failure_cancels_the_side_effect():
+    """🔴🔴 **我那条不变式的反面**，`/code-review` 抓到的：
+
+    原来写的是「会话失败不影响答案」，漏掉的是「**答案失败而会话还在跑**」。
+    裸 `asyncio.gather`（默认 `return_exceptions=False`）在主路抛异常时把异常立刻传出去，
+    **但不取消兄弟 task** ⇒ 它继续打 `/sessions` 三个端点（各自 `TIMEOUT_MULTI`，
+    合计约 135s），**恰好在后端已经撑不住的时候继续加压**，而建出来的会话没人看得到。
+
+    🔴 也不能改成 `return_exceptions=True`：那会让主路的错误**等副产物跑完才返回**
+    （最坏 +135s），把一次快速失败变成一次超长挂起。⇒ 显式 `create_task` + 主路失败即
+    `cancel()`。
+
+    判据打在**源码结构**上，理由同上一条：孤儿 task 不改变任何返回值，
+    只在后台多打几个请求 —— **没有任何功能测试会红**。
+    """
+    src = inspect.getsource(server.batch_safety_check)
+    assert "asyncio.gather(" not in src, (
+        "又回到裸 `gather` —— 主路失败时副产物 task 会被漏在后台继续打后端")
+    assert "_session_task.cancel()" in src, (
+        "主路失败时没有取消副产物 task ⇒ 它会在后端最脆弱的时候继续加压约 135s")
+    assert "except BaseException" in src, (
+        "只接 `Exception` 的话，`_graceful_timeout` 那条路（`CancelledError`，"
+        "属 BaseException）会绕过取消 —— 而超时正是最需要它的场景")
 
 
 def test_anonymous_callers_get_no_session(monkeypatch):
