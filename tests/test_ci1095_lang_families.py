@@ -30,6 +30,8 @@ review 抓到的，不是我。
 - 把 `_REG_LIST_STRINGS["ja"]` 整个换成 `_REG_LIST_STRINGS["en"]` 的副本
   ⇒ `test_translations_are_not_english_copies` 红（「槽位填了」与「真的翻了」同形）。
 - 把 `_REG_LIST_COVERAGE_NOTE["ja"]` 里的「台湾」删掉 ⇒ `test_coverage_note_names_taiwan_and_iarc_in_every_language` 红。
+- 把 `_REG_LIST_COVERAGE_NOTE["de"]` 改回「enthält keine Daten zu Taiwan」（去掉 MOENV，**仍含 Taiwan**）
+  ⇒ 同一条红（CI-1150：「没有台湾」与「只有那一份」都含 Taiwan 这个词，只靠它分不开）。
 
 🔴 **本文件不测「翻得好不好」**，只测三件机械的事：覆盖集合、不是英文副本、
 以及那条限定说明在每种语言里都点名了台湾与 IARC。措辞质量要人读，这里给不了。
@@ -107,17 +109,22 @@ def test_translations_are_not_english_copies():
 def test_coverage_note_names_taiwan_and_iarc_in_every_language():
     """🔴 前向红线（CI-523）：营销面可以模糊，**runtime 必须精确**。
 
-    这条限定说明的全部作用是「没命中 ≠ 不受监管」+「我们这份副本不含台湾与 IARC」。
-    翻译时丢掉任何一半，都会把一句限定说明变成一句担保。
+    这条限定说明的全部作用是「没命中 ≠ 不受监管」+「台湾只有环境部列管毒化物那一份、
+    没有 IARC」。翻译时丢掉任何一半，都会把一句限定说明变成一句担保。
+
+    CI-1150 起台湾从「没有」变成「只有一份」⇒ 每种语言还必须点名**那一份**（MOENV /
+    环境部 / 環境部）；只剩「Taiwan」这个词时，写回「不含台湾」也能过，而那句在
+    TW 数据上线后是假话（真实调用会同时返回台湾清单命中）。
     """
     bad = []
     for lang, text in server._REG_LIST_COVERAGE_NOTE.items():
         has_taiwan = any(token in text for token in ("Taiwan", "台湾", "台灣"))
-        if "IARC" not in text or not has_taiwan:
+        names_tw_list = any(token in text for token in ("MOENV", "环境部", "環境部"))
+        if "IARC" not in text or not has_taiwan or not names_tw_list:
             bad.append(lang)
     assert not bad, (
-        f"这些语言的覆盖范围说明没点名台湾或 IARC：{bad} —— 见 CI-523，"
-        f"这两个名字和那句「没命中 ≠ 不受监管」要一起搬。")
+        f"这些语言的覆盖范围说明没点名台湾（及其唯一那份环境部清单）或 IARC：{bad} —— "
+        f"见 CI-523 / CI-1150，这些名字和那句「没命中 ≠ 不受监管」要一起搬。")
 
 
 def test_unresolved_note_is_present_in_every_catalog_language():
