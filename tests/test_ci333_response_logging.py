@@ -138,5 +138,6 @@ _MINIMAL_ARGS = {
     "upload_msds_pdf": {"pdf_source": "https://example.com/x.pdf"},
     "batch_safety_check": {"chemicals": ["a", "b"]},
     "check_regulatory_lists": {"chemical": "a"},
+    "draft_sds_sections": {"ingredients": [{"chemical": "a"}], "region": "EU"},
     "get_sds_document": {"chemical": "a"},
 }

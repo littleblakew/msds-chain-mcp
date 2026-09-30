@@ -288,6 +288,7 @@ _DIRECT_TIMEOUT_EXPECTATIONS = {
     "_direct_emergency": (("acetone", "spill"), False),
     "_direct_compliance": (("acetone", ["EU"]), False),
     "_direct_regulatory_lists": (("acetone",), False),
+    "_direct_sds_draft": (([{"chemical": "acetone"}], None, "EU"), True),
     "_direct_recent_chemicals": ((), False),
     "_direct_alternatives": (("acetone",), False),
     "_direct_online_search": (("acetone",), False),
@@ -441,6 +442,7 @@ EXPECTED_TOOLS = frozenset({
     "batch_safety_check",
     "check_regulatory_lists",
     "search_msds_online",
+    "draft_sds_sections",
 })
 
 
@@ -456,7 +458,7 @@ def test_direct_tools_still_registered(monkeypatch):
         f"tool surface drifted: missing={EXPECTED_TOOLS - names}, "
         f"unexpected={names - EXPECTED_TOOLS}"
     )
-    assert len(EXPECTED_TOOLS) == 23
+    assert len(EXPECTED_TOOLS) == 24
 
 
 # ---------------------------------------------------------------------------
@@ -1324,13 +1326,6 @@ def test_get_audit_report_relative_url_prefixed_with_api_url(monkeypatch):
         f"Relative URL must be prefixed with API_URL, got: {sc['report_url']!r}"
     )
     assert "/sessions/DEMO-ABC456/report/pdf?t=tok" in sc["report_url"]
-
-
-def test_tool_count_unchanged():
-    """CI-89 must not add or remove tools — still 22 tools registered."""
-    tools = asyncio.run(server.mcp.list_tools())
-    names = {t.name for t in tools}
-    assert len(names) == 23, f"Expected 23 tools, got {len(names)}: {sorted(names)}"
 
 
 def test_search_msds_online_found(monkeypatch):

@@ -46,6 +46,13 @@ CASES: dict[str, dict] = {
         "expect_mentions": ['benzene'],
         "note": "23 份监管清单的交叉比对",
     },
+    "draft_sds_sections": {
+        "args": {"ingredients": [{"chemical": "acetone", "concentration": "60%"},
+                                 {"chemical": "benzene", "concentration": "1%"}],
+                 "region": "TW"},
+        "expect_mentions": ['acetone', 'benzene'],
+        "note": "配方起草 §8/§15（CI-1138）；苯在 TW 清单上，§15 应列出命中",
+    },
     "compare_sds_versions": {
         "args": {"chemical": "acetone"},
         "expect_mentions": ['acetone'],
