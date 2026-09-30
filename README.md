@@ -3,7 +3,7 @@
 **Chemical safety intelligence for AI-assisted experiment design.**
 
 An [MCP](https://modelcontextprotocol.io) server that gives AI agents (Claude, ChatGPT,
-Claude Code, Gemini CLI, Copilot Studio, and any other MCP client) **23** tools for chemical
+Claude Code, Gemini CLI, Copilot Studio, and any other MCP client) **24** tools for chemical
 safety reasoning: compatibility checks, hazard analysis, regulatory compliance, PPE, storage,
 transport, and signed audit reports. Every answer names the supplier SDS it came from, with a
 link to the original PDF.
@@ -29,7 +29,7 @@ a monthly call allowance. There is no API key to create beforehand.
 
 On another platform? See [Platform Setup](#platform-setup) below.
 
-## Tools (23)
+## Tools (24)
 
 | Tool | Description |
 |------|-------------|
@@ -42,6 +42,7 @@ On another platform? See [Platform Setup](#platform-setup) below.
 | **`check_mixing_order`** | Safe addition sequence for reagent pairs (e.g., acid into water) |
 | **`get_waste_disposal`** | Waste classification, container type, and disposal procedures |
 | **`upload_msds_pdf`** | Upload MSDS PDF for AI-powered parsing and data extraction (requires API key) |
+| **`draft_sds_sections`** | Draft Sections 8 and 15 of an SDS for your own mixture from its ingredient list; every line cites its source, and missing ingredients are listed rather than guessed |
 | **`compare_sds_versions`** | Hazard-change diff between two SDS versions (H-code additions/removals + whether they change a verdict) |
 | `check_chemical_compatibility` | Pairwise compatibility for 2+ chemicals |
 | `get_chemical_risk_warnings` | GHS classification, H-codes, signal words, flash point |

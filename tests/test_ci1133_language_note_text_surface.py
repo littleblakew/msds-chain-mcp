@@ -79,6 +79,7 @@ _ARGS = {
     "experiment_name": "probe run", "query": "acetone", "protocol_text": "mix a then b",
     "chemical_a": "acetone", "chemical_b": "bleach",
     "pdf_source": "data:application/pdf;base64,JVBERi0xLjQK",
+    "ingredients": [{"chemical": "acetone", "concentration": "60%"}],
 }
 
 _HTTP_HITS = {"n": 0}

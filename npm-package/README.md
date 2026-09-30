@@ -2,7 +2,7 @@
 
 Chemical safety intelligence for AI-assisted experiment design. Powered by **ChainSDS** — verified, current, and growing.
 
-This is a remote MCP (Model Context Protocol) server providing **23 tools** for chemical safety reasoning — compatibility checks, hazard analysis, PPE recommendations, storage guidance, waste disposal, mixing order safety, exposure limits, transport classification, regulatory compliance (23 lists, 8 jurisdictions), regulatory watch-list cross-reference, SDS version diff, PDF upload, signed SDS document download, chemical substitution, first aid, GHS labels, signed audit reports, and online PubChem GHS fallback for chemicals not yet in the database.
+This is a remote MCP (Model Context Protocol) server providing **24 tools** for chemical safety reasoning — compatibility checks, hazard analysis, PPE recommendations, storage guidance, waste disposal, mixing order safety, exposure limits, transport classification, regulatory compliance (23 lists, 8 jurisdictions), regulatory watch-list cross-reference, SDS version diff, PDF upload, signed SDS document download, chemical substitution, first aid, GHS labels, signed audit reports, and online PubChem GHS fallback for chemicals not yet in the database.
 
 ## Quick Start
 
@@ -31,7 +31,7 @@ Then run `/mcp` and authenticate (browser sign-in). The legacy SSE endpoint
 
 Get a free API key (100 calls/month) at [msdschain.lagentbot.com](https://msdschain.lagentbot.com) to unlock all tools.
 
-## Tools (23)
+## Tools (24)
 
 | Tool | Description |
 |------|-------------|
@@ -56,6 +56,7 @@ Get a free API key (100 calls/month) at [msdschain.lagentbot.com](https://msdsch
 | `create_audit_session` | Full audit with signed PDF report |
 | `get_audit_report` | Download signed audit report |
 | `upload_msds_pdf` | Upload PDF or URL, extract & parse MSDS |
+| `draft_sds_sections` | Draft SDS Sections 8 and 15 for a mixture, every line sourced |
 | `compare_sds_versions` | Hazard-change diff between two SDS versions |
 
 ## Coverage — ChainSDS

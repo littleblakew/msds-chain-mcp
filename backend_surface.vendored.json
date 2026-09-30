@@ -543,6 +543,56 @@
     },
     {
       "body_params": {
+        "ingredients": {
+          "required": true,
+          "type": "array"
+        },
+        "lang": {
+          "required": false,
+          "type": "string"
+        },
+        "region": {
+          "required": false,
+          "type": "string"
+        },
+        "sections": {
+          "items_type": "integer",
+          "required": false,
+          "type": "array"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/sds-draft",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    },
+    {
+      "body_params": {
         "chemical": {
           "required": true,
           "type": "string"
@@ -726,10 +776,10 @@
     }
   ],
   "source": {
-    "api_v2_endpoint_count": 18,
-    "api_v2_sha256": "badbe33440104cb2abe16f9009d20aebbc6f8545df0423ac6f78b428ae6ea23d",
-    "backend_commit": "8851f7190b667b200b3576dfc47bb601518ab75a",
-    "kept": 17,
-    "refreshed_at": "2026-09-26"
+    "api_v2_endpoint_count": 19,
+    "api_v2_sha256": "e8078879615db570e7423462b7e69104e8971fc92a448ea3c473d99d02056e4b",
+    "backend_commit": "1c94aa529d3f2cc26eb5602c8db85b0c7732ea1f",
+    "kept": 18,
+    "refreshed_at": "2026-09-30"
   }
 }
