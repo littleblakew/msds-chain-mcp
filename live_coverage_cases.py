@@ -50,8 +50,8 @@ CASES: dict[str, dict] = {
         "args": {"ingredients": [{"chemical": "acetone", "concentration": "60%"},
                                  {"chemical": "benzene", "concentration": "1%"}],
                  "region": "TW"},
-        "expect_mentions": ['acetone', 'benzene'],
-        "note": "配方起草 §8/§15（CI-1138）；苯在 TW 清单上，§15 应列出命中",
+        "expect_mentions": ['acetone', 'Taiwan MOENV'],
+        "note": "配方起草 §8/§15（CI-1138）；苯在 TW 清单上 ⇒ 要看到那份清单名，只回显入参名不算",
     },
     "compare_sds_versions": {
         "args": {"chemical": "acetone"},

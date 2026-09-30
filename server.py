@@ -929,7 +929,7 @@ def _graceful_timeout(fn):
     """
     # 这个工具收不收化学品**列表**，决定要不要给「拆小一点」的建议。
     # 在装饰时算一次（`functools.wraps` 会让 `signature()` 穿透到真正的函数签名）。
-    _takes_batch = "chemicals" in inspect.signature(fn).parameters
+    _takes_batch = bool({"chemicals", "ingredients"} & set(inspect.signature(fn).parameters))
 
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
@@ -2090,7 +2090,8 @@ async def _direct_regulatory_lists(chemical: str, lang: str | None = None) -> di
 # notes, the §15 `scope_note`) is already localized by the backend and rendered
 # verbatim — re-wording them here would be a second copy that drifts.
 _SDS_DRAFT_STRINGS = {
-    "en": {"title": "SDS Draft", "s8": "Section 8 — Exposure controls / personal protection",
+    "en": {"title": "SDS Draft",
+           "no_regional": "⚠️ We hold no regulatory list for {region}: only international conventions were checked. Nothing below is a finding about {region}.", "s8": "Section 8 — Exposure controls / personal protection",
            "s15": "Section 15 — Regulatory information", "source": "Source",
            "revision": "revision", "pdf": "original PDF on file",
            "not_drafted": "Not drafted", "s15_basis": "Basis: regulatory lists we hold for",
@@ -2100,7 +2101,8 @@ _SDS_DRAFT_STRINGS = {
            "lists_unreadable": "⚠️ The regulatory lists could not be read, so NOTHING was checked for Section 15. This is NOT a finding that the ingredients are unlisted.",
            "unresolved": "Not identified", "lookup_failed": "Lookup failed (retry)",
            "missing": "For every ingredient listed as not drafted or not identified: upload that supplier's SDS with `upload_msds_pdf`, or pass a CAS number, then draft again."},
-    "zh": {"title": "SDS 草稿", "s8": "第 8 节 — 接触控制 / 个体防护",
+    "zh": {"title": "SDS 草稿",
+           "no_regional": "⚠️ 我们没有 {region} 的任何法规清单：只核查了国际公约。下面没有任何一条是关于 {region} 的结论。", "s8": "第 8 节 — 接触控制 / 个体防护",
            "s15": "第 15 节 — 法规信息", "source": "出处",
            "revision": "修订", "pdf": "有 SDS 原件（PDF）",
            "not_drafted": "未起草", "s15_basis": "依据：我们持有的法规清单，地区",
@@ -2110,7 +2112,8 @@ _SDS_DRAFT_STRINGS = {
            "lists_unreadable": "⚠️ 法规清单当前不可读，第 15 节一份都没有核查。这不等于这些成分不在任何清单上。",
            "unresolved": "未能识别", "lookup_failed": "查询失败（请重试）",
            "missing": "上面列为未起草或未能识别的成分：用 `upload_msds_pdf` 上传该供应商的 SDS，或改传 CAS 号，然后重新起草。"},
-    "ja": {"title": "SDS 下書き", "s8": "第 8 項 — ばく露防止及び保護措置",
+    "ja": {"title": "SDS 下書き",
+           "no_regional": "⚠️ {region} の規制リストは保有していません：国際条約のみ確認しました。以下は {region} についての結論ではありません。", "s8": "第 8 項 — ばく露防止及び保護措置",
            "s15": "第 15 項 — 適用法令", "source": "出典",
            "revision": "改訂", "pdf": "SDS 原本（PDF）あり",
            "not_drafted": "下書き対象外", "s15_basis": "根拠：当方が保有する規制リスト、地域",
@@ -2120,7 +2123,8 @@ _SDS_DRAFT_STRINGS = {
            "lists_unreadable": "⚠️ 規制リストを読み取れなかったため、第 15 項は何も確認していません。成分がどのリストにも載っていないという意味ではありません。",
            "unresolved": "特定できず", "lookup_failed": "照会に失敗（再試行してください）",
            "missing": "下書き対象外・特定できずとなった成分は、`upload_msds_pdf` でその供給者の SDS をアップロードするか CAS 番号を指定して、もう一度下書きしてください。"},
-    "de": {"title": "SDB-Entwurf", "s8": "Abschnitt 8 — Begrenzung und Überwachung der Exposition / persönliche Schutzausrüstung",
+    "de": {"title": "SDB-Entwurf",
+           "no_regional": "⚠️ Wir führen keine Regulierungsliste für {region}: geprüft wurden nur internationale Übereinkommen. Nichts unten ist eine Aussage über {region}.", "s8": "Abschnitt 8 — Begrenzung und Überwachung der Exposition / persönliche Schutzausrüstung",
            "s15": "Abschnitt 15 — Rechtsvorschriften", "source": "Quelle",
            "revision": "Revision", "pdf": "Original-PDF vorhanden",
            "not_drafted": "Nicht entworfen", "s15_basis": "Grundlage: unsere Regulierungslisten für",
@@ -2130,7 +2134,8 @@ _SDS_DRAFT_STRINGS = {
            "lists_unreadable": "⚠️ Die Regulierungslisten waren nicht lesbar, daher wurde für Abschnitt 15 NICHTS geprüft. Das heißt nicht, dass die Bestandteile auf keiner Liste stehen.",
            "unresolved": "Nicht identifiziert", "lookup_failed": "Abfrage fehlgeschlagen (erneut versuchen)",
            "missing": "Für jeden Bestandteil, der als nicht entworfen oder nicht identifiziert aufgeführt ist: das SDB dieses Lieferanten mit `upload_msds_pdf` hochladen oder eine CAS-Nummer angeben und erneut entwerfen."},
-    "id": {"title": "Draf SDS", "s8": "Bagian 8 — Pengendalian paparan / perlindungan diri",
+    "id": {"title": "Draf SDS",
+           "no_regional": "⚠️ Kami tidak memiliki daftar regulasi untuk {region}: hanya konvensi internasional yang diperiksa. Tidak ada di bawah ini yang merupakan temuan tentang {region}.", "s8": "Bagian 8 — Pengendalian paparan / perlindungan diri",
            "s15": "Bagian 15 — Informasi regulasi", "source": "Sumber",
            "revision": "revisi", "pdf": "PDF asli tersedia",
            "not_drafted": "Tidak didraf", "s15_basis": "Dasar: daftar regulasi yang kami miliki untuk",
@@ -2159,12 +2164,17 @@ def _format_sds_draft(data: dict, lang: str | None = None) -> str:
     lg = _normalize_catalog_lang(lang or LANG)
     s = _SDS_DRAFT_STRINGS.get(lg, _SDS_DRAFT_STRINGS["en"])
 
+    def flat(v) -> str:
+        # Names and concentrations are the caller's own text, echoed into headings:
+        # one line, capped, so they cannot forge a heading or a source line.
+        return " ".join(str(v).split())[:120]
+
     def who(item: dict) -> str:
-        name = item.get("chemical") or "?"
+        name = flat(item.get("chemical") or "?")
         if item.get("cas"):
-            name += f" (CAS {item['cas']})"
+            name += f" (CAS {flat(item['cas'])})"
         if item.get("concentration"):
-            name += f" — {item['concentration']}"
+            name += f" — {flat(item['concentration'])}"
         return name
 
     lines = [f"**{s['title']}**\n"]
@@ -2187,7 +2197,9 @@ def _format_sds_draft(data: dict, lang: str | None = None) -> str:
             lines.append(f"*{s['source']}: {src or '—'} · {s['pdf']}*")
             if item.get("physical_form_disclosure"):
                 lines.append(f"> {item['physical_form_disclosure']}")
-            lines.append(f"```\n{(item.get('content') or '').strip()}\n```\n")
+            body = (item.get("content") or "").strip()
+            fence = "`" * max(3, 1 + max((len(r) for r in re.findall(r"`+", body)), default=0))
+            lines.append(f"{fence}\n{body}\n{fence}\n")
         not_drafted = s8.get("not_drafted") or []
         if not_drafted:
             gaps = True
@@ -2200,8 +2212,15 @@ def _format_sds_draft(data: dict, lang: str | None = None) -> str:
     if s15 is not None:
         region = s15.get("region") or "—"
         lines.append(f"## {s['s15']} ({region})\n")
-        lines.append(f"*{s['s15_basis']} {region}.*")
         checked = s15.get("lists_checked")
+        regional = checked is not None and any(
+            (e.get("region") or "").upper() == region.upper() for e in checked)
+        if checked is not None and not regional:
+            # Only the international conventions were checked: "not on the lists
+            # checked" below must not be read as a finding for this region.
+            lines.append(s["no_regional"].format(region=region))
+        else:
+            lines.append(f"*{s['s15_basis']} {region}.*")
         if checked is None:
             lines.append(s["lists_unreadable"])
         else:
@@ -6101,6 +6120,9 @@ async def draft_sds_sections(
         data = await _direct_sds_draft(
             [SdsIngredient.model_validate(i).model_dump() for i in ingredients],
             sections, region, lang=lang)
+        # Free: the backend registers `draft_sds_sections` as `_free()` in its MCP
+        # billing table, so no credits line (same shape as the lookup tools). If that
+        # ever gets a price, this tool must start rendering usage like the value tools.
         return CallToolResult(
             content=[TextContent(type="text", text=_format_sds_draft(data, lang))],
             structured_content=_strip_usage(data),
