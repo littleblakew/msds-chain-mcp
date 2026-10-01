@@ -13,6 +13,10 @@ The backend guarantees the data; these pin that the text an LLM reads does not d
 - Return `str(v)` from `flat()` ⇒ `test_user_text_cannot_forge_a_heading` red.
 - Hard-code the fence to three backticks ⇒ `test_backticks_in_sds_text_cannot_close_the_fence` red.
 - Revert `_takes_batch` to `"chemicals" in …` ⇒ `test_timeout_gives_batch_advice` red.
+- Delete the `possibly_truncated` arm, or move both row notes after the section loop
+  ⇒ `test_row_notes_sit_inside_their_own_block` red.
+- Delete the `or s['truncated']` / `or s['limits_not_found']` fallbacks
+  ⇒ `test_row_notes_fall_back_when_backend_sends_no_text` red.
 """
 import asyncio
 
@@ -168,3 +172,50 @@ def test_timeout_gives_batch_advice(monkeypatch):
         server.set_caller_credential(None)
     assert res.is_error
     assert res.content[0].text == server._timeout_message("en", batch=True)
+
+
+def _two_rows(first: dict) -> dict:
+    data = _payload()
+    row = data["sections"]["8"]["drafted"][0]
+    data["sections"]["8"]["drafted"] = [
+        {**row, **first},
+        {**row, "chemical": "ZZ-SECOND", "cas": None, "possibly_truncated": False,
+         "truncation_note": None, "exposure_limits_in_text": "values",
+         "exposure_limits_note": None},
+    ]
+    return data
+
+
+def test_row_notes_sit_inside_their_own_block():
+    """CI-1138: users copy §8 one block at a time ⇒ the warning must be inside that block,
+    above its text — not in a summary and not under the next ingredient."""
+    data = _two_rows({"possibly_truncated": True, "truncation_note": "ZZ-TRUNC",
+                      "exposure_limits_in_text": "not_found",
+                      "exposure_limits_note": "ZZ-LIMITS"})
+    text = server._format_sds_draft(data, "en")
+    first = text.split("### acetone", 1)[1].split("### ZZ-SECOND", 1)[0]
+    head = first.split("```", 1)[0]
+    assert "> ZZ-TRUNC" in head and "> ZZ-LIMITS" in head, first
+    second = text.split("### ZZ-SECOND", 1)[1]
+    assert "ZZ-TRUNC" not in second and "ZZ-LIMITS" not in second
+
+
+def test_row_notes_absent_when_backend_says_all_clear():
+    """`values` / `none_stated` / not truncated ⇒ no warning (a constant warning is noise)."""
+    for state in ("values", "none_stated"):
+        data = _two_rows({"possibly_truncated": False, "truncation_note": None,
+                          "exposure_limits_in_text": state, "exposure_limits_note": None})
+        for lang in server._CATALOG_LANGS:
+            s = server._SDS_DRAFT_STRINGS[lang]
+            text = server._format_sds_draft(data, lang)
+            assert s["truncated"] not in text and s["limits_not_found"] not in text
+
+
+def test_row_notes_fall_back_when_backend_sends_no_text():
+    """The flag is the fact; the note is wording. A missing note must not drop the flag."""
+    data = _two_rows({"possibly_truncated": True, "truncation_note": None,
+                      "exposure_limits_in_text": "not_found", "exposure_limits_note": None})
+    for lang in server._CATALOG_LANGS:
+        s = server._SDS_DRAFT_STRINGS[lang]
+        head = server._format_sds_draft(data, lang).split("```", 1)[0]
+        assert s["truncated"] in head and s["limits_not_found"] in head, lang
