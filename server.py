@@ -2100,6 +2100,7 @@ _SDS_DRAFT_STRINGS = {
            "not_checked": "⚠️ Could not check (list source unreadable) — this is NOT \"not listed\"",
            "lists_unreadable": "⚠️ The regulatory lists could not be read, so NOTHING was checked for Section 15. This is NOT a finding that the ingredients are unlisted.",
            "unresolved": "Not identified", "lookup_failed": "Lookup failed (retry)",
+           "truncated": "⚠️ This block may be cut off: check the original SDS before copying it.", "limits_not_found": "⚠️ No exposure-limit values found in this text: that does NOT mean there are none. Check 8.1 in the original SDS.",
            "missing": "For every ingredient listed as not drafted or not identified: upload that supplier's SDS with `upload_msds_pdf`, or pass a CAS number, then draft again."},
     "zh": {"title": "SDS 草稿",
            "no_regional": "⚠️ 我们没有 {region} 的任何法规清单：只核查了国际公约。下面没有任何一条是关于 {region} 的结论。", "s8": "第 8 节 — 接触控制 / 个体防护",
@@ -2111,6 +2112,7 @@ _SDS_DRAFT_STRINGS = {
            "not_checked": "⚠️ 无法核查（清单数据源不可读）—— 这不等于「不在清单上」",
            "lists_unreadable": "⚠️ 法规清单当前不可读，第 15 节一份都没有核查。这不等于这些成分不在任何清单上。",
            "unresolved": "未能识别", "lookup_failed": "查询失败（请重试）",
+           "truncated": "⚠️ 这一段可能被截断了：抄进你的 SDS 前请核对原件。", "limits_not_found": "⚠️ 这段文字里没找到接触限值：这不代表没有限值，请核对原件的 8.1。",
            "missing": "上面列为未起草或未能识别的成分：用 `upload_msds_pdf` 上传该供应商的 SDS，或改传 CAS 号，然后重新起草。"},
     "ja": {"title": "SDS 下書き",
            "no_regional": "⚠️ {region} の規制リストは保有していません：国際条約のみ確認しました。以下は {region} についての結論ではありません。", "s8": "第 8 項 — ばく露防止及び保護措置",
@@ -2122,6 +2124,7 @@ _SDS_DRAFT_STRINGS = {
            "not_checked": "⚠️ 確認できませんでした（リストのデータ源を読み取れません）—「掲載なし」ではありません",
            "lists_unreadable": "⚠️ 規制リストを読み取れなかったため、第 15 項は何も確認していません。成分がどのリストにも載っていないという意味ではありません。",
            "unresolved": "特定できず", "lookup_failed": "照会に失敗（再試行してください）",
+           "truncated": "⚠️ この部分は途中で切れている可能性があります：転記する前に原本を確認してください。", "limits_not_found": "⚠️ この本文にばく露限界値が見つかりません：限界値がないという意味ではありません。原本の 8.1 を確認してください。",
            "missing": "下書き対象外・特定できずとなった成分は、`upload_msds_pdf` でその供給者の SDS をアップロードするか CAS 番号を指定して、もう一度下書きしてください。"},
     "de": {"title": "SDB-Entwurf",
            "no_regional": "⚠️ Wir führen keine Regulierungsliste für {region}: geprüft wurden nur internationale Übereinkommen. Nichts unten ist eine Aussage über {region}.", "s8": "Abschnitt 8 — Begrenzung und Überwachung der Exposition / persönliche Schutzausrüstung",
@@ -2133,6 +2136,7 @@ _SDS_DRAFT_STRINGS = {
            "not_checked": "⚠️ Nicht prüfbar (Listenquelle nicht lesbar) — das heißt NICHT „nicht gelistet“",
            "lists_unreadable": "⚠️ Die Regulierungslisten waren nicht lesbar, daher wurde für Abschnitt 15 NICHTS geprüft. Das heißt nicht, dass die Bestandteile auf keiner Liste stehen.",
            "unresolved": "Nicht identifiziert", "lookup_failed": "Abfrage fehlgeschlagen (erneut versuchen)",
+           "truncated": "⚠️ Dieser Abschnitt ist möglicherweise abgeschnitten: vor dem Übernehmen mit dem Original-SDB abgleichen.", "limits_not_found": "⚠️ In diesem Text wurden keine Grenzwerte gefunden: das heißt NICHT, dass es keine gibt. Abschnitt 8.1 im Original-SDB prüfen.",
            "missing": "Für jeden Bestandteil, der als nicht entworfen oder nicht identifiziert aufgeführt ist: das SDB dieses Lieferanten mit `upload_msds_pdf` hochladen oder eine CAS-Nummer angeben und erneut entwerfen."},
     "id": {"title": "Draf SDS",
            "no_regional": "⚠️ Kami tidak memiliki daftar regulasi untuk {region}: hanya konvensi internasional yang diperiksa. Tidak ada di bawah ini yang merupakan temuan tentang {region}.", "s8": "Bagian 8 — Pengendalian paparan / perlindungan diri",
@@ -2144,6 +2148,7 @@ _SDS_DRAFT_STRINGS = {
            "not_checked": "⚠️ Tidak dapat diperiksa (sumber daftar tidak terbaca) — ini BUKAN \"tidak tercantum\"",
            "lists_unreadable": "⚠️ Daftar regulasi tidak dapat dibaca, sehingga TIDAK ADA yang diperiksa untuk Bagian 15. Ini bukan temuan bahwa bahan-bahan tersebut tidak tercantum.",
            "unresolved": "Tidak teridentifikasi", "lookup_failed": "Pencarian gagal (coba lagi)",
+           "truncated": "⚠️ Bagian ini mungkin terpotong: periksa SDS asli sebelum menyalinnya.", "limits_not_found": "⚠️ Tidak ada nilai batas paparan di teks ini: itu BUKAN berarti tidak ada. Periksa 8.1 di SDS asli.",
            "missing": "Untuk setiap bahan yang tercantum sebagai tidak didraf atau tidak teridentifikasi: unggah SDS pemasok tersebut dengan `upload_msds_pdf`, atau berikan nomor CAS, lalu draf ulang."},
 }
 
@@ -2197,6 +2202,12 @@ def _format_sds_draft(data: dict, lang: str | None = None) -> str:
             lines.append(f"*{s['source']}: {src or '—'} · {s['pdf']}*")
             if item.get("physical_form_disclosure"):
                 lines.append(f"> {item['physical_form_disclosure']}")
+            # Per-row, above the text: users copy blocks one at a time into their own
+            # SDS, so a warning parked in a summary would be read after the copy.
+            if item.get("possibly_truncated"):
+                lines.append(f"> {item.get('truncation_note') or s['truncated']}")
+            if item.get("exposure_limits_in_text") == "not_found":
+                lines.append(f"> {item.get('exposure_limits_note') or s['limits_not_found']}")
             body = (item.get("content") or "").strip()
             fence = "`" * max(3, 1 + max((len(r) for r in re.findall(r"`+", body)), default=0))
             lines.append(f"{fence}\n{body}\n{fence}\n")
@@ -6099,6 +6110,8 @@ async def draft_sds_sections(
       was checked. Never report that as "not on any list".
     - List every `not_drafted`, `unresolved` and `lookup_failed` ingredient to the
       user; that is what they must supply (upload_msds_pdf, or a CAS number).
+    - Show `truncation_note` / `exposure_limits_note` next to the Section 8 block they
+      belong to, not only in a summary: users copy one block at a time.
     - Section 2 (mixture classification) is not drafted by this tool.
     """
     error_msg = None
