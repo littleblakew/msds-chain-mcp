@@ -10,7 +10,11 @@ the `_OVERRIDES` below for words s2twp gets wrong.
 Mutations (run):
 - edit one `zh` string in `_REG_LIST_STRINGS` without touching `zh-TW` => this test fails.
 - delete the `zh-TW` key from `_UNRESOLVED_BOOLEAN_NOTE` => the coverage test fails.
+- drop `_normalize_catalog_lang(...)` from the timeout wrapper => the timeout test fails.
 """
+import asyncio
+
+import httpx
 import opencc  # declared in requirements-dev: a missing converter must fail, not skip
 import pytest
 
@@ -54,3 +58,13 @@ def test_every_lang_keyed_table_has_zh_tw():
     found = {n for n, v in vars(server).items()
              if isinstance(v, dict) and "en" in v and "zh" in v}
     assert set(TABLES) <= found
+
+
+@pytest.mark.parametrize("given", ["zh-TW", "zh-tw", " ZH-TW "])
+def test_timeout_message_follows_the_normalized_language(given):
+    """Any accepted spelling of zh-TW gets the Traditional timeout text, not English."""
+    async def slow(chemicals, lang=None):
+        raise httpx.ReadTimeout("t")
+
+    res = asyncio.run(server._graceful_timeout(slow)(["x"], lang=given))
+    assert res.content[0].text.startswith(server._DIRECT_TIMEOUT_MSG["zh-TW"])

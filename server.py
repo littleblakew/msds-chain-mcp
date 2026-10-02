@@ -962,7 +962,8 @@ def _graceful_timeout(fn):
             return await fn(*args, **kwargs)
         except httpx.TimeoutException:
             # 超时话术也跟调用方的语言走（`lang` 是关键字参数时才取得到；取不到就用服务端默认）
-            lg = kwargs.get("lang") or LANG
+            # 归一化后再查表：`zh-tw` / 带空格的写法要命中 `zh-TW` 那条，认不出的落英文。
+            lg = _normalize_catalog_lang(kwargs.get("lang") or LANG)
             msg = _timeout_message(lg, batch=_takes_batch)
             # 🔴 **不是 `raise`**：工具体里抛出去的异常会被 `Tool.run()` 包成
             # `ToolError(f"Error executing tool {name}: {e}")` —— 那个前缀是**英文硬编码的**，
@@ -1023,7 +1024,8 @@ async def _quick_chat(message: str, lang: str | None = None) -> dict:
             )
             return _billed_json(res)
     except httpx.TimeoutException:
-        return {"answer": _TIMEOUT_ANSWER.get(lang or LANG, _TIMEOUT_ANSWER["en"]),
+        # 与请求同一个归一化：请求按 quick-chat 族发出（zh-TW → en），超时话术不能比请求多出一种语言。
+        return {"answer": _TIMEOUT_ANSWER.get(_normalize_lang(lang or LANG), _TIMEOUT_ANSWER["en"]),
                 "tool_results": [],
                 "_timed_out": True}
 
@@ -2147,6 +2149,8 @@ def _unresolved_reason_note(data: dict, lang: str | None = None) -> str:
     """
     detail = data.get("unresolved_detail")
     if isinstance(detail, dict):
+        # 🔴 只有 `zh` 取 `reason`：后端给 zh-TW 的 `reason` 仍是简体（10-02 Prod 实测），
+        #    回英文好过静默回简体。后端转了繁体之后再把 zh-TW 并进来。
         key = "reason" if _normalize_catalog_lang(lang or LANG) == "zh" else "reason_en"
         reason = (detail.get(key) or "").strip()
         if reason:
@@ -2499,6 +2503,7 @@ def _format_sds_draft(data: dict, lang: str | None = None) -> str:
         lines.append(f"**{s['unresolved']}:**")
         for u in unresolved:
             d = u.get("unresolved_detail") or {}
+            # zh-TW 刻意取 reason_en，理由同 `_unresolved_reason_note`。
             reason = d.get("reason") if lg == "zh" else (d.get("reason_en") or d.get("reason"))
             reason = reason or _unresolved_boolean_note(lg)
             # The backend's reason already opens with the query; don't print it twice.
