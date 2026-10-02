@@ -1910,38 +1910,52 @@ async def _direct_compliance(chemical: str, regions: list[str],
 # stops "we found EU entries" from being read as "cleared everywhere else". It must
 # therefore appear on BOTH result branches (hits and no hits), and it must follow the
 # caller's language: quick-chat used to answer zh callers in Chinese, so rendering it
-# in English only would be a regression this ticket introduced. en/zh only — that is
-# what `_normalize_lang` clamps to and what the backend actually supports (CI-356).
+# in English only would be a regression this ticket introduced. One entry per
+# language in `_CATALOG_LANGS` (CI-1095).
+#
+# 🔴 No list COUNT in any of these strings (CI-1164): the backend derives the count
+# from the database, and a number copied here goes stale silently the next time a
+# list is added. Name what matters for not over-reading the answer instead.
 _REG_LIST_COVERAGE_NOTE = {
-    "en": ("Coverage note: this is our curated copy of the 24 lists, not a live "
-           "regulatory feed. For Taiwan it holds only the MOENV Listed Toxic Chemical "
-           "Substances list (no inventory, no Concerned Chemical Substances list, no "
-           "occupational-safety lists), and it holds no IARC data. An absent list "
-           'means "not found in our copy", never "not regulated".'),
-    "zh": "覆盖范围说明：这是我们整理的 24 份清单副本，不是实时监管数据源。"
-          "台湾只有环境部「列管毒性化学物质」这一份（无既有化学物质名录、无关注化学物质、"
-          "无职安署清单），且不含 IARC 数据。某份清单没命中只代表「我们这份副本里没有」，"
+    "en": ("Coverage note: this is our curated copy of the regulatory lists, not a "
+           "live regulatory feed. For Taiwan it holds four restriction lists (MOENV "
+           "Listed Toxic and Concerned Chemical Substances, OSHA Priority Management "
+           "and Controlled Chemicals) plus the OSHA Permissible Exposure Standards, "
+           "which record membership only: no limit values, and not a restriction. It "
+           "holds no Taiwan inventory (TCSI) and no IARC data. An absent list means "
+           '"not found in our copy", never "not regulated".'),
+    "zh": "覆盖范围说明：这是我们整理的监管清单副本，不是实时监管数据源。"
+          "台湾有四份限制类清单（环境部「列管毒性化学物质」「关注化学物质」、"
+          "职安署「优先管理化学品」「管制性化学品」），另有职安署「容许暴露标准」，"
+          "后者只记录是否列名，不含限值，也不是限制。不含台湾既有化学物质名录（TCSI），"
+          "也不含 IARC 数据。某份清单没命中只代表「我们这份副本里没有」，"
           "绝不等于「不受监管」。",
-    # 🔴 **每一门语言都必须点名台湾与 IARC**（CI-523 的前向红线：营销面可以模糊，
-    # runtime 必须精确）。翻译时这两个名字和那句「没命中 ≠ 不受监管」一起搬，
-    # 少掉任何一半都会把一句限定说明变成一句担保。
-    "ja": ("カバレッジに関する注記：これは当社が整理した 24 リストの写しであり、"
-           "リアルタイムの規制フィードではありません。台湾については環境部の"
-           "「列管毒性化学物質」リストのみを保有しています（既存化学物質インベントリ、"
-           "関注化学物質リスト、労働安全関連リストは含みません）。IARC のデータは"
-           "含まれていません。リストに一致がないことは「当社の写しに見つからない」"
-           "という意味であり、「規制対象外」という意味では決してありません。"),
-    "de": ("Hinweis zur Abdeckung: Dies ist unsere kuratierte Kopie der 24 Listen, "
-           "kein Live-Regulierungs-Feed. Für Taiwan enthält sie nur die MOENV-Liste "
-           "der gelisteten toxischen Chemikalien (kein Altstoffverzeichnis, keine Liste "
-           "der besorgniserregenden Chemikalien, keine Arbeitsschutzlisten), und sie "
-           "enthält keine IARC-Daten. Eine fehlende Liste bedeutet „in unserer Kopie nicht "
-           "gefunden“ und niemals „nicht reguliert“."),
-    "id": ("Catatan cakupan: ini adalah salinan kurasi kami atas 24 daftar, bukan "
-           "umpan regulasi langsung. Untuk Taiwan hanya memuat daftar Bahan Kimia "
-           "Beracun Terdaftar MOENV (tanpa inventaris, tanpa daftar Bahan Kimia yang "
-           "Menjadi Perhatian, tanpa daftar keselamatan kerja), dan tidak memuat data "
-           "IARC. "
+    # 🔴 **每一门语言都必须点名台湾、MOENV、TCSI 与 IARC**（CI-523 的前向红线：
+    # 营销面可以模糊，runtime 必须精确）。翻译时这些名字和那句「没命中 ≠ 不受监管」
+    # 一起搬，少掉任何一半都会把一句限定说明变成一句担保。
+    "ja": ("カバレッジに関する注記：これは当社が整理した規制リストの写しであり、"
+           "リアルタイムの規制フィードではありません。台湾については制限リスト 4 件"
+           "（環境部の「列管毒性化学物質」「関注化学物質」、労働部職業安全衛生署の"
+           "「優先管理化学品」「管制性化学品」）と、職業安全衛生署の「許容暴露基準」を"
+           "保有しています。後者は収載の有無のみで、限度値は含まず、制限でもありません。"
+           "台湾の既存化学物質インベントリ（TCSI）と IARC のデータは含まれていません。"
+           "リストに一致がないことは「当社の写しに見つからない」という意味であり、"
+           "「規制対象外」という意味では決してありません。"),
+    "de": ("Hinweis zur Abdeckung: Dies ist unsere kuratierte Kopie der "
+           "Regulierungslisten, kein Live-Regulierungs-Feed. Für Taiwan enthält sie "
+           "vier Beschränkungslisten (MOENV: gelistete toxische und besorgniserregende "
+           "Chemikalien; OSHA: Chemikalien mit Prioritätsmanagement und kontrollierte "
+           "Chemikalien) sowie die OSHA-Expositionsgrenzwertliste, die nur die "
+           "Aufnahme erfasst: keine Grenzwerte und keine Beschränkung. Sie enthält kein "
+           "taiwanisches Altstoffverzeichnis (TCSI) und keine IARC-Daten. Eine fehlende "
+           "Liste bedeutet „in unserer Kopie nicht gefunden“ und niemals „nicht reguliert“."),
+    "id": ("Catatan cakupan: ini adalah salinan kurasi kami atas daftar regulasi, "
+           "bukan umpan regulasi langsung. Untuk Taiwan memuat empat daftar pembatasan "
+           "(MOENV: Bahan Kimia Beracun Terdaftar dan Bahan Kimia yang Menjadi "
+           "Perhatian; OSHA: Bahan Kimia Manajemen Prioritas dan Bahan Kimia "
+           "Terkendali) serta Standar Paparan yang Diizinkan OSHA, yang hanya mencatat "
+           "keanggotaan: tanpa nilai batas dan bukan pembatasan. Tidak memuat inventaris "
+           "Taiwan (TCSI) dan tidak memuat data IARC. "
            "Daftar yang tidak cocok berarti \"tidak ditemukan dalam salinan kami\", "
            "bukan berarti \"tidak diatur\"."),
 }
@@ -1950,12 +1964,12 @@ _REG_LIST_STRINGS = {
            "status": "Status",
            "near": "Near matches in the database", "cas": "CAS",
            "count": "Matching lists", "unknown": "Unknown list",
-           "none": "No match in our copy of the 24 lists."},
+           "none": "No match in our copy of the regulatory lists."},
     "zh": {"title": "监管清单", "not_checked": "⚠️ **未核查。**",
            "status": "状态",
            "near": "库中的近似命中", "cas": "CAS",
            "count": "命中清单数", "unknown": "未知清单",
-           "none": "在我们那份 24 清单副本中没有命中。"},
+           "none": "在我们那份监管清单副本中没有命中。"},
     # 🔴 CI-1095：catalog 族放开五语之后，**后端回日文而这里只有英文**＝新造一种
     # 混语言输出，而且它不在 CI-1123 那句 `language_note` 的覆盖里（那一句只描述
     # **后端自己**的回退）⇒ 用户看不出哪半是我们没翻。review 抓到的。
@@ -1963,17 +1977,17 @@ _REG_LIST_STRINGS = {
            "status": "ステータス",
            "near": "データベース内の近似一致", "cas": "CAS",
            "count": "一致したリスト数", "unknown": "不明なリスト",
-           "none": "当社が保有する 24 リストの写しには一致がありませんでした。"},
+           "none": "当社が保有する規制リストの写しには一致がありませんでした。"},
     "de": {"title": "Regulatorische Listen", "not_checked": "⚠️ **Nicht geprüft.**",
            "status": "Status",
            "near": "Ähnliche Treffer in der Datenbank", "cas": "CAS",
            "count": "Treffer in Listen", "unknown": "Unbekannte Liste",
-           "none": "Kein Treffer in unserer Kopie der 24 Listen."},
+           "none": "Kein Treffer in unserer Kopie der Regulierungslisten."},
     "id": {"title": "Daftar Regulasi", "not_checked": "⚠️ **Belum diperiksa.**",
            "status": "Status",
            "near": "Kecocokan mirip dalam basis data", "cas": "CAS",
            "count": "Jumlah daftar yang cocok", "unknown": "Daftar tidak dikenal",
-           "none": "Tidak ada kecocokan dalam salinan 24 daftar milik kami."},
+           "none": "Tidak ada kecocokan dalam salinan daftar regulasi milik kami."},
 }
 
 
@@ -2905,7 +2919,8 @@ async def check_regulatory_compliance(
 
     1. `status` — is it on a RESTRICTION list (SVHC / REACH Annex XVII / CLP Annex VI /
        Prop 65 / China Catalogue of Hazardous Chemicals / JP CSCL / SG EPMA /
-       Taiwan MOENV Listed Toxic Chemical Substances)?
+       Taiwan MOENV Listed Toxic and Concerned Chemical Substances / Taiwan OSHA
+       Priority Management and Controlled Chemicals)?
          `restricted`     on at least one restriction list, or a CMR hazard code
          `detected`       only indirect evidence (occupational exposure limit, or an SDS
                           Section 15 mention). 🔴 NOT a clearance and NOT a violation.
@@ -2914,9 +2929,11 @@ async def check_regulatory_compliance(
                           hold were not checked, so this is not a clearance either.
          `unverified`     no check was performed — we hold no restriction list for that
                           region (KR, CA, AU), or the source could not be read.
-                          TW has ONE restriction list only (MOENV Listed Toxic
-                          Chemical Substances), so TW `not_restricted` means "not on
-                          that one list", nothing more.
+                          TW has four restriction lists (MOENV Listed Toxic and
+                          Concerned Chemical Substances, OSHA Priority Management and
+                          Controlled Chemicals), so TW `not_restricted` means "not on
+                          those four lists", nothing more. The Taiwan OSHA Permissible
+                          Exposure Standards are not a restriction list.
                           🔴 Never report this as "not regulated".
     2. `inventory` — is it on that region's EXISTING-SUBSTANCE inventory (TSCA / IECSC /
        KECL / DSL / AIIC / REACH registered)? Here the polarity is REVERSED:
@@ -5997,13 +6014,15 @@ async def check_regulatory_lists(chemical: Chemical, lang: Lang = None, intent: 
     """
     Check which international regulatory lists a chemical appears on.
 
-    Searches 24 lists — 9 jurisdictions plus 3 international conventions:
+    Searches regulatory lists across 9 jurisdictions plus 3 international conventions:
     - US: EPA TSCA Inventory, OSHA PEL, California Prop 65
     - EU: SVHC Candidate List, REACH Annex XVII, REACH Annex XIV, REACH registered
       substances, CLP Annex VI, Seveso III, Water Framework Directive priority substances
     - APAC: China Catalogue of Hazardous Chemicals, China IECSC, Japan CSCL,
       Korea KECL, Australia AIIC, Singapore EPMA,
-      Taiwan MOENV Listed Toxic Chemical Substances
+      Taiwan MOENV Listed Toxic Chemical Substances, Taiwan MOENV Concerned Chemical
+      Substances, Taiwan OSHA Priority Management Chemicals, Taiwan OSHA Controlled
+      Chemicals, Taiwan OSHA Permissible Exposure Standards
     - Americas: Canada DSL
     - Conventions: Rotterdam PIC, Stockholm POPs, Montreal Protocol
     - Dual-use / export control: CWC Schedules 1/2/3, Australia Group precursors
@@ -6011,9 +6030,10 @@ async def check_regulatory_lists(chemical: Chemical, lang: Lang = None, intent: 
     resource rather than a regulatory list.
 
     Coverage limits, so the answer is not over-read:
-    - Taiwan: ONLY the MOENV Listed Toxic Chemical Substances list. There is no
-      Taiwan inventory, no Concerned Chemical Substances list and no occupational-
-      safety list — absence from that one list says nothing about the others.
+    - Taiwan: the four restriction lists above plus the OSHA Permissible Exposure
+      Standards, which record membership only (no limit values, not a restriction).
+      There is no Taiwan inventory (TCSI), so absence says nothing about whether a
+      substance is registered there.
     - There is NO IARC coverage. Do not infer it from this tool.
     - The lists are a curated snapshot, not a live regulatory feed. A chemical missing
       from a list means "not found in our copy of that list", never "not regulated".

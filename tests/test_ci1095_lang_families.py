@@ -32,6 +32,8 @@ review 抓到的，不是我。
 - 把 `_REG_LIST_COVERAGE_NOTE["ja"]` 里的「台湾」删掉 ⇒ `test_coverage_note_names_taiwan_and_iarc_in_every_language` 红。
 - 把 `_REG_LIST_COVERAGE_NOTE["de"]` 改回「enthält keine Daten zu Taiwan」（去掉 MOENV，**仍含 Taiwan**）
   ⇒ 同一条红（CI-1150：「没有台湾」与「只有那一份」都含 Taiwan 这个词，只靠它分不开）。
+- 把 `_REG_LIST_COVERAGE_NOTE["id"]` 里的「(TCSI)」删掉 ⇒ 同一条红（CI-1164：台湾清单变多之后，
+  唯一还得原样说出来的「缺口」就是没有名录）。
 
 🔴 **本文件不测「翻得好不好」**，只测三件机械的事：覆盖集合、不是英文副本、
 以及那条限定说明在每种语言里都点名了台湾与 IARC。措辞质量要人读，这里给不了。
@@ -115,16 +117,19 @@ def test_coverage_note_names_taiwan_and_iarc_in_every_language():
     CI-1150 起台湾从「没有」变成「只有一份」⇒ 每种语言还必须点名**那一份**（MOENV /
     环境部 / 環境部）；只剩「Taiwan」这个词时，写回「不含台湾」也能过，而那句在
     TW 数据上线后是假话（真实调用会同时返回台湾清单命中）。
+
+    CI-1164 起台湾有四份限制清单 + 一份暴露标准 ⇒ 剩下必须原样点名的缺口是**没有名录**，
+    用 `TCSI` 这个各语言都不翻的缩写钉住它（写成「不含台湾清单」之类的退化句会掉它）。
     """
     bad = []
     for lang, text in server._REG_LIST_COVERAGE_NOTE.items():
         has_taiwan = any(token in text for token in ("Taiwan", "台湾", "台灣"))
         names_tw_list = any(token in text for token in ("MOENV", "环境部", "環境部"))
-        if "IARC" not in text or not has_taiwan or not names_tw_list:
+        if "IARC" not in text or "TCSI" not in text or not has_taiwan or not names_tw_list:
             bad.append(lang)
     assert not bad, (
-        f"这些语言的覆盖范围说明没点名台湾（及其唯一那份环境部清单）或 IARC：{bad} —— "
-        f"见 CI-523 / CI-1150，这些名字和那句「没命中 ≠ 不受监管」要一起搬。")
+        f"这些语言的覆盖范围说明没点名台湾（及环境部清单）、TCSI 或 IARC：{bad} —— "
+        f"见 CI-523 / CI-1150 / CI-1164，这些名字和那句「没命中 ≠ 不受监管」要一起搬。")
 
 
 def test_unresolved_note_is_present_in_every_catalog_language():
