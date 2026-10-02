@@ -25,7 +25,7 @@ review 抓到的，不是我。
 
 - 从 `_REG_LIST_STRINGS` / `_UNRESOLVED_BOOLEAN_NOTE` / `_REG_LIST_COVERAGE_NOTE`
   任意一张里删掉 `"ja"` ⇒ `test_every_language_table_covers_the_catalog_set` 红并点名那张表。
-- 往 `_CATALOG_LANGS` 里加一个 `"fr"`（**集合变大**方向的变异，不是「撤回改动」）
+- 往 `_CATALOG_LANGS` 里加一个 `"pt"`（**集合变大**方向的变异，不是「撤回改动」）
   ⇒ 同一条红，且**六张表全部**点名 —— 这正是它要防的那件事。
 - 把 `_REG_LIST_STRINGS["ja"]` 整个换成 `_REG_LIST_STRINGS["en"]` 的副本
   ⇒ `test_translations_are_not_english_copies` 红（「槽位填了」与「真的翻了」同形）。
@@ -123,7 +123,8 @@ def test_coverage_note_names_taiwan_and_iarc_in_every_language():
     """
     bad = []
     for lang, text in server._REG_LIST_COVERAGE_NOTE.items():
-        has_taiwan = any(token in text for token in ("Taiwan", "台湾", "台灣"))
+        has_taiwan = any(token in text for token in (
+            "Taiwan", "台湾", "台灣", "대만", "Тайван", "Taïwan", "Taiwán"))
         names_tw_list = any(token in text for token in ("MOENV", "环境部", "環境部"))
         if "IARC" not in text or "TCSI" not in text or not has_taiwan or not names_tw_list:
             bad.append(lang)
@@ -157,5 +158,17 @@ def test_the_two_families_stay_separate():
     assert server._normalize_lang("ja") == "en"
     assert server._normalize_catalog_lang("ja") == "ja"
     # 两族都不认的值一律英文（这是本文件之外那条更老的不变式，顺手锚住）
-    assert server._normalize_lang("fr") == "en"
-    assert server._normalize_catalog_lang("fr") == "en"
+    assert server._normalize_lang("pt") == "en"
+    assert server._normalize_catalog_lang("pt") == "en"
+
+
+def test_zh_tw_is_held_back_until_the_backend_derives_it_everywhere():
+    """🔴 前向红线（CI-1163）：`zh-TW` 今天必须夹成英文。
+
+    Prod 实测 `/api/v2/risk-warnings` 对 `zh-TW` 回整段简体、无 `language_note`，
+    放行就是对繁中用户静默回简体。这条红的那天＝有人把 `zh-tw` 加进了 `_CATALOG_LANGS`：
+    先确认后端已修且逐端点量过繁体，再改这条。
+    变异：往 `_CATALOG_LANGS` 加 `"zh-tw"` ⇒ 本条红。
+    """
+    assert server._normalize_catalog_lang("zh-TW") == "en"
+    assert server._normalize_report_lang("zh-TW") == "en"

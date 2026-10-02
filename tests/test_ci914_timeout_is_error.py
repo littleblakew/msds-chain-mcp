@@ -155,7 +155,7 @@ def test_timeout_text_does_not_guess_a_cause():
             assert word not in msg, f"{lang} 的超时文案又在猜成因（命中 {word!r}）：{msg!r}"
 
     # 而且必须留下一条**可行动**的路，否则「不猜成因」会退化成一句废话
-    assert len(server._DIRECT_TIMEOUT_MSG) == 5, "语种少了——文案是逐语言写的，别只改英文"
+    assert set(server._DIRECT_TIMEOUT_MSG) == set(server._CATALOG_LANGS), "语种少了——文案是逐语言写的，别只改英文"
 
 
 # ---------------------------------------------------------------- CI-915 第二条

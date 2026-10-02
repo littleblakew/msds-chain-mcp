@@ -88,7 +88,7 @@ def _signed_url_request(**kwargs) -> dict:
 @pytest.mark.parametrize("given,expected", [
     ("de", "de"), ("ja", "ja"), ("id", "id"), ("zh", "zh"), ("en", "en"),
     ("DE", "de"), (" ja ", "ja"),            # 大小写 / 空白收敛
-    (None, "en"), ("fr", "en"), ("", "en"),  # 不认识的一律英文（与后端拒绝面对齐）
+    (None, "en"), ("pt", "en"), ("", "en"),  # 不认识的一律英文（与后端拒绝面对齐）
 ])
 def test_lang_reaches_the_backend(given, expected):
     got = _signed_url_request(session_id="DEMO-CI361G6", lang=given)
