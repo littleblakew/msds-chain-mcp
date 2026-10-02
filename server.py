@@ -250,13 +250,14 @@ mcp = MCPServer(
 # 🔴 **要往任一族加语言，判据是「实测那个语言真的出来了」**——不是后端文档说支持，
 # 更不是往元组里加一行。catalog 族要逐字段看（**只数汉字分不开日文漢字与中文**，
 # 必须单独数假名）；quick-chat 族**一次运行不算数**（LLM 现写，要多采几次）。
-# 🔴 **`zh-TW` 刻意不在 catalog 族里**（CI-1163）：后端说繁中由简体在出口派生，但
-# `/api/v2/risk-warnings` 实测 `lang=zh-TW` 回的是**整段简体、且不带 `language_note`**
-# （ppe / emergency 是繁体）⇒ 放进来等于对繁中用户静默回简体。后端修好、逐端点实测过再加。
-# ⚠️ 加的时候注意 `.strip().lower()` 会把它变成 `zh-tw`，而报告路由实测**只认 `zh-TW`**
-# （小写 422）⇒ 转发前要还原大小写，别只往元组里加一项。报告本身的繁体是真的（实测过）。
+# 🔴 **`zh-TW` 进 catalog 族的判据是逐端点实测**（CI-1167 后在 Prod 量过：所有出中文的
+# `/api/v2` 端点 zh-TW 下简体字 0），不是「后端说出口派生」——上一次就是信了这句，
+# risk-warnings / 相容性 reason 实际回的是整段简体且不带 `language_note`。
+# ⚠️ 转发时必须是 `zh-TW` 原样大小写：报告路由**只认 `zh-TW`**（小写 422），归一化里还原。
+# ⚠️ 本文件各张包装表的 `zh-TW` 条目由 `zh` 经 OpenCC s2twp 派生（与前端 gen-zh-tw.py 同一转换），
+# 改 `zh` 就要重新派生，`tests/test_ci1167_zh_tw_tables.py` 会在两者不一致时红。
 _BACKEND_LANGS = ("en", "zh")
-_CATALOG_LANGS = ("en", "zh", "ja", "de", "id", "ko", "ru", "fr", "es")
+_CATALOG_LANGS = ("en", "zh", "zh-TW", "ja", "de", "id", "ko", "ru", "fr", "es")
 
 
 def _normalize_lang(lang: str | None) -> str:
@@ -266,21 +267,29 @@ def _normalize_lang(lang: str | None) -> str:
     return "en"
 
 
+def _canonical_lang(lang: str | None, allowed: tuple[str, ...]) -> str:
+    """大小写不敏感地认，**按集合里的拼写**转发（`zh-tw` → `zh-TW`）；认不出一律英文。"""
+    if lang:
+        key = lang.strip().lower()
+        for code in allowed:
+            if code.lower() == key:
+                return code
+    return "en"
+
+
 def _normalize_catalog_lang(lang: str | None) -> str:
-    """**catalog 族（`/api/v2`）**：静态译好的五种原样过，其余一律英文。
+    """**catalog 族（`/api/v2`）**：`_CATALOG_LANGS` 里的按集合拼写转发，其余一律英文。
 
     🔴 与 `_normalize_lang` 的区别只有支持集合，**别把两者合并**：合并等于把一族的
     实测结论套到另一族头上，而那正是 CI-1095 要拆开的东西（两族的失败方式不同——
     catalog 缺译文会**回英文并披露**，quick-chat 回错语言是**静默的**）。
     """
-    if lang and lang.strip().lower() in _CATALOG_LANGS:
-        return lang.strip().lower()
-    return "en"
+    return _canonical_lang(lang, _CATALOG_LANGS)
 
 
 Lang = Annotated[str | None, Field(
     description='Answer language — pass the language THIS conversation is in, not the '
-                'user\'s country. Supported: "en", "zh", "ja", "de", "id", "ko", "ru", '
+                'user\'s country. Supported: "en", "zh", "zh-TW", "ja", "de", "id", "ko", "ru", '
                 '"fr", "es". Anything '
                 'else, or omitted, is answered in English. Parts we have not translated '
                 'yet are returned in English with an explicit note saying so.',
@@ -306,19 +315,17 @@ QuickLang = Annotated[str | None, Field(
 # ⚠️ 这些字符串是后端那份清单的**副本**（两个仓，import 不到）。副本会漂，但漂的方向
 # 是**良性的**：后端新增一种语言时这里不认 ⇒ 退英文（今天的行为），不是坏掉。
 # 判据别写成「和后端逐字相同」——那是验不了的；要验就在 Prod 上拉一份该语言的报告数字符。
-_REPORT_LANGS = ("en", "zh", "ja", "de", "id", "ko", "ru", "fr", "es")
+_REPORT_LANGS = ("en", "zh", "zh-TW", "ja", "de", "id", "ko", "ru", "fr", "es")
 
 
 def _normalize_report_lang(lang: str | None) -> str:
     """报告语言：认识的原样过，其余一律英文（与后端 `REPORT_LANG_PATTERN` 的拒绝面对齐）。"""
-    if lang and lang.strip().lower() in _REPORT_LANGS:
-        return lang.strip().lower()
-    return "en"
+    return _canonical_lang(lang, _REPORT_LANGS)
 
 
 ReportLang = Annotated[str | None, Field(
     description='Report language: pass the language THIS conversation is in. Supported: '
-                '"en", "zh", "ja", "de", "id", "ko", "ru", "fr", "es" (the PDF labels are '
+                '"en", "zh", "zh-TW", "ja", "de", "id", "ko", "ru", "fr", "es" (the PDF labels are '
                 'professionally translated for all of them). Anything else, or omitted, '
                 'gives English.',
 )]
@@ -879,6 +886,7 @@ def _headers() -> dict[str, str]:
 _DIRECT_TIMEOUT_MSG = {
     "en": "This safety check timed out. Please try again in a moment.",
     "zh": "本次安全检查超时。请稍候重试。",
+    "zh-TW": '本次安全檢查超時。請稍候重試。',
     "ja": "この安全チェックはタイムアウトしました。少し待ってから再度お試しください。",
     "de": "Diese Sicherheitsprüfung hat das Zeitlimit überschritten. Bitte versuchen Sie es gleich erneut.",
     "id": "Pemeriksaan keselamatan ini melebihi batas waktu. Silakan coba lagi sebentar.",
@@ -902,6 +910,7 @@ _DIRECT_TIMEOUT_MSG = {
 _DIRECT_TIMEOUT_HINT_BATCH = {
     "en": " If the request covered many chemicals, try splitting it into smaller calls.",
     "zh": "若这次查询包含很多化学品，可以拆成更小的几次再试。",
+    "zh-TW": '若這次查詢包含很多化學品，可以拆成更小的幾次再試。',
     "ja": "多くの化学品をまとめて問い合わせた場合は、小分けにして再度お試しください。",
     "de": " Wenn die Anfrage viele Chemikalien umfasste, teilen Sie sie in kleinere Aufrufe auf.",
     "id": " Jika permintaan mencakup banyak bahan kimia, coba pecah menjadi panggilan lebih kecil.",
@@ -971,6 +980,7 @@ def _graceful_timeout(fn):
 _TIMEOUT_ANSWER = {
     "zh": "安全助手响应超时，未能在限定时间内完成分析。请稍后重试。若这是未收录或专有产品，"
           "请上传其 MSDS/SDS PDF 或提供 CAS 号，以便直接查询其危害信息。",
+    "zh-TW": '安全助手響應超時，未能在限定時間內完成分析。請稍後重試。若這是未收錄或專有產品，請上傳其 MSDS/SDS PDF 或提供 CAS 號，以便直接查詢其危害資訊。',
     "en": "The safety assistant timed out before completing its analysis. Please try again. "
           "If this is an unlisted or proprietary product, upload its MSDS/SDS PDF or provide a "
           "CAS number so its hazards can be looked up directly.",
@@ -1957,6 +1967,8 @@ _REG_LIST_COVERAGE_NOTE = {
           "后者只记录是否列名，不含限值，也不是限制。不含台湾既有化学物质名录（TCSI），"
           "也不含 IARC 数据。某份清单没命中只代表「我们这份副本里没有」，"
           "绝不等于「不受监管」。",
+    "zh-TW": ('覆蓋範圍說明：這是我們整理的監管清單副本，不是實時監管資料來源。臺灣有四份限制類清單（環境部「列管毒性化學物質」「關注化學物質」、職安署「優先管理化學品」「管制性化學品」），另有職安署「容許暴露標準」，後者只記錄是否列名，不含限值，也不是限制。不含臺灣既有化學物質名錄（TCSI），也不含 '
+              'IARC 資料。某份清單沒命中只代表「我們這份副本裡沒有」，絕不等於「不受監管」。'),
     # 🔴 **每一门语言都必须点名台湾、MOENV、TCSI 与 IARC**（CI-523 的前向红线：
     # 营销面可以模糊，runtime 必须精确）。翻译时这些名字和那句「没命中 ≠ 不受监管」
     # 一起搬，少掉任何一半都会把一句限定说明变成一句担保。
@@ -2022,6 +2034,14 @@ _REG_LIST_STRINGS = {
            "near": "库中的近似命中", "cas": "CAS",
            "count": "命中清单数", "unknown": "未知清单",
            "none": "在我们那份监管清单副本中没有命中。"},
+    "zh-TW": {'title': '監管清單',
+              'not_checked': '⚠️ **未核查。**',
+              'status': '狀態',
+              'near': '庫中的近似命中',
+              'cas': 'CAS',
+              'count': '命中清單數',
+              'unknown': '未知清單',
+              'none': '在我們那份監管清單副本中沒有命中。'},
     # 🔴 CI-1095：catalog 族放开五语之后，**后端回日文而这里只有英文**＝新造一种
     # 混语言输出，而且它不在 CI-1123 那句 `language_note` 的覆盖里（那一句只描述
     # **后端自己**的回退）⇒ 用户看不出哪半是我们没翻。review 抓到的。
@@ -2086,6 +2106,7 @@ _UNRESOLVED_BOOLEAN_NOTE = {
     "en": ("We could not resolve this input to a record — this is NOT a statement that "
            "the database has no record for it."),
     "zh": "我们没能把这个输入解析到一条记录 —— 这**不**代表库中没有它。",
+    "zh-TW": '我們沒能把這個輸入解析到一條記錄 —— 這**不**代表庫中沒有它。',
     "ja": ("この入力をレコードに紐付けできませんでした —— これはデータベースに該当する"
            "レコードが**存在しない**という意味では**ありません**。"),
     "de": ("Wir konnten diese Eingabe keinem Datensatz zuordnen — das ist **keine** "
@@ -2219,6 +2240,25 @@ _SDS_DRAFT_STRINGS = {
            "unresolved": "未能识别", "lookup_failed": "查询失败（请重试）",
            "truncated": "⚠️ 这一段可能被截断了：抄进你的 SDS 前请核对原件。", "limits_not_found": "⚠️ 这段文字里没找到接触限值：这不代表没有限值，请核对原件的 8.1。",
            "missing": "上面列为未起草或未能识别的成分：用 `upload_msds_pdf` 上传该供应商的 SDS，或改传 CAS 号，然后重新起草。"},
+    "zh-TW": {'title': 'SDS 草稿',
+              'no_regional': '⚠️ 我們沒有 {region} 的任何法規清單：只核查了國際公約。下面沒有任何一條是關於 {region} 的結論。',
+              's8': '第 8 節 — 接觸控制 / 個體防護',
+              's15': '第 15 節 — 法規資訊',
+              'source': '出處',
+              'revision': '修訂',
+              'pdf': '有 SDS 原件（PDF）',
+              'not_drafted': '未起草',
+              's15_basis': '依據：我們持有的法規清單，地區',
+              'lists_checked': '已核查的清單',
+              'listed_on': '列於',
+              'not_listed': '不在已核查的清單上',
+              'not_checked': '⚠️ 無法核查（清單資料來源不可讀）—— 這不等於「不在清單上」',
+              'lists_unreadable': '⚠️ 法規清單當前不可讀，第 15 節一份都沒有核查。這不等於這些成分不在任何清單上。',
+              'unresolved': '未能識別',
+              'lookup_failed': '查詢失敗（請重試）',
+              'truncated': '⚠️ 這一段可能被截斷了：抄進你的 SDS 前請核對原件。',
+              'limits_not_found': '⚠️ 這段文字裡沒找到接觸限值：這不代表沒有限值，請核對原件的 8.1。',
+              'missing': '上面列為未起草或未能識別的成分：用 `upload_msds_pdf` 上傳該供應商的 SDS，或改傳 CAS 號，然後重新起草。'},
     "ja": {"title": "SDS 下書き",
            "no_regional": "⚠️ {region} の規制リストは保有していません：国際条約のみ確認しました。以下は {region} についての結論ではありません。", "s8": "第 8 項 — ばく露防止及び保護措置",
            "s15": "第 15 項 — 適用法令", "source": "出典",

@@ -124,7 +124,7 @@ def test_coverage_note_names_taiwan_and_iarc_in_every_language():
     bad = []
     for lang, text in server._REG_LIST_COVERAGE_NOTE.items():
         has_taiwan = any(token in text for token in (
-            "Taiwan", "台湾", "台灣", "대만", "Тайван", "Taïwan", "Taiwán"))
+            "Taiwan", "台湾", "台灣", "臺灣", "대만", "Тайван", "Taïwan", "Taiwán"))
         names_tw_list = any(token in text for token in ("MOENV", "环境部", "環境部"))
         if "IARC" not in text or "TCSI" not in text or not has_taiwan or not names_tw_list:
             bad.append(lang)
@@ -162,13 +162,14 @@ def test_the_two_families_stay_separate():
     assert server._normalize_catalog_lang("pt") == "en"
 
 
-def test_zh_tw_is_held_back_until_the_backend_derives_it_everywhere():
-    """🔴 前向红线（CI-1163）：`zh-TW` 今天必须夹成英文。
+def test_zh_tw_is_forwarded_with_the_casing_the_report_route_requires():
+    """`zh-TW` 进 catalog 族与报告族（CI-1167 后 Prod 逐端点量过繁体），且**转发时大小写还原**。
 
-    Prod 实测 `/api/v2/risk-warnings` 对 `zh-TW` 回整段简体、无 `language_note`，
-    放行就是对繁中用户静默回简体。这条红的那天＝有人把 `zh-tw` 加进了 `_CATALOG_LANGS`：
-    先确认后端已修且逐端点量过繁体，再改这条。
-    变异：往 `_CATALOG_LANGS` 加 `"zh-tw"` ⇒ 本条红。
+    报告路由只认 `zh-TW`、小写回 422；旧的 `.strip().lower()` 写法会把它变成 `zh-tw`。
+    变异：`_canonical_lang` 改回 `return key` ⇒ 本条红。
     """
-    assert server._normalize_catalog_lang("zh-TW") == "en"
-    assert server._normalize_report_lang("zh-TW") == "en"
+    for given in ("zh-TW", "zh-tw", " ZH-TW "):
+        assert server._normalize_catalog_lang(given) == "zh-TW"
+        assert server._normalize_report_lang(given) == "zh-TW"
+    # quick-chat 族不变：LLM 现写的那一族没有对 zh-TW 实测过
+    assert server._normalize_lang("zh-TW") == "en"
