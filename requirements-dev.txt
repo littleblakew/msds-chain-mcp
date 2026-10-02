@@ -8,3 +8,4 @@ httpx2>=2.5.0
 # `tests/test_cron_alert_coverage.py` 解析 `.github/workflows/*.yml`。声明它而不是
 # 靠传递依赖：那条守卫在缺它时必须**红**，而不是 skip（skip 与绿同形，见该文件顶部）。
 PyYAML>=6.0
+opencc-python-reimplemented==0.1.7
