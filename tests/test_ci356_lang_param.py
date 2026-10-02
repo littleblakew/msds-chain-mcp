@@ -212,7 +212,7 @@ def test_normalized_value_is_what_hits_the_wire(sent):
         f"quick-chat 族的 ja 应夹成 en，实际发出 {langs}")
 
     sent.clear()
-    asyncio.run(server.get_chemical_risk_warnings(chemicals=["a"], lang="fr"))
+    asyncio.run(server.get_chemical_risk_warnings(chemicals=["a"], lang="pt"))
     langs = [b.get("lang") for _, b in sent if "lang" in b]
     assert langs and all(l == "en" for l in langs), (
         f"两族都不认的值必须夹成 en，实际发出 {langs}")

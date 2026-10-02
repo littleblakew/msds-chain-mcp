@@ -250,8 +250,13 @@ mcp = MCPServer(
 # 🔴 **要往任一族加语言，判据是「实测那个语言真的出来了」**——不是后端文档说支持，
 # 更不是往元组里加一行。catalog 族要逐字段看（**只数汉字分不开日文漢字与中文**，
 # 必须单独数假名）；quick-chat 族**一次运行不算数**（LLM 现写，要多采几次）。
+# 🔴 **`zh-TW` 刻意不在 catalog 族里**（CI-1163）：后端说繁中由简体在出口派生，但
+# `/api/v2/risk-warnings` 实测 `lang=zh-TW` 回的是**整段简体、且不带 `language_note`**
+# （ppe / emergency 是繁体）⇒ 放进来等于对繁中用户静默回简体。后端修好、逐端点实测过再加。
+# ⚠️ 加的时候注意 `.strip().lower()` 会把它变成 `zh-tw`，而报告路由实测**只认 `zh-TW`**
+# （小写 422）⇒ 转发前要还原大小写，别只往元组里加一项。报告本身的繁体是真的（实测过）。
 _BACKEND_LANGS = ("en", "zh")
-_CATALOG_LANGS = ("en", "zh", "ja", "de", "id")
+_CATALOG_LANGS = ("en", "zh", "ja", "de", "id", "ko", "ru", "fr", "es")
 
 
 def _normalize_lang(lang: str | None) -> str:
@@ -275,7 +280,8 @@ def _normalize_catalog_lang(lang: str | None) -> str:
 
 Lang = Annotated[str | None, Field(
     description='Answer language — pass the language THIS conversation is in, not the '
-                'user\'s country. Supported: "en", "zh", "ja", "de", "id". Anything '
+                'user\'s country. Supported: "en", "zh", "ja", "de", "id", "ko", "ru", '
+                '"fr", "es". Anything '
                 'else, or omitted, is answered in English. Parts we have not translated '
                 'yet are returned in English with an explicit note saying so.',
 )]
@@ -297,10 +303,10 @@ QuickLang = Annotated[str | None, Field(
 # 🔴 所以 `lang` 是**按端点**的不是全局的（同 CI-1095 的结论）——拿 `_normalize_lang`
 # 去卡报告，等于把一个真能出德语报告的通道压成英文，**而且不报错**。
 #
-# ⚠️ 这五个字符串是后端那份清单的**副本**（两个仓，import 不到）。副本会漂，但漂的方向
-# 是**良性的**：后端新增第六种语言时这里不认 ⇒ 退英文（今天的行为），不是坏掉。
+# ⚠️ 这些字符串是后端那份清单的**副本**（两个仓，import 不到）。副本会漂，但漂的方向
+# 是**良性的**：后端新增一种语言时这里不认 ⇒ 退英文（今天的行为），不是坏掉。
 # 判据别写成「和后端逐字相同」——那是验不了的；要验就在 Prod 上拉一份该语言的报告数字符。
-_REPORT_LANGS = ("en", "zh", "ja", "de", "id")
+_REPORT_LANGS = ("en", "zh", "ja", "de", "id", "ko", "ru", "fr", "es")
 
 
 def _normalize_report_lang(lang: str | None) -> str:
@@ -311,9 +317,10 @@ def _normalize_report_lang(lang: str | None) -> str:
 
 
 ReportLang = Annotated[str | None, Field(
-    description='Report language — pass the language THIS conversation is in. Supported: '
-                '"en", "zh", "ja", "de", "id" (the PDF labels are professionally '
-                'translated for all five). Anything else, or omitted, gives English.',
+    description='Report language: pass the language THIS conversation is in. Supported: '
+                '"en", "zh", "ja", "de", "id", "ko", "ru", "fr", "es" (the PDF labels are '
+                'professionally translated for all of them). Anything else, or omitted, '
+                'gives English.',
 )]
 
 
@@ -875,6 +882,10 @@ _DIRECT_TIMEOUT_MSG = {
     "ja": "この安全チェックはタイムアウトしました。少し待ってから再度お試しください。",
     "de": "Diese Sicherheitsprüfung hat das Zeitlimit überschritten. Bitte versuchen Sie es gleich erneut.",
     "id": "Pemeriksaan keselamatan ini melebihi batas waktu. Silakan coba lagi sebentar.",
+    'ko': '이 안전 점검의 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.',
+    'ru': 'Время ожидания этой проверки безопасности истекло. Повторите попытку чуть позже.',
+    'fr': 'Cette vérification de sécurité a expiré. Veuillez réessayer dans un instant.',
+    'es': 'Esta verificación de seguridad superó el tiempo de espera. Vuelva a intentarlo en un momento.',
 }
 
 # 🔴 第二条也是 CI-915（PR #50 第二轮 review 抓到）：「拆成更少的化学品」只对**收列表的那些工具**
@@ -894,6 +905,11 @@ _DIRECT_TIMEOUT_HINT_BATCH = {
     "ja": "多くの化学品をまとめて問い合わせた場合は、小分けにして再度お試しください。",
     "de": " Wenn die Anfrage viele Chemikalien umfasste, teilen Sie sie in kleinere Aufrufe auf.",
     "id": " Jika permintaan mencakup banyak bahan kimia, coba pecah menjadi panggilan lebih kecil.",
+    'ko': ' 요청에 화학물질이 많이 포함되었다면 더 작은 호출로 나누어 다시 시도해 보세요.',
+    'ru': ' Если запрос охватывал много веществ, попробуйте разбить его на несколько меньших вызовов.',
+    'fr': (' Si la demande portait sur de nombreux produits chimiques, essayez de la diviser en appels plus '
+     'petits.'),
+    'es': ' Si la solicitud incluía muchos productos químicos, intente dividirla en llamadas más pequeñas.',
 }
 
 
@@ -966,6 +982,17 @@ _TIMEOUT_ANSWER = {
     "id": "Asisten keselamatan melebihi batas waktu sebelum menyelesaikan analisis. Silakan coba lagi. "
           "Jika ini produk tak terdaftar atau proprietary, unggah PDF MSDS/SDS-nya atau berikan nomor "
           "CAS agar bahayanya dapat dicari langsung.",
+    'ko': ('안전 어시스턴트가 분석을 마치기 전에 시간이 초과되었습니다. 다시 시도해 주세요. 목록에 없거나 독점 제품이라면 해당 MSDS/SDS PDF를 업로드하거나 CAS 번호를 '
+     '알려 주시면 유해성을 직접 조회할 수 있습니다.'),
+    'ru': ('Ассистент по безопасности не успел завершить анализ за отведённое время. Повторите попытку. Если '
+     'это незарегистрированный или фирменный продукт, загрузите его MSDS/SDS в PDF или укажите номер '
+     'CAS, чтобы найти его опасности напрямую.'),
+    'fr': ("L'assistant de sécurité a expiré avant de terminer son analyse. Veuillez réessayer. S'il s'agit "
+     "d'un produit non répertorié ou propriétaire, téléversez sa FDS (MSDS/SDS) en PDF ou indiquez un "
+     'numéro CAS pour que ses dangers puissent être recherchés directement.'),
+    'es': ('El asistente de seguridad superó el tiempo de espera antes de completar su análisis. Vuelva a '
+     'intentarlo. Si se trata de un producto no registrado o propietario, suba su MSDS/SDS en PDF o '
+     'indique un número CAS para consultar sus peligros directamente.'),
 }
 
 
@@ -1958,6 +1985,31 @@ _REG_LIST_COVERAGE_NOTE = {
            "Taiwan (TCSI) dan tidak memuat data IARC. "
            "Daftar yang tidak cocok berarti \"tidak ditemukan dalam salinan kami\", "
            "bukan berarti \"tidak diatur\"."),
+    'ko': ('적용 범위 안내: 이것은 당사가 정리한 규제 목록 사본이며 실시간 규제 피드가 아닙니다. 대만은 제한 목록 4종(MOENV 지정 독성화학물질·관심화학물질, OSHA '
+     '우선관리화학품·관제성화학품)과 OSHA 허용노출기준을 보유하며, 후자는 등재 여부만 기록하고 한도값이 없으며 제한도 아닙니다. 대만 기존화학물질 목록(TCSI)과 IARC '
+     '데이터는 포함하지 않습니다. 목록에 일치 항목이 없다는 것은 "당사 사본에서 찾지 못함"을 뜻하며, 결코 "규제 대상 아님"을 뜻하지 않습니다.'),
+    'ru': ('Примечание об охвате: это наша курируемая копия регуляторных списков, а не живой регуляторный '
+     'источник. По Тайваню она содержит четыре ограничительных списка (MOENV: перечисленные токсичные '
+     'и вызывающие озабоченность химические вещества; OSHA: вещества приоритетного управления и '
+     'контролируемые вещества), а также стандарты допустимого воздействия OSHA, где фиксируется только '
+     'факт включения: без предельных значений, и это не ограничение. Реестр существующих веществ '
+     'Тайваня (TCSI) и данные IARC не включены. Отсутствие в списке означает «не найдено в нашей '
+     'копии», а не «не регулируется».'),
+    'fr': ("Note de couverture : il s'agit de notre copie organisée des listes réglementaires, et non d'un "
+     'flux réglementaire en direct. Pour Taïwan, elle contient quatre listes de restriction (MOENV : '
+     'substances chimiques toxiques répertoriées et substances chimiques préoccupantes ; OSHA : '
+     'produits chimiques à gestion prioritaire et produits chimiques contrôlés), ainsi que les normes '
+     "d'exposition admissible de l'OSHA, qui n'indiquent que l'inscription : aucune valeur limite, et "
+     "ce n'est pas une restriction. Elle ne contient ni l'inventaire de Taïwan (TCSI) ni de données du "
+     "CIRC (IARC). L'absence d'une liste signifie « non trouvé dans notre copie », jamais « non "
+     'réglementé ».'),
+    'es': ('Nota de cobertura: esta es nuestra copia curada de las listas regulatorias, no una fuente '
+     'regulatoria en tiempo real. Para Taiwán contiene cuatro listas de restricción (MOENV: sustancias '
+     'químicas tóxicas listadas y sustancias químicas de interés; OSHA: sustancias químicas de gestión '
+     'prioritaria y sustancias químicas controladas), además de las normas de exposición permisible de '
+     'la OSHA, que solo registran la inclusión: sin valores límite y no constituyen una restricción. '
+     'No contiene el inventario de Taiwán (TCSI) ni datos de la IARC. Que una lista no aparezca '
+     'significa «no encontrado en nuestra copia», nunca «no regulado».'),
 }
 _REG_LIST_STRINGS = {
     "en": {"title": "Regulatory Lists", "not_checked": "⚠️ **Not checked.**",
@@ -1988,6 +2040,38 @@ _REG_LIST_STRINGS = {
            "near": "Kecocokan mirip dalam basis data", "cas": "CAS",
            "count": "Jumlah daftar yang cocok", "unknown": "Daftar tidak dikenal",
            "none": "Tidak ada kecocokan dalam salinan daftar regulasi milik kami."},
+    'ko': {'title': '규제 목록',
+     'not_checked': '⚠️ **확인하지 못함.**',
+     'status': '상태',
+     'near': '데이터베이스의 유사 일치 항목',
+     'cas': 'CAS',
+     'count': '일치한 목록 수',
+     'unknown': '알 수 없는 목록',
+     'none': '당사가 보유한 규제 목록 사본에서 일치 항목이 없습니다.'},
+    'ru': {'title': 'Регуляторные списки',
+     'not_checked': '⚠️ **Не проверено.**',
+     'status': 'Статус',
+     'near': 'Похожие совпадения в базе данных',
+     'cas': 'CAS',
+     'count': 'Совпавшие списки',
+     'unknown': 'Неизвестный список',
+     'none': 'Совпадений в нашей копии регуляторных списков нет.'},
+    'fr': {'title': 'Listes réglementaires',
+     'not_checked': '⚠️ **Non vérifié.**',
+     'status': 'Statut',
+     'near': 'Correspondances proches dans la base de données',
+     'cas': 'CAS',
+     'count': 'Listes correspondantes',
+     'unknown': 'Liste inconnue',
+     'none': 'Aucune correspondance dans notre copie des listes réglementaires.'},
+    'es': {'title': 'Listas regulatorias',
+     'not_checked': '⚠️ **No verificado.**',
+     'status': 'Estado',
+     'near': 'Coincidencias cercanas en la base de datos',
+     'cas': 'CAS',
+     'count': 'Listas coincidentes',
+     'unknown': 'Lista desconocida',
+     'none': 'Sin coincidencias en nuestra copia de las listas regulatorias.'},
 }
 
 
@@ -2008,6 +2092,13 @@ _UNRESOLVED_BOOLEAN_NOTE = {
            "Aussage darüber, dass die Datenbank keinen Datensatz dazu hat."),
     "id": ("Kami tidak dapat mencocokkan masukan ini dengan suatu rekaman — ini **bukan** "
            "pernyataan bahwa basis data tidak memiliki rekaman untuknya."),
+    'ko': '이 입력을 레코드와 연결하지 못했습니다. 이는 데이터베이스에 해당 레코드가 **없다는** 뜻이 **아닙니다**.',
+    'ru': ('Нам не удалось сопоставить этот ввод с записью. Это **не** означает, что в базе данных нет '
+     'записи о нём.'),
+    'fr': ("Nous n'avons pas pu associer cette saisie à un enregistrement. Cela ne signifie **pas** que la "
+     "base de données n'en contient aucun."),
+    'es': ('No pudimos asociar esta entrada a un registro. Esto **no** significa que la base de datos no '
+     'tenga ningún registro de ella.'),
 }
 
 
@@ -2164,6 +2255,105 @@ _SDS_DRAFT_STRINGS = {
            "unresolved": "Tidak teridentifikasi", "lookup_failed": "Pencarian gagal (coba lagi)",
            "truncated": "⚠️ Bagian ini mungkin terpotong: periksa SDS asli sebelum menyalinnya.", "limits_not_found": "⚠️ Tidak ada nilai batas paparan di teks ini: itu BUKAN berarti tidak ada. Periksa 8.1 di SDS asli.",
            "missing": "Untuk setiap bahan yang tercantum sebagai tidak didraf atau tidak teridentifikasi: unggah SDS pemasok tersebut dengan `upload_msds_pdf`, atau berikan nomor CAS, lalu draf ulang."},
+    'ko': {'title': 'SDS 초안',
+     'no_regional': '⚠️ {region}에 대한 규제 목록은 보유하고 있지 않습니다: 국제 협약만 확인했습니다. 아래 내용은 {region}에 대한 결론이 아닙니다.',
+     's8': '제8항: 노출 방지 및 개인 보호구',
+     's15': '제15항: 법적 규제 현황',
+     'source': '출처',
+     'revision': '개정',
+     'pdf': 'SDS 원본(PDF) 보유',
+     'not_drafted': '초안 작성 안 됨',
+     's15_basis': '근거: 당사가 보유한 규제 목록, 지역',
+     'lists_checked': '확인한 목록',
+     'listed_on': '등재 목록',
+     'not_listed': '확인한 목록에 없음',
+     'not_checked': '⚠️ 확인할 수 없음(목록 데이터 원본을 읽을 수 없음): "등재되지 않음"이라는 뜻이 아닙니다',
+     'lists_unreadable': '⚠️ 규제 목록을 읽을 수 없어 제15항은 아무것도 확인하지 않았습니다. 성분이 어떤 목록에도 없다는 뜻이 아닙니다.',
+     'unresolved': '식별되지 않음',
+     'lookup_failed': '조회 실패(다시 시도하세요)',
+     'truncated': '⚠️ 이 부분은 잘렸을 수 있습니다: 옮겨 적기 전에 원본 SDS를 확인하세요.',
+     'limits_not_found': '⚠️ 이 본문에서 노출 한계값을 찾지 못했습니다: 한계값이 없다는 뜻이 아닙니다. 원본 SDS의 8.1을 확인하세요.',
+     'missing': '초안 작성 안 됨 또는 식별되지 않음으로 표시된 각 성분은 `upload_msds_pdf`로 해당 공급업체의 SDS를 업로드하거나 CAS 번호를 지정한 '
+                '뒤 다시 초안을 작성하세요.'},
+    'ru': {'title': 'Черновик SDS',
+     'no_regional': '⚠️ У нас нет регуляторных списков для {region}: проверены только международные '
+                    'конвенции. Ничто ниже не является выводом о {region}.',
+     's8': 'Раздел 8. Контроль воздействия / средства индивидуальной защиты',
+     's15': 'Раздел 15. Информация о национальном и международном законодательстве',
+     'source': 'Источник',
+     'revision': 'редакция',
+     'pdf': 'есть оригинал SDS (PDF)',
+     'not_drafted': 'Не подготовлено',
+     's15_basis': 'Основание: имеющиеся у нас регуляторные списки для',
+     'lists_checked': 'Проверенные списки',
+     'listed_on': 'Включено в',
+     'not_listed': 'Нет в проверенных списках',
+     'not_checked': '⚠️ Проверить не удалось (источник списков недоступен): это НЕ означает «не '
+                    'включено»',
+     'lists_unreadable': '⚠️ Регуляторные списки не удалось прочитать, поэтому для раздела 15 НИЧЕГО '
+                         'не проверено. Это не означает, что компоненты не включены ни в один список.',
+     'unresolved': 'Не идентифицировано',
+     'lookup_failed': 'Ошибка запроса (повторите попытку)',
+     'truncated': '⚠️ Этот фрагмент может быть обрезан: сверьтесь с оригиналом SDS перед копированием.',
+     'limits_not_found': '⚠️ В этом тексте не найдено предельных значений воздействия: это НЕ '
+                         'означает, что их нет. Проверьте п. 8.1 в оригинале SDS.',
+     'missing': 'Для каждого компонента, отмеченного как не подготовленный или не идентифицированный: '
+                'загрузите SDS этого поставщика через `upload_msds_pdf` или укажите номер CAS и '
+                'подготовьте проект заново.'},
+    'fr': {'title': 'Brouillon de FDS',
+     'no_regional': '⚠️ Nous ne détenons aucune liste réglementaire pour {region} : seules les '
+                    "conventions internationales ont été vérifiées. Rien ci-dessous n'est une "
+                    'conclusion concernant {region}.',
+     's8': "Section 8 : Contrôles de l'exposition / protection individuelle",
+     's15': 'Section 15 : Informations relatives à la réglementation',
+     'source': 'Source',
+     'revision': 'révision',
+     'pdf': 'PDF original disponible',
+     'not_drafted': 'Non rédigé',
+     's15_basis': 'Base : listes réglementaires que nous détenons pour',
+     'lists_checked': 'Listes vérifiées',
+     'listed_on': 'Inscrit sur',
+     'not_listed': 'Absent des listes vérifiées',
+     'not_checked': '⚠️ Vérification impossible (source de la liste illisible) : cela ne signifie PAS '
+                    '« non inscrit »',
+     'lists_unreadable': "⚠️ Les listes réglementaires n'ont pas pu être lues, donc RIEN n'a été "
+                         'vérifié pour la section 15. Cela ne signifie pas que les composants ne '
+                         'figurent sur aucune liste.',
+     'unresolved': 'Non identifié',
+     'lookup_failed': 'Échec de la recherche (réessayer)',
+     'truncated': '⚠️ Ce passage est peut-être tronqué : vérifiez la FDS originale avant de le '
+                  'recopier.',
+     'limits_not_found': "⚠️ Aucune valeur limite d'exposition trouvée dans ce texte : cela ne "
+                         "signifie PAS qu'il n'y en a pas. Vérifiez la section 8.1 de la FDS "
+                         'originale.',
+     'missing': 'Pour chaque composant indiqué comme non rédigé ou non identifié : téléversez la FDS '
+                'de ce fournisseur avec `upload_msds_pdf`, ou indiquez un numéro CAS, puis relancez la '
+                'rédaction.'},
+    'es': {'title': 'Borrador de FDS',
+     'no_regional': '⚠️ No disponemos de listas regulatorias para {region}: solo se verificaron '
+                    'convenios internacionales. Nada de lo siguiente es una conclusión sobre {region}.',
+     's8': 'Sección 8: Controles de exposición / protección individual',
+     's15': 'Sección 15: Información reglamentaria',
+     'source': 'Fuente',
+     'revision': 'revisión',
+     'pdf': 'PDF original disponible',
+     'not_drafted': 'No redactado',
+     's15_basis': 'Base: listas regulatorias que tenemos para',
+     'lists_checked': 'Listas verificadas',
+     'listed_on': 'Incluido en',
+     'not_listed': 'No figura en las listas verificadas',
+     'not_checked': '⚠️ No se pudo verificar (la fuente de la lista no es legible): esto NO significa '
+                    '«no incluido»',
+     'lists_unreadable': '⚠️ No se pudieron leer las listas regulatorias, así que NO se verificó nada '
+                         'para la sección 15. Esto no significa que los componentes no figuren en '
+                         'ninguna lista.',
+     'unresolved': 'No identificado',
+     'lookup_failed': 'Error en la consulta (reintente)',
+     'truncated': '⚠️ Este fragmento puede estar cortado: compruebe la FDS original antes de copiarlo.',
+     'limits_not_found': '⚠️ No se encontraron valores límite de exposición en este texto: eso NO '
+                         'significa que no existan. Compruebe la sección 8.1 de la FDS original.',
+     'missing': 'Para cada componente indicado como no redactado o no identificado: suba la FDS de ese '
+                'proveedor con `upload_msds_pdf`, o indique un número CAS, y vuelva a redactar.'},
 }
 
 
