@@ -3528,6 +3528,134 @@ async def get_emergency_response(
                     success=success, error_message=error_msg)
 
 
+# CI-1076: when no curated or regulatory value exists, the backend answers with the
+# supplier's own SDS text instead of an empty list. These are QUOTES, not values we
+# extracted: the renderer must say whose words they are and must not turn a number in
+# the quote into one of our limits (data measured §8 parsing as unreliable, which is
+# why the backend ships text, not fields).
+def _supplier_quote_lines(ev: dict | None) -> list[str]:
+    """Render a backend `section_excerpt` / `evidence` dict as an attributed quote."""
+    if not ev or not ev.get("quote"):
+        return []
+    who = ev.get("supplier") or "unknown supplier"
+    rev = f", revision {ev['revision_date']}" if ev.get("revision_date") else ""
+    lines = [f"> **Supplier SDS Section {ev.get('section', '?')}** ({who}{rev}), quoted as written:"]
+    lines.extend(f"> {ln}" if ln.strip() else ">" for ln in str(ev["quote"]).splitlines())
+    if ev.get("excerpt_truncated"):
+        lines.append("⚠️ The quote was cut short; read the rest in the original SDS.")
+    if ev.get("section_possibly_truncated"):
+        lines.append("⚠️ Our stored copy of this section may be missing its end; check the original SDS.")
+    return lines
+
+
+def _exposure_item_lines(item: dict) -> list[str]:
+    """Body of one `get_exposure_limits` result (CI-1076 statuses included)."""
+    lines: list[str] = []
+    limits = item.get("limits") or []
+    for lim in limits:
+        source = lim.get("source") or lim.get("authority") or "?"
+        ltype = lim.get("type", "?")
+        value = lim.get("value", "—")
+        unit = lim.get("unit", "")
+        # CI-578: 别叫 `region` —— 它会盖掉调用方传的过滤条件，而 `finally`
+        # 里的 `_log_intent` 在循环之后跑，记进日志的就成了最后一条限值的
+        # region。守卫见 tests/test_ci578_logged_params_not_reassigned.py。
+        lim_region = lim.get("region", "")
+        region_suffix = f" ({lim_region})" if lim_region else ""
+        # 同一 CAS 在法规值表里可有多行（粉尘总量 / 可吸入、各附表行），entry_name 是唯一区分。
+        entry = f" [{lim['entry_name']}]" if lim.get("entry_name") else ""
+        extra = "; ".join(str(lim[k]) for k in ("notation", "source_version", "remarks") if lim.get(k))
+        if lim.get("value_source") == "regulatory_table":
+            # 混合答案（curated_literal+regulatory_table）里，模型要能分清哪行出自法规值表。
+            extra = f"regulatory table; {extra}" if extra else "regulatory table"
+        extra = f" ({extra})" if extra else ""
+        lines.append(f"- **{source}**{region_suffix}{entry}: {ltype} = {value} {unit}".rstrip() + extra)
+    if limits:
+        if item.get("source_note"):
+            lines.append(f"*{item['source_note']}*")
+        return lines
+    status = item.get("oel_status")
+    excerpt = item.get("section_excerpt")
+    if excerpt and excerpt.get("quote"):
+        if status == "supplier_states_no_oel":
+            lines.append("- No curated or regulatory limit on file. **The supplier's SDS states "
+                         "that no exposure limit applies**: that is the supplier's statement, "
+                         "quoted below, not a check made by us.")
+        else:
+            lines.append(f"- No curated or regulatory limit on file. Section "
+                         f"{excerpt.get('section') or '8.1'} of the supplier's SDS is quoted "
+                         "below. **No values were extracted from it**: any figure "
+                         "in the quote is the supplier's, and which component and jurisdiction "
+                         "it applies to is as stated in the original text.")
+        for key in ("note", "region_note"):
+            if item.get(key):
+                lines.append(f"*{item[key]}*")
+        lines.extend(_supplier_quote_lines(excerpt))
+        return lines
+    lines.append("- No OEL data found for this chemical.")
+    return lines
+
+
+_AMBIGUITY_REASONS = {
+    "multiple_un_numbers": "the section names more than one UN number",
+    "regulated_and_not_regulated_signals": "the section both classifies it and says it is not regulated",
+    "not_regulated_for_some_modes_only": "it is stated as not regulated for some transport modes only",
+    "section_possibly_truncated": "our stored copy of the section may be cut off",
+}
+
+
+def _transport_item_lines(item: dict) -> list[str]:
+    """Body of one `get_transport_classification` result (CI-1076 statuses included).
+
+    🔴 `ambiguous` lists EVERY candidate and picks none: choosing one would state a UN
+    number the supplier's own text does not support.
+    """
+    status = item.get("transport_status")
+    ev_lines = _supplier_quote_lines(item.get("evidence"))
+    note = [f"*{item['note']}*"] if item.get("note") else []
+    if status == "ambiguous":
+        cands = item.get("un_candidates") or []
+        lines = ["- **UN Number: not determined.** The supplier's SDS Section 14 does not "
+                 "support a single UN number, so none was chosen."]
+        if cands:
+            lines.append(f"- **Candidates in the text:** {', '.join(cands)}")
+        reason = item.get("ambiguity_reason")
+        if reason:
+            lines.append(f"- Reason: {_AMBIGUITY_REASONS.get(reason, reason)}")
+        return lines + note + ev_lines
+    if status == "supplier_states_not_regulated":
+        return (["- **The supplier's SDS states this is not regulated as dangerous goods.** "
+                 "That is the supplier's statement, not a classification made by us."]
+                + note + ev_lines)
+    if status == "none":
+        return ["- No transport classification on file: no curated entry, and the supplier's "
+                "SDS Section 14 supports no statement."]
+
+    if status is None and not item.get("un_number") and not item.get("transport_modes"):
+        # 旧后端（无 transport_status）查不到时整排字段都是 None：别印四行「not stated」装作有分类。
+        return ["- No transport classification on file for this chemical."]
+
+    def field(key: str) -> str:
+        v = item.get(key)
+        return "not stated" if v in (None, "") else str(v)
+
+    lines = ["- Read from the supplier's SDS Section 14 (quoted below), not a "
+             "classification made by us."] if status == "un_number_found" else []
+    lines += [
+        f"- **UN Number:** {field('un_number')}",
+        f"- **Proper Shipping Name:** {field('proper_shipping_name')}",
+        f"- **Hazard Class:** {field('hazard_class')}",
+        f"- **Packing Group:** {field('packing_group')}",
+    ]
+    modes = item.get("transport_modes") or {}
+    if modes:
+        lines.append("- **Transport Modes:**")
+        lines.extend(f"  - {mode.upper()}: {details}" for mode, details in modes.items())
+    if item.get("source_note"):
+        lines.append(f"*{item['source_note']}*")
+    return lines + note + ev_lines
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Get Exposure Limits", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
@@ -3548,6 +3676,11 @@ async def get_exposure_limits(
     - Japan 産衛研
     - China GBZ
 
+    When no curated or regulatory value is on file, the answer may instead QUOTE
+    Section 8.1 of the supplier's SDS (supplier and revision named). Those quotes are
+    the supplier's words, not values we extracted: present them as quotes and do not
+    restate a number from them as a limit we hold.
+
     Args:
         chemicals: List of chemical names or CAS numbers
         region: Optional filter — "US", "EU", "JP", "CN", or "INT"
@@ -3562,23 +3695,7 @@ async def get_exposure_limits(
             lines.extend(_form_disclosure_lines(item))  # CI-572
             if item.get("region_filter"):
                 lines.append(f"Region filter: **{item['region_filter']}**")
-            limits = item.get("limits", [])
-            if limits:
-                for lim in limits:
-                    source = lim.get("source") or lim.get("authority") or "?"
-                    ltype = lim.get("type", "?")
-                    value = lim.get("value", "—")
-                    unit = lim.get("unit", "")
-                    # CI-578: 别叫 `region` —— 它会盖掉调用方传的过滤条件，而 `finally`
-                    # 里的 `_log_intent` 在循环之后跑，记进日志的就成了最后一条限值的
-                    # region。守卫见 tests/test_ci578_logged_params_not_reassigned.py。
-                    lim_region = lim.get("region", "")
-                    region_suffix = f" ({lim_region})" if lim_region else ""
-                    lines.append(
-                        f"- **{source}**{region_suffix}: {ltype} = {value} {unit}".rstrip()
-                    )
-            else:
-                lines.append("- No OEL data found for this chemical.")
+            lines.extend(_exposure_item_lines(item))
             lines.append(f"*Data source: {item.get('data_source', 'unknown')}*\n")
         if data.get("unresolved"):
             lines.extend(_unresolved_block(data))
@@ -3603,6 +3720,9 @@ async def get_transport_classification(chemicals: ChemicalList,
     """Get UN transport classification for chemicals (dangerous goods shipping).
     Returns UN number, proper shipping name, hazard class, packing group,
     and transport mode details (ADR road, IATA air, IMDG sea).
+    Without a curated entry, the answer may come from the supplier's SDS Section 14,
+    quoted with supplier and revision. If that text names several UN numbers the
+    answer is "not determined" and lists every candidate: do not pick one.
     Args:
         chemicals: List of chemical names or CAS numbers
     """
@@ -3614,14 +3734,7 @@ async def get_transport_classification(chemicals: ChemicalList,
         for item in data.get("results", []):
             lines.append(f"### {item.get('chemical_name', '?')} ({item.get('cas', 'N/A')})")
             lines.extend(_form_disclosure_lines(item))  # CI-572
-            lines.append(f"- **UN Number:** {item.get('un_number', 'N/A')}")
-            lines.append(f"- **Proper Shipping Name:** {item.get('proper_shipping_name', 'N/A')}")
-            lines.append(f"- **Hazard Class:** {item.get('hazard_class', 'N/A')}")
-            lines.append(f"- **Packing Group:** {item.get('packing_group', 'N/A')}")
-            modes = item.get("transport_modes", {})
-            if modes:
-                lines.append("- **Transport Modes:**")
-                lines.extend(f"  - {mode.upper()}: {details}" for mode, details in modes.items())
+            lines.extend(_transport_item_lines(item))
             lines.append(f"*Data source: {item.get('data_source', 'unknown')}*\n")
         if data.get("unresolved"):
             lines.extend(_unresolved_block(data))
