@@ -250,6 +250,11 @@ def test_per_case_reason_follows_language():
     payload = EMERGENCY_UNRESOLVED_WITH_REASON
     assert server._unresolved_reason_note(payload, "zh") == _REASON_ZH
     assert server._unresolved_reason_note(payload, "en") == _REASON_EN
+    # The backend localizes `reason` for zh-TW (Traditional); any spelling we accept must get it.
+    for given in ("zh-TW", "zh-tw"):
+        assert server._unresolved_reason_note(payload, given) == _REASON_ZH, given
+    # Languages the backend does not localize get the English half, not a Chinese sentence.
+    assert server._unresolved_reason_note(payload, "ja") == _REASON_EN
 
 
 def test_unresolved_detail_of_the_wrong_shape_does_not_crash():

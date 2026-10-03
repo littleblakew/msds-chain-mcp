@@ -81,6 +81,15 @@ def test_every_gap_is_listed_to_the_user():
         assert token in text, f"{token} 没到达用户读到的文本"
 
 
+def test_unresolved_reason_follows_language():
+    """zh / zh-TW read the backend's localized `reason`; other languages read `reason_en`."""
+    for lang in ("zh", "zh-TW"):
+        text = server._format_sds_draft(_payload(), lang)
+        assert "库中没有" in text and "ZZ-UNRESOLVED-EN" not in text, (lang, text)
+    text = server._format_sds_draft(_payload(), "ja")
+    assert "ZZ-UNRESOLVED-EN" in text and "库中没有" not in text, text
+
+
 def test_notice_comes_first_and_verbatim():
     text = server._format_sds_draft(_payload(), "en")
     first_content = [ln for ln in text.splitlines() if ln.strip()][1]

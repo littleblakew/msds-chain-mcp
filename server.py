@@ -2131,6 +2131,10 @@ def _unresolved_boolean_note(lang: str | None = None) -> str:
                                         _UNRESOLVED_BOOLEAN_NOTE["en"])
 
 
+# 后端 `unresolved_detail.reason` 会本地化的语言（`reason_en` 恒为英文）。
+_REASON_LOCALIZED_LANGS = ("zh", "zh-TW")
+
+
 def _unresolved_reason_note(data: dict, lang: str | None = None) -> str:
     """CI-714 的 MCP 半边：后端能说出「为什么」时就说逐案那句，说不出才回退到通用句。
 
@@ -2149,9 +2153,9 @@ def _unresolved_reason_note(data: dict, lang: str | None = None) -> str:
     """
     detail = data.get("unresolved_detail")
     if isinstance(detail, dict):
-        # 🔴 只有 `zh` 取 `reason`：后端给 zh-TW 的 `reason` 仍是简体（10-02 Prod 实测），
-        #    回英文好过静默回简体。后端转了繁体之后再把 zh-TW 并进来。
-        key = "reason" if _normalize_catalog_lang(lang or LANG) == "zh" else "reason_en"
+        # 后端只给 zh / zh-TW 本地化 `reason`（zh-TW 是繁体）；其余语言的 `reason` 是简体，
+        # 回英文好过回一句读不懂的中文。
+        key = "reason" if _normalize_catalog_lang(lang or LANG) in _REASON_LOCALIZED_LANGS else "reason_en"
         reason = (detail.get(key) or "").strip()
         if reason:
             return reason
@@ -2503,8 +2507,9 @@ def _format_sds_draft(data: dict, lang: str | None = None) -> str:
         lines.append(f"**{s['unresolved']}:**")
         for u in unresolved:
             d = u.get("unresolved_detail") or {}
-            # zh-TW 刻意取 reason_en，理由同 `_unresolved_reason_note`。
-            reason = d.get("reason") if lg == "zh" else (d.get("reason_en") or d.get("reason"))
+            # 取哪一半，理由同 `_unresolved_reason_note`。
+            reason = (d.get("reason") if lg in _REASON_LOCALIZED_LANGS
+                      else (d.get("reason_en") or d.get("reason")))
             reason = reason or _unresolved_boolean_note(lg)
             # The backend's reason already opens with the query; don't print it twice.
             lines.append(f"- {reason}" if (u.get("chemical") or "\0") in reason
