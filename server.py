@@ -1065,11 +1065,21 @@ _RAW_ENTRY_BUDGET = 4000
 _RAW_TOTAL_BUDGET = 8000
 
 
-def _shorten_strings(obj, allowance: int):
+# 物质级规程行的行内标记，与后端 `app/services/protocol_marker.PROTOCOL_PREFIX` 同值
+# （本仓是独立公开仓，不能 import 后端；`get_emergency_response` 渲染器按同一前缀认）。
+_PROTOCOL_PREFIX = "[protocol]"
+
+
+def _shorten_strings(obj, allowance: int, protocol_allowance: int | None = None):
     """把过长的字符串截短（保留键），供 `_compact_for_context` 用。
 
     只动**字符串值**，不动键、不动数值、不删字段——结论住在字段里（`verdict` /
     `level`），解释住在长字符串里（`reason`）。截短处留一个带**量级**的记号。
+
+    🔴 CI-711：以 `_PROTOCOL_PREFIX` 开头的字符串是物质级急救规程行（HF「不痛也要就医」
+    那类后半句警示），**最后才挨刀**，与后端 `tool_payload` 的 CI-574 同一规则：
+    `protocol_allowance=None` 时原样放行，由调用方在通用文本已缩到底、仍放不下时才传值。
+    后端的「最后」是排序不是豁免，这里同理——传了值它照样被缩，所以总预算仍受控。
 
     🔴 两个坑（review 实测抓到的）：
     ① 记号自己也占长度 ⇒ `allowance` 太小时「缩短」后的串**比原串还长**，
@@ -1078,16 +1088,22 @@ def _shorten_strings(obj, allowance: int):
        两者差一个记号的长度，报少了会让人以为丢得比实际少。
     """
     if isinstance(obj, str):
-        if len(obj) <= allowance:
+        if obj.lstrip().startswith(_PROTOCOL_PREFIX):
+            if protocol_allowance is None:
+                return obj
+            limit = protocol_allowance
+        else:
+            limit = allowance
+        if len(obj) <= limit:
             return obj
-        keep = max(allowance - 20, 24)
+        keep = max(limit - 20, 24)
         if keep >= len(obj):
             return obj
         return obj[:keep] + f"...(+{len(obj) - keep} chars)"
     if isinstance(obj, dict):
-        return {k: _shorten_strings(v, allowance) for k, v in obj.items()}
+        return {k: _shorten_strings(v, allowance, protocol_allowance) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [_shorten_strings(v, allowance) for v in obj]
+        return [_shorten_strings(v, allowance, protocol_allowance) for v in obj]
     return obj
 
 
@@ -1134,8 +1150,14 @@ def _compact_for_context(result, budget: int = _RAW_ENTRY_BUDGET) -> str:
 
     # ① 缩短字符串（保住全部字段与全部条目）
     work = result
-    for allowance in (160, 100, 60, 40, 24):
+    # 通用文本先缩到底（规程行原样），仍放不下才轮到规程行，它也走同一梯度（CI-711）
+    ladder = (160, 100, 60, 40, 24)
+    for allowance in ladder:
         work = _shorten_strings(result, allowance)
+        if len(_dump(work)) <= budget:
+            return _dump(work)
+    for protocol_allowance in (800, 400) + ladder:
+        work = _shorten_strings(result, ladder[-1], protocol_allowance)
         if len(_dump(work)) <= budget:
             return _dump(work)
 
