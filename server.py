@@ -2972,6 +2972,7 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
         # 🔴 CI-842 排在 precursor / no_hazard_basis **之前**：那两条都在说「这条答案的
         # 内容」，本条在说「这条答案说的是不是你问的那个东西」——身份先于内容。
         lines.extend(_query_form_disclosure_block(data))
+        lines.extend(_physical_form_disclosures_block(data))
         lines.extend(_precursor_disclosure_block(data))
         lines.extend(_no_hazard_basis_block(data))
 
@@ -3083,6 +3084,7 @@ async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None,
         # 🔴 CI-842 排在 precursor / no_hazard_basis **之前**：那两条都在说「这条答案的
         # 内容」，本条在说「这条答案说的是不是你问的那个东西」——身份先于内容。
         lines.extend(_query_form_disclosure_block(data))
+        lines.extend(_physical_form_disclosures_block(data))
         lines.extend(_precursor_disclosure_block(data))
         lines.extend(_no_hazard_basis_block(data))
 
@@ -4324,6 +4326,34 @@ def _batch_truncation_block(data: dict, submitted: list[str]) -> list[str]:
         )
     lines.append("")
     return lines
+
+
+def _physical_form_disclosures_block(data: dict) -> list[str]:
+    """CI-577：三个批量端点（/compatibility/check、/risk-warnings、/batch-safety）的
+    **记录驱动**形态披露渲染进文本面。
+
+    后端给顶层 `physical_form_disclosures: [{chemical, cas, physical_form,
+    physical_form_disclosure}]`；`_expose()` 会把它带进 structuredContent，但模型读的是
+    text ⇒ 不渲染就等于没修（CI-553 / CI-842 同一个形状）。单项渲染走
+    `_form_disclosure_lines` 这一个出口，批量里有多个化学品，所以每行前面加化学品名
+    （句子本身只说「这份 SDS」，不带名字就分不清在说哪一个）。
+    `physical_form_lookup_failed` 为真时说一句：查询没跑成 ≠ 没有可披露的（CI-666）。
+    """
+    out: list[str] = []
+    for item in data.get("physical_form_disclosures") or []:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("chemical") or item.get("cas") or ""
+        for line in _form_disclosure_lines(item):
+            body = line[len("- ⚠️ "):] if line.startswith("- ⚠️ ") else line.lstrip("- ")
+            out.append(f"- ⚠️ {name}: {body}" if name else line)
+    if data.get("physical_form_lookup_failed"):
+        out.append("- ⚠️ The physical-form check for the SDS on file could not run for "
+                   "this request; which form (e.g. anhydrous vs aqueous) the cited sheet "
+                   "describes is not confirmed.")
+    if out:
+        out.append("")
+    return out
 
 
 def _query_form_disclosure_block(data: dict) -> list[str]:
@@ -6263,6 +6293,7 @@ async def batch_safety_check(
         sections.extend(_rejected_products_block(data))
         # 🔴 CI-842：同上两个工具——身份先于内容。
         sections.extend(_query_form_disclosure_block(data))
+        sections.extend(_physical_form_disclosures_block(data))
         sections.extend(_precursor_disclosure_block(data))
         sections.extend(_no_hazard_basis_block(data))
 
