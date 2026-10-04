@@ -830,6 +830,25 @@ def _doc_link_lookup(documents: list[dict]) -> dict[str, str]:
     return lut
 
 
+_LLM_ESCALATED_TAG = "[Basis: model reasoning, not an SDS statement]"
+_UNKNOWN_BASIS_TAG = "[Basis: unverified origin, not an SDS statement]"
+
+
+def _pair_basis_label(traceability: str | None) -> str:
+    """相容性判定行的出处前缀（不含方括号）。
+
+    🔴 只有 `sds_backed` 才许说「Source (SDS)」。模型推理（`llm_escalated`）和任何
+    不认识的值都不能落到那个说法上：那等于替模型编一个 SDS 出处。
+    """
+    if traceability == "rule_based":
+        return "Basis (rule)"
+    if traceability == "sds_backed":
+        return "Source (SDS)"
+    if traceability == "llm_escalated":
+        return "Basis (model reasoning, not an SDS statement)"
+    return "Basis (unverified origin, not an SDS statement)"
+
+
 def _traceability_label(traceability: str | None, chem_key: str | None,
                         sds_backed_chemicals: set) -> str:
     """把后端的 `traceability` 翻成给模型读的一句出处标注。
@@ -855,6 +874,12 @@ def _traceability_label(traceability: str | None, chem_key: str | None,
         return "[Basis: rule/standard]"
     if traceability == "none":
         return ""
+    if traceability == "llm_escalated":
+        return _LLM_ESCALATED_TAG
+    if traceability:
+        # 后端发来了一个本版本不认识的值：它声明了出处类别，只是我们不知道是哪一类。
+        # 既不能落到下面的「有文档就说有 SDS 出处」，也不能说成规则层。
+        return _UNKNOWN_BASIS_TAG
     key = (chem_key or "").lower()
     return "[Source: SDS document]" if key and key in sds_backed_chemicals else ""
 
@@ -2960,9 +2985,9 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
         for pair in data.get("pairs", []):
             level = pair.get("level", "unknown").upper()
             emoji = {"COMPATIBLE": "OK", "CAUTION": "CAUTION", "INCOMPATIBLE": "DANGER"}.get(level, level)
-            # CI-89: compat verdicts come from a rule engine — label as Basis(rule)
+            # 出处前缀由 traceability 决定（_pair_basis_label），缺省按规则层
             traceability = pair.get("traceability", "rule_based")
-            basis_label = "Basis (rule)" if traceability == "rule_based" else "Source (SDS)"
+            basis_label = _pair_basis_label(traceability)
             restrict_clause, restrict_lines = _precursor_pair_note(
                 precursor_index, *_pair_sides(pair))
             pair_line = (
@@ -6266,9 +6291,9 @@ async def batch_safety_check(
         batch_precursor_index = _precursor_index(data)
         for pair in compat.get("pairs", []):
             level = pair.get("level", "unknown").upper()
-            # CI-89: compat verdicts are rule-based
+            # 出处前缀由 traceability 决定（_pair_basis_label），缺省按规则层
             traceability = pair.get("traceability", "rule_based")
-            basis_label = "Basis (rule)" if traceability == "rule_based" else "Source (SDS)"
+            basis_label = _pair_basis_label(traceability)
             restrict_clause, restrict_lines = _precursor_pair_note(
                 batch_precursor_index, *_pair_sides(pair))
             line = (
