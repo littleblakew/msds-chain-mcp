@@ -2831,9 +2831,9 @@ def _peroxide_former_lines(item: dict) -> list[str]:
     危害是**开容器那一刻**：过氧化物结晶受摩擦或撞击可能起爆，所以那条「看见结晶就别动」
     必须排在储存要求之前 —— 读者按顺序读，而他可能已经站在柜子前面了。
 
-    `peroxide_former_coverage_note` **只在没有分类时**渲染：后端两者都发，同时说出来
-    就成了「这是 Class B」紧跟着「我们没有这个物质的分类」，两句逐字打架，
-    而读者合理的反应是不信那条分类。（后端为什么两者都发，归 trust 线，已投递。）
+    `peroxide_former_coverage_note` **只在没有分类时**渲染：后端命中分类时把它置为 `null`
+    （[[CI-706]]），这里仍按「有分类就不读它」写，不依赖后端那一侧——两者同时说出来
+    就成了「这是 Class B」紧跟着「我们没有这个物质的分类」，两句逐字打架。
     """
     if not isinstance(item, dict):
         return []
