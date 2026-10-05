@@ -5915,7 +5915,7 @@ def _upload_local_path_message(pdf_source: str) -> str:
     )
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Upload & Parse MSDS PDF", read_only_hint=False, destructive_hint=False, open_world_hint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Upload & Parse MSDS PDF", read_only_hint=False, destructive_hint=False, open_world_hint=True), structured_output=False)
 @_reported
 async def upload_msds_pdf(
     pdf_source: Annotated[str, Field(
@@ -6237,15 +6237,15 @@ async def _session_from_batch(chemicals: list[str]) -> str | None:
         return None
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Batch Safety Check", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Batch Safety Check", read_only_hint=False, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
 @_reported
 async def batch_safety_check(
     chemicals: Annotated[list[str], Field(
     description='List of chemical names or CAS numbers to check together, e.g. '
                 '["acetone", "sulfuric acid", "sodium hydroxide", "methanol"]. '
-                'Intended for 2-20 items; this runs compatibility, hazards and PPE in '
-                'one call, so cost and latency grow with the list length.',
+                'Intended for 2-20 items; this runs pairwise compatibility and per-chemical risk '
+                'warnings in one call (no PPE), so cost and latency grow with the list length.',
     )],
     lang: Lang = None, suppliers: Suppliers = None, intent: Intent = None,
 ) -> str:
@@ -6261,8 +6261,12 @@ async def batch_safety_check(
     advertised both; the description is what you read when choosing a tool, so
     naming an output that never arrives invites answering from nothing.)
 
-    Good first call when reviewing an experiment protocol or Opentrons deck
-    layout: it covers the pairwise interactions in one round-trip.
+    Good first call when reviewing the chemical list of an experiment protocol: it
+    covers the pairwise interactions in one round-trip.
+
+    Side effect: when called with a signed-in account, the result is also saved
+    as an audit session in that account and its session_id is returned, so
+    `get_audit_report` can fetch it later. Anonymous calls save nothing.
 
     Args:
         chemicals: List of chemical names or CAS numbers (2-20 items), e.g.
