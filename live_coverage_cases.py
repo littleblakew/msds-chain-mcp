@@ -127,6 +127,7 @@ CASES: dict[str, dict] = {
     },
     "batch_safety_check": {
         "args": {"chemicals": ["acetone", "methanol", "sodium hydroxide"]},
+        "writes": True,   # CI-1135：带凭证调用会顺手建一个 audit session
         "expect_mentions": ['acetone', 'methanol', 'sodium hydroxide'],
         "note": "多组分并行；票里记过这类工具耗时最长（超时上限就是为它抬的）",
     },
