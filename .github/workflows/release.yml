@@ -11,8 +11,8 @@ name: Publish Release (npm + MCP registry)
 #   2. commit + push main                        # deploy.yml ships the core
 #   3. git tag vX.Y.Z && git push origin vX.Y.Z  # THIS workflow publishes
 #
-# scripts/release.sh --publish stays as a local fallback (uses the committed
-# macOS mcp-publisher binary); CI downloads the linux binary below.
+# scripts/release.sh --publish stays as a local fallback (needs a locally
+# downloaded mcp-publisher, gitignored); CI downloads the linux binary below.
 #
 # Auth: BOTH publishes are tokenless, via GitHub Actions OIDC (id-token: write).
 #       • npm — the package is an npm "Trusted Publisher" (npmjs.com → package →

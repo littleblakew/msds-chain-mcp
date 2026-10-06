@@ -4,12 +4,12 @@ Chemical safety intelligence for [DeepSeek Harness](https://github.com/deepseek-
 This bundle mounts the hosted MSDS Chain MCP endpoint through the in-box
 `@deepseek-ai/dsh-mcp-client` bridge — no server to run locally.
 
-23 MCP tools covering compatibility and mixing-order checks, GHS hazard analysis, PPE
+MCP tools covering compatibility and mixing-order checks, GHS hazard analysis, PPE
 recommendations, storage and waste-disposal guidance, occupational exposure limits,
 transport classification, multi-region regulatory compliance (EU/US/CN/JP/KR/CA/AU/TW/SG),
 safer alternatives, protocol text parsing, SDS section lookup and version diffs, and
 signed audit reports. Every answer cites the supplier SDS and revision date it is
-grounded in. Indexes 4.3M+ chemicals and 535K+ SDS documents, in 5 languages.
+grounded in.
 
 ## Install
 
