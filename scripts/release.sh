@@ -23,7 +23,7 @@
 #   3. review `git diff`, commit, push main   # push auto-deploys the core (serverInfo)
 #   4. git tag vX.Y.Z && git push origin vX.Y.Z
 #      -> .github/workflows/release.yml publishes npm + MCP registry automatically
-#         (npm via NPM_TOKEN secret; registry via GitHub OIDC — no manual login)
+#         (both via GitHub OIDC — npm Trusted Publisher, no NPM_TOKEN; no manual login)
 #
 # The `--publish` path below is a LOCAL FALLBACK for when CI is unavailable. It
 # uses the committed macOS mcp-publisher binary and requires you to have run
