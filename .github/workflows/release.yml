@@ -81,7 +81,7 @@ jobs:
       - name: Version guard tests
         run: |
           pip install --no-cache-dir -r requirements-dev.txt
-          python -m pytest tests/test_version.py -q
+          python -m pytest tests/contract/test_version.py -q
 
       - uses: actions/setup-node@v4
         with:

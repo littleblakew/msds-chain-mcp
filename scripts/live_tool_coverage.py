@@ -25,7 +25,7 @@
     # 连写工具一起（会在目标环境留下数据，且按 decision-no-auto-cleanup-user-data 不清理）
     ... --include-writes
 
-用例集在 `live_coverage_cases.py`（repo 根），由 `tests/test_ci245_live_coverage_cases.py`
+用例集在 `live_coverage_cases.py`（repo 根），由 `tests/repo_guards/test_live_coverage_cases.py`
 守住「用例 == live registry」——新增工具没加用例会红，不会静默漏测。
 """
 from __future__ import annotations
