@@ -66,3 +66,102 @@ def test_output_is_still_json_when_only_strings_are_cut():
     out = server._compact_for_context(
         {"first_aid": [PROTOCOL], "notes": ["generic ghs text " * 12] * 20}, 3000)
     assert TAIL in json.loads(out)["first_aid"][0]
+
+
+# ── 真实形状：急救按途径分组（dict of lists），规程行与通用 H 码话术混在同一列表里 ──
+# 量级照 Prod 那次失败配（6 个条目 · HF 急救 16 条规程行 ≈ 2,100 字符）：旧实现把规程行
+# 全切到 24 字符，并把 `skin` / `eye` 两条途径整条丢掉——而用户问的正是皮肤接触。
+
+def _route(name: str, n_protocol: int, n_generic: int) -> list[str]:
+    return ([f"[protocol] {name} step {i}: " + "do this specific thing now " * 4 + TAIL
+             for i in range(n_protocol)]
+            + [f"[H314] {name} generic advice {i} " + "rinse and seek help " * 3
+               for i in range(n_generic)])
+
+
+def _first_aid() -> dict:
+    return {
+        "chemical": "Hydrofluoric Acid",
+        "source_info": {"supplier": "Example Supplier", "revision_date": "2022-09-01"},
+        "routes": {"inhalation": _route("inhalation", 4, 8), "skin": _route("skin", 5, 8),
+                   "eye": _route("eye", 4, 7), "ingestion": _route("ingestion", 3, 8)},
+        "from_sds": ["section 4 line " * 8 for _ in range(25)],
+    }
+
+
+def _ppe(chem: str) -> dict:
+    return {"chemical": chem,
+            "source_info": {"supplier": "Example Supplier", "revision_date": "2020-01-15",
+                            **{f"k{i}": "metadata value " * 6 for i in range(12)}},
+            "ppe": {"gloves": ["[H314] heavy-duty gloves " * 6 for _ in range(10)]}}
+
+
+def _six_entries() -> list[dict]:
+    return [
+        {"tool": "search_chemical", "result": {"query": "hf", "chemicals": [{"id": 1}]}},
+        {"tool": "search_chemical", "result": {"query": "hno3", "chemicals": [{"id": 2}]}},
+        {"tool": "ppe_recommendation", "result": _ppe("Hydrofluoric Acid")},
+        {"tool": "ppe_recommendation", "result": _ppe("Nitric Acid")},
+        {"tool": "first_aid_guidance", "result": _first_aid()},
+        {"tool": "first_aid_guidance", "result": _generic(40)},
+    ]
+
+
+def _entry(out: str, n: int) -> dict:
+    lines = [ln for ln in out.splitlines() if ln.startswith("`")]
+    return json.loads(lines[n].split(": ", 1)[1])
+
+
+def test_every_protocol_line_survives_six_way_split():
+    out = server._format_tool_results(_six_entries())
+    fa = _entry(out, 4)
+    protocol = [x for r in fa["routes"].values() for x in r if x.startswith("[protocol]")]
+    assert len(protocol) == 16
+    assert all(x.endswith(TAIL) for x in protocol), "规程行被截短"
+
+
+def test_route_with_protocol_lines_is_never_dropped_whole():
+    fa = _entry(server._format_tool_results(_six_entries()), 4)
+    assert set(fa["routes"]) == {"inhalation", "skin", "eye", "ingestion"}
+    assert not fa.get("_omitted_routes")
+
+
+def test_generic_lines_beside_protocol_yield_first_and_say_so():
+    fa = _entry(server._format_tool_results(_six_entries()), 4)
+    if fa.get("_omitted_generic_beside_protocol"):
+        assert all(x.startswith("[protocol]") for r in fa["routes"].values() for x in r)
+
+
+def test_entries_without_protocol_get_exactly_the_old_equal_share():
+    """额外额度只给带规程行的条目：排在它前面的条目分到的份额与改前的均分公式逐字相同。"""
+    items = _six_entries()
+    out = server._format_tool_results(items)
+    remaining, left = server._RAW_TOTAL_BUDGET, len(items)
+    for n, item in enumerate(items[:4]):
+        share = max(remaining // left, 200)
+        expect = server._compact_for_context(item["result"], min(server._RAW_ENTRY_BUDGET, share))
+        assert json.dumps(_entry(out, n), ensure_ascii=False) == expect
+        remaining -= len(expect)
+        left -= 1
+
+
+def test_extra_allowance_is_bounded():
+    many = [{"tool": "first_aid_guidance", "result": _first_aid()} for _ in range(8)]
+    out = server._format_tool_results(many)
+    assert len(out) <= server._RAW_TOTAL_BUDGET * 3 // 2 + 400
+
+
+def test_entries_are_dropped_before_protocol_lines_are_cut():
+    """预算够放下全部规程行时，先丢 `from_sds` 条目与通用话术，规程行一个字都不动。"""
+    fa = _first_aid()
+    budget = server._protocol_size(fa) + 1200
+    out = json.loads(server._compact_for_context(fa, budget))
+    protocol = [x for r in out["routes"].values() for x in r if x.startswith("[protocol]")]
+    assert len(protocol) == 16 and all(x.endswith(TAIL) for x in protocol)
+
+
+def test_tight_budget_shortens_protocol_but_keeps_every_route():
+    """预算连规程行都放不下时规程行照样挨刀（排序不是豁免），但哪条途径都不整条丢。"""
+    out = json.loads(server._compact_for_context(_first_aid(), 2400))
+    assert set(out["routes"]) == {"inhalation", "skin", "eye", "ingestion"}
+    assert all(r for r in out["routes"].values())
