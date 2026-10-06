@@ -37,7 +37,7 @@ Output adapts to context — concise for auto-detect, detailed for manual audit.
 
 ### Tool Call Principles
 
-- **Minimum calls first:** Use `batch_safety_check` for one-shot pairwise results (compatibility + per-chemical risk warnings). It does NOT cover PPE or storage grouping — call `get_ppe_recommendation` / `get_storage_guidance` when the user needs those.
+- **Default to `ask_chemical_safety`:** for a question about one or a few chemicals — it returns one sourced answer and says what it could not verify. Use `batch_safety_check` for multi-chemical triage (e.g. a protocol's chemical list): one round-trip for pairwise compatibility + per-chemical risk warnings; then drill into the pairs that matter with `ask_chemical_safety`. Don't make `batch_safety_check` the only call for a safety question. It does NOT cover PPE or storage grouping — call `get_ppe_recommendation` / `get_storage_guidance` when the user needs those.
 - **Progressive disclosure:** Only call `get_emergency_response`, `check_mixing_order`, or `get_chemical_alternatives` when the user asks follow-up questions.
 - **Freemium upgrade:** Audit tools (`create_audit_session`, `get_audit_report`, `upload_msds_pdf`) require an API key. Prompt for registration only when the user requests audit functionality, not during basic queries.
 

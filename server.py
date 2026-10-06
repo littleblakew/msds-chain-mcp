@@ -2346,6 +2346,10 @@ def _format_regulatory_lists(data: dict, chemical: str, lang: str | None = None)
         )
     else:
         lines.append(s["none"])
+    # CI-1235: regions whose inventory we do not hold but which have an official
+    # single-substance query page (TW TCSI → CSNN). A pointer, not a check.
+    for lk in data.get("inventory_lookups") or []:
+        lines.append(f"\n🔗 **{lk.get('region') or '—'}:** {_with_lookup_url(lk.get('note'), lk)}")
     lines.append(f"\n> {_REG_LIST_COVERAGE_NOTE.get(lg, _REG_LIST_COVERAGE_NOTE['en'])}")
     return "\n".join(lines)
 
@@ -3282,7 +3286,23 @@ def _format_region_results(region_results: list[dict]) -> list[str]:
             lines.append(f"  - 📋 Inventory: listed ({checked}) — registration status, not a restriction")
         elif inv.get("on_inventory") is False:
             lines.append(f"  - ⚠️ Inventory: **NOT listed** — {inv.get('note', '')}")
+        elif inv.get("lookup"):
+            # CI-1235: no inventory copy, only the official query page. `on_inventory`
+            # stays None (nothing was checked), so this line must never read as a
+            # finding — the backend `note` already says "not determined" and carries
+            # the URL; the URL is appended only if a future note stops carrying it.
+            lines.append(f"  - 🔗 Inventory: not determined — {_with_lookup_url(inv.get('note'), inv['lookup'])}")
     return lines
+
+
+def _with_lookup_url(note: str | None, lookup: dict) -> str:
+    """The backend-localized lookup note, guaranteed to contain the official URL.
+
+    The URL has a single definition in the backend; it is only read from the
+    payload here, never written in this repo."""
+    note = note or lookup.get("name") or ""
+    url = lookup.get("url")
+    return note if not url or url in note else f"{note} {url}".strip()
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Compliance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
@@ -3302,7 +3322,7 @@ async def check_regulatory_compliance(
 
     1. `status` — is it on a RESTRICTION list (SVHC / REACH Annex XVII / CLP Annex VI /
        Prop 65 / China Catalogue of Hazardous Chemicals / JP CSCL / SG EPMA /
-       Taiwan MOENV Listed Toxic and Concerned Chemical Substances / Taiwan OSHA
+       Korea Restricted / Prohibited Substances / Taiwan MOENV Listed Toxic and Concerned Chemical Substances / Taiwan OSHA
        Priority Management and Controlled Chemicals)?
          `restricted`     on at least one restriction list, or a CMR hazard code
          `detected`       only indirect evidence (occupational exposure limit, or an SDS
@@ -3311,7 +3331,11 @@ async def check_regulatory_compliance(
                           them. `details` names which lists were checked. Lists we do not
                           hold were not checked, so this is not a clearance either.
          `unverified`     no check was performed — we hold no restriction list for that
-                          region (KR, CA, AU), or the source could not be read.
+                          region (CA, AU), or the source could not be read.
+                          KR has one restriction list (Restricted / Prohibited
+                          Substances); hazardous designated substances such as
+                          benzene are NOT on it, so KR `not_restricted` is not a
+                          clearance.
                           TW has four restriction lists (MOENV Listed Toxic and
                           Concerned Chemical Substances, OSHA Priority Management and
                           Controlled Chemicals), so TW `not_restricted` means "not on
@@ -3324,7 +3348,10 @@ async def check_regulatory_compliance(
          `on_inventory: false` 🔴 the direction that needs attention: a substance absent
                                from the inventory typically needs new-substance
                                notification before import
-         `on_inventory: null`  we hold no inventory for that region
+         `on_inventory: null`  we hold no inventory for that region. For TW (TCSI) a
+                               `lookup` link to the official Taiwan OSHA CSNN query page
+                               is returned instead: pass the link on and say we do NOT
+                               determine existing / new substance status there
 
     Use this when preparing export documentation, compliance audits, or when working with
     chemicals that may be restricted in certain jurisdictions.
@@ -5183,6 +5210,12 @@ async def get_sds_section(
                 note = None
             lines.append(note or _unresolved_boolean_note(lang))
         elif content:
+            # CI-1102: the text below may come from a different SDS than the cited
+            # record. Say so BEFORE the text — a note placed after it is read as
+            # an afterthought, and the Source line below would otherwise attach
+            # this text to the canonical supplier.
+            if data.get("section_source_differs") and data.get("section_source_note"):
+                lines.append(f"⚠️ {data['section_source_note']}\n")
             lines.append(content)
         else:
             # CI-408: 这条工具是 structured_output=False —— LLM 读的是这段文本，
@@ -5205,9 +5238,23 @@ async def get_sds_section(
         # deliberate "no source" answer rather than a field the backend omitted.
         if not data.get("unresolved") and data.get("supplier"):
             region_suffix = f" · {data['region']}" if data.get("region") else ""
-            lines.append(f"\n- **Source:** {data['supplier']}{region_suffix}")
+            label = ("Cited record (not the source of the text above)"
+                     if content and data.get("section_source_differs") else "Source")
+            lines.append(f"\n- **{label}:** {data['supplier']}{region_suffix}")
             if data.get("revision_date"):
                 lines.append(f"- **Revision date:** {data['revision_date']}")
+        # CI-838 / CI-1102: when the text was borrowed from a corpus record, that
+        # record's provenance is the only citation the text has — without this
+        # line the model gets safety text with no source at all (CI-838 path:
+        # `supplier` is empty). No id on purpose: CI-871.
+        csi = data.get("corpus_source_info") or {}
+        if not data.get("unresolved") and content and csi:
+            who = " · ".join(str(v) for v in (csi.get("supplier"), csi.get("source")) if v)
+            if who:
+                gap = "" if data.get("supplier") else "\n"
+                lines.append(f"{gap}- **Text source:** {who}")
+            if csi.get("revision_date"):
+                lines.append(f"- **Text revision date:** {csi['revision_date']}")
         # 🔴 CI-347：同一个 CAS 可以是两种形态（无水氟化氢 vs 氢氟酸水溶液），
         # 而**储存/泄漏处置/急救都不同**。后端把「这份数据是哪种形态、另一种我们没有」
         # 建模成了 `physical_form_disclosure`；这条工具是 structured_output=False，
@@ -6548,7 +6595,7 @@ async def check_regulatory_lists(chemical: Chemical, lang: Lang = None, intent: 
     - EU: SVHC Candidate List, REACH Annex XVII, REACH Annex XIV, REACH registered
       substances, CLP Annex VI, Seveso III, Water Framework Directive priority substances
     - APAC: China Catalogue of Hazardous Chemicals, China IECSC, Japan CSCL,
-      Korea KECL, Australia AIIC, Singapore EPMA,
+      Korea KECL, Korea Restricted / Prohibited Substances, Australia AIIC, Singapore EPMA,
       Taiwan MOENV Listed Toxic Chemical Substances, Taiwan MOENV Concerned Chemical
       Substances, Taiwan OSHA Priority Management Chemicals, Taiwan OSHA Controlled
       Chemicals, Taiwan OSHA Permissible Exposure Standards
@@ -6562,7 +6609,12 @@ async def check_regulatory_lists(chemical: Chemical, lang: Lang = None, intent: 
     - Taiwan: the four restriction lists above plus the OSHA Permissible Exposure
       Standards, which record membership only (no limit values, not a restriction).
       There is no Taiwan inventory (TCSI), so absence says nothing about whether a
-      substance is registered there.
+      substance is registered there. The result carries a link to the official
+      Taiwan OSHA CSNN query page instead: pass it on, and say we do not determine
+      existing / new substance status there.
+    - Korea: the Restricted / Prohibited Substances list holds restriction and
+      prohibition designations only. Hazardous designated substances (e.g. benzene)
+      are NOT on it, so absence from it is not a clearance.
     - There is NO IARC coverage. Do not infer it from this tool.
     - The lists are a curated snapshot, not a live regulatory feed. A chemical missing
       from a list means "not found in our copy of that list", never "not regulated".
