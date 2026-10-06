@@ -1095,11 +1095,14 @@ def _drop_generic_beside_protocol(obj) -> tuple[object, int]:
     Prod 实测丢的正是用户问的 `skin`。规程行是对同一途径更具体的版本，所以先让通用的那几条让位。
     """
     if isinstance(obj, list):
-        if any(_is_protocol(v) for v in obj):
-            kept = [v for v in obj if _is_protocol(v)]
-            return kept, len(obj) - len(kept)
+        # 🔴 只丢「不含任何规程行」的条目：同列表里嵌着的 `{"route": "skin", "steps": [规程…]}`
+        # 也是规程，不是通用话术（review 实测按 `_is_protocol` 判会把整条 skin 途径丢掉）。
+        keep_only_protocol = any(_is_protocol(v) for v in obj)
         out, n = [], 0
         for v in obj:
+            if keep_only_protocol and not _protocol_size(v):
+                n += 1
+                continue
             v2, k = _drop_generic_beside_protocol(v)
             out.append(v2)
             n += k
@@ -1212,92 +1215,102 @@ def _compact_for_context(result, budget: int = _RAW_ENTRY_BUDGET) -> str:
 
     # ② 轮流丢条目，记号在最前。🔴 CI-711：规程行原样参与这一步，**不先缩它**——
     # 旧顺序是「规程梯度缩到 24 → 再丢条目」，Prod 上 HF 的 16 条规程行全被切成
-    # `[protocol] Move the pers...`，而丢条目本可以腾出位置。含规程行的条目不丢（见 `_sample`）。
+    # `[protocol] Move the pers...`，而丢条目本可以腾出位置。含规程行的条目先钉住不丢。
     body = {k: v for k, v in work.items()}
-    lists = [k for k, v in body.items() if isinstance(v, list) and v]
-    # 🔴 dict 值同样能吃掉整个预算（`sources` 在实测载荷里 1,509 字符，而它不是列表）
-    # ——第一版只认列表，于是 matrix 被清空、结果**仍然**超预算、最后走字节截断，
-    # 两条红线（结论不许丢 / 必须仍是合法 JSON）被同一份载荷同时打破。
-    dicts = [k for k, v in body.items() if isinstance(v, dict) and v]
 
     def _too_big() -> bool:
         return len(_dump(_with_markers_first(body, omitted))) > budget
 
-    guard = 0
-    while _too_big() and (lists or dicts) and guard < 10000:
-        guard += 1
-        pool = [(k, len(body[k])) for k in lists if len(body[k]) > 0] + \
-               [(k, len(body[k])) for k in dicts if len(body[k]) > 0]
-        if not pool:
-            break
-        # 轮流：每次从**当前条目数最多**的那个容器里砍掉一条尾部条目。
-        # 🔴 用条目数而不是字节数选，才不会因为某个列表条目更长就被反复清空。
-        key = max(pool, key=lambda kv: kv[1])[0]
-        container = body[key]
-        # 按比例先砍一刀，别一条一条删——review 实测 3,000 条的列表逐条重序列化
-        # 要 7.7 秒 CPU，而这是**同步**调用在事件循环里。
-        # 🔴 **二分出放得下的最大条目数**，别按固定比例砍：砍 25% 会过度丢弃
-        # （实测同一份 Prod 载荷，预算够放 6 对时只留下了 3 对），而逐条砍在 3,000 条
-        # 的列表上要 7.7 秒 CPU——这是**同步**调用在事件循环里。二分两头都躲开。
-        def _sample(container, keep_n):
-            """跨步取样，**不是砍尾巴**。CI-589 的原始 bug 就是位置偏置；砍尾巴是
-            同一个毛病换个位置——review 实测 20 个化学品的批量结果里两条
-            `incompatible` 落在下标 150 / 188，砍尾巴让它们一条都没活下来。
-            取样不能保证留下危险的那些（那需要语义），但保证幸存者**铺满整个列表**。"""
-            n = len(container)
-            keep_n = max(0, min(keep_n, n))
-            if keep_n >= n:
-                return container
-            vals = container if isinstance(container, list) else list(container.values())
-            # 🔴 CI-711：含规程行的条目钉住不丢（整条急救途径被丢比被缩短更糟），
-            # 跨步取样只在其余条目里做；钉住的条目数也算进 keep_n。
-            pinned = [i for i, v in enumerate(vals) if _protocol_size(v)]
-            free = [i for i in range(n) if i not in set(pinned)]
-            m = max(keep_n - len(pinned), 0)
-            if m >= len(free):
-                pick = free
-            elif m <= 0:
-                pick = []
-            elif m == 1:
-                pick = [free[0]]
-            else:
-                pick = [free[min(round(i * (len(free) - 1) / (m - 1)), len(free) - 1)]
-                        for i in range(m)]
-            idx = sorted(set(pinned) | set(pick))
-            if isinstance(container, list):
-                return [container[i] for i in idx]
-            keys = list(container)
-            return {keys[i]: container[keys[i]] for i in idx}
+    def _drop_round_robin(pin: bool) -> None:
+        lists = [k for k, v in body.items() if isinstance(v, list) and v]
+        # 🔴 dict 值同样能吃掉整个预算（`sources` 在实测载荷里 1,509 字符，而它不是列表）
+        # ——第一版只认列表，于是 matrix 被清空、结果**仍然**超预算、最后走字节截断，
+        # 两条红线（结论不许丢 / 必须仍是合法 JSON）被同一份载荷同时打破。
+        dicts = [k for k, v in body.items() if isinstance(v, dict) and v]
+        guard = 0
+        while _too_big() and (lists or dicts) and guard < 10000:
+            guard += 1
+            pool = [(k, len(body[k])) for k in lists if len(body[k]) > 0] + \
+                   [(k, len(body[k])) for k in dicts if len(body[k]) > 0]
+            if not pool:
+                break
+            # 轮流：每次从**当前条目数最多**的那个容器里砍掉一条尾部条目。
+            # 🔴 用条目数而不是字节数选，才不会因为某个列表条目更长就被反复清空。
+            key = max(pool, key=lambda kv: kv[1])[0]
+            original = body[key]
+            n = len(original)
+            vals = original if isinstance(original, list) else list(original.values())
+            # 🔴 钉住与否**每个容器算一次**，别放进二分里——review 实测放进去后
+            # 3,000 条全钉住的列表要 0.96 秒（旧 0.04），而这是同步调用在事件循环里。
+            pinned = [i for i, v in enumerate(vals) if _protocol_size(v)] if pin else []
+            pinned_set = set(pinned)
+            free = [i for i in range(n) if i not in pinned_set]
 
-        original = container
-        lo, hi = 0, len(container) - 1
-        best = 0
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            body[key] = _sample(original, mid)
-            omitted[f"_omitted_{key}"] = len(original) - len(body[key])
-            if len(_dump(_with_markers_first(body, omitted))) <= budget:
-                best = mid
-                lo = mid + 1
-            else:
-                hi = mid - 1
-        body[key] = _sample(original, best)
-        kept = len(body[key])
-        omitted[f"_omitted_{key}"] = len(original) - kept
-        if kept == len(original) or len(_sample(original, 0)) == kept:
-            # 这个容器已经放得下了、或只剩钉住的规程条目，却仍然超预算 ⇒ 换下一个容器，别死循环
-            lists = [k for k in lists if k != key]
-            dicts = [k for k in dicts if k != key]
+            # 按比例先砍一刀，别一条一条删——review 实测 3,000 条的列表逐条重序列化
+            # 要 7.7 秒 CPU，而这是**同步**调用在事件循环里。
+            # 🔴 **二分出放得下的最大条目数**，别按固定比例砍：砍 25% 会过度丢弃
+            # （实测同一份 Prod 载荷，预算够放 6 对时只留下了 3 对），而逐条砍在 3,000 条
+            # 的列表上要 7.7 秒 CPU——这是**同步**调用在事件循环里。二分两头都躲开。
+            def _sample(keep_n):
+                """跨步取样，**不是砍尾巴**。CI-589 的原始 bug 就是位置偏置；砍尾巴是
+                同一个毛病换个位置——review 实测 20 个化学品的批量结果里两条
+                `incompatible` 落在下标 150 / 188，砍尾巴让它们一条都没活下来。
+                取样不能保证留下危险的那些（那需要语义），但保证幸存者**铺满整个列表**。
+                钉住的条目（CI-711）总在，取样只在其余条目里做，钉住的条目数也算进 keep_n。"""
+                keep_n = max(0, min(keep_n, n))
+                if keep_n >= n:
+                    return original
+                m = max(keep_n - len(pinned), 0)
+                if m >= len(free):
+                    pick = free
+                elif m <= 0:
+                    pick = []
+                elif m == 1:
+                    pick = [free[0]]
+                else:
+                    pick = [free[min(round(i * (len(free) - 1) / (m - 1)), len(free) - 1)]
+                            for i in range(m)]
+                idx = sorted(pinned_set | set(pick))
+                if isinstance(original, list):
+                    return [original[i] for i in idx]
+                keys = list(original)
+                return {keys[i]: original[keys[i]] for i in idx}
+
+            prior = omitted.get(f"_omitted_{key}", 0)
+            lo, hi = 0, n - 1
+            best = 0
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                body[key] = _sample(mid)
+                omitted[f"_omitted_{key}"] = prior + n - len(body[key])
+                if len(_dump(_with_markers_first(body, omitted))) <= budget:
+                    best = mid
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            body[key] = _sample(best)
+            kept = len(body[key])
+            omitted[f"_omitted_{key}"] = prior + n - kept
+            if kept == n or kept == len(pinned):
+                # 这个容器已经放得下了、或只剩钉住的条目，却仍然超预算 ⇒ 换下一个容器，别死循环
+                lists = [k for k in lists if k != key]
+                dicts = [k for k in dicts if k != key]
+
+    _drop_round_robin(pin=True)
 
     # ②b 条目丢到底仍放不下，才轮到规程行走收紧梯度（排序不是豁免，CI-711）
     if _too_big():
-        for protocol_allowance in (800, 400, 160, 100, 60, 40, 24):
+        for protocol_allowance in (800, 400) + ladder:
             shrunk = _shorten_strings(body, ladder[-1], protocol_allowance)
             if len(_dump(_with_markers_first(shrunk, omitted))) <= budget:
-                body = shrunk
                 break
-        else:
-            body = shrunk
+        body = shrunk
+
+    # ②c 规程行缩到底仍放不下（例如 100 个化学品各带规程行的批量结果）⇒ 钉住的条目
+    # 也得轮流丢。🔴 review 实测：没有这一步时直接落进字节截断——非法 JSON、尾部化学品
+    # 整个消失，两条 CI-595 红线同时破；旧实现在同一份载荷上是合法 JSON、取样铺满。
+    if _too_big():
+        _drop_round_robin(pin=False)
 
     out = _dump(_with_markers_first(body, omitted))
     if len(out) > budget:

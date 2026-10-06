@@ -165,3 +165,41 @@ def test_tight_budget_shortens_protocol_but_keeps_every_route():
     out = json.loads(server._compact_for_context(_first_aid(), 2400))
     assert set(out["routes"]) == {"inhalation", "skin", "eye", "ingestion"}
     assert all(r for r in out["routes"].values())
+
+
+# ── review 打穿过的三处 ──
+
+def _p(tag: str) -> str:
+    return f"[protocol] {tag}: seek medical attention " + TAIL
+
+
+def test_route_nested_beside_a_bare_protocol_line_is_kept():
+    """同一列表里既有裸规程行、又有 `{"route": …, "steps": [规程…]}` 时，后者也是规程，不是通用话术。"""
+    r = {"chemical": "HF",
+         "first_aid": [_p("general"), {"route": "SKINROUTE", "steps": [_p("skin gel")]},
+                       "generic H314 " * 30],
+         "from_sds": ["filler " * 30 for _ in range(40)]}
+    pruned, n = server._drop_generic_beside_protocol(r)
+    assert n == 1 and "SKINROUTE" in json.dumps(pruned)
+    assert "SKINROUTE" in server._compact_for_context(r, 1500)
+
+
+def test_many_pinned_entries_still_yield_valid_json_spread_over_the_list():
+    """100 个化学品各带规程行：钉住的条目最后也得轮流丢，不能落进字节截断（非法 JSON + 丢尾）。"""
+    batch = {"results": [{"chemical": f"chem{i:03d}",
+                          "routes": {"skin": [_p(f"c{i} skin " + "y" * 60)] * 3}}
+                         for i in range(100)]}
+    out = server._format_tool_results([{"tool": "batch", "result": batch}])
+    body = json.loads(out.split("`batch`: ", 1)[1])
+    names = [x["chemical"] for x in body["results"]]
+    assert names[0] == "chem000" and names[-1] == "chem099"
+
+
+def test_pinning_stays_linear_on_large_lists():
+    import time
+    rows = [{"id": i, "t": _p(f"p{i}") if i % 2 == 0 else "generic text " * 3}
+            for i in range(3000)]
+    t = time.perf_counter()
+    out = server._compact_for_context({"chemical": "x", "rows": rows}, 4000)
+    assert time.perf_counter() - t < 0.5
+    json.loads(out)
