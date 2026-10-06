@@ -20,6 +20,10 @@
     "url": "https://msdschain.lagentbot.com"
   },
   "license": "MIT",
+  "files": [
+    "README.md",
+    "server.json"
+  ],
   "homepage": "https://msdschain.lagentbot.com",
   "repository": {
     "type": "git",

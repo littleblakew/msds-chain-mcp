@@ -26,8 +26,10 @@
 #         (both via GitHub OIDC — npm Trusted Publisher, no NPM_TOKEN; no manual login)
 #
 # The `--publish` path below is a LOCAL FALLBACK for when CI is unavailable. It
-# uses the committed macOS mcp-publisher binary and requires you to have run
-# `npm login` and `./mcp-publisher login github` first.
+# needs an mcp-publisher binary for your platform at npm-package/mcp-publisher
+# (download from github.com/modelcontextprotocol/registry/releases; it is
+# gitignored, never committed) and requires `npm login` and
+# `./mcp-publisher login github` first.
 #
 set -euo pipefail
 
@@ -108,7 +110,7 @@ if [[ -x npm-package/mcp-publisher ]]; then
   ( cd npm-package && ./mcp-publisher publish )
   echo "  ✅ MCP registry published $VERSION"
 else
-  echo "  ⚠️  npm-package/mcp-publisher not found — run it manually to push the registry entry."
+  echo "  ⚠️  npm-package/mcp-publisher not found — download it from github.com/modelcontextprotocol/registry/releases, then run it manually to push the registry entry."
 fi
 
 echo ""

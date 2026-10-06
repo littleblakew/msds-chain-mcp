@@ -7,5 +7,8 @@ __pycache__/
 .pytest_cache/
 .hermes_*
 
+# 本地兜底发布用的 mcp-publisher 二进制（scripts/release.sh --publish）；CI 发布时自己下载 linux 版
+npm-package/mcp-publisher
+
 # Claude Code 的 agent worktree（绝不能提交成 gitlink，会炸 CI 的 actions/checkout）
 .claude/
