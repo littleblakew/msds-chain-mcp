@@ -3,7 +3,7 @@
 
 ## 为什么必须是 live，不能进 CI
 
-MCP 仓 **import 不到 backend**，所以 CI 里的守卫（`tests/test_ci342_structured_passthrough.py`）
+MCP 仓 **import 不到 backend**，所以 CI 里的守卫（`tests/contract/test_structured_passthrough.py`）
 只能验「透传属性还在不在」——它给后端响应塞一个合成键，看得到就算过。那守不住
 「后端**真的**新增了一个字段」这件事，因为 CI 根本不知道后端现在返回什么。
 这个脚本是另一半：它拿真实响应做差集。**两层各守各的，别指望其中一层覆盖另一层。**

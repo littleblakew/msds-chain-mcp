@@ -48,7 +48,7 @@ perl -0pi -e 's/^__version__ = "[^"]*"/__version__ = "'"$VERSION"'"/m' server.py
 # JSON manifests: every "version" key in each file is the release version.
 # (verified: no manifest carries an unrelated "version" field to protect.)
 # CI-1091: the list lives in release_metadata.py so this STAMPER and the GUARD
-# (tests/test_version.py) read the same one. It used to be spelled out in both
+# (tests/contract/test_version.py) read the same one. It used to be spelled out in both
 # files; a manifest added to only one was silently never stamped.
 JSON_MANIFESTS=()
 while IFS= read -r line; do JSON_MANIFESTS+=("$line"); done < <(
@@ -75,7 +75,7 @@ echo "✅ Derived metadata stamped"
 
 # --- 2. Verify: guard test proves server.py == VERSION and serverInfo carries it
 echo "▶ Running version guard test..."
-python -m pytest tests/test_version.py -q
+python -m pytest tests/contract/test_version.py -q
 
 if [[ "${1:-}" != "--publish" ]]; then
   echo ""

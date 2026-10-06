@@ -129,7 +129,7 @@ TIMEOUT_LLM = 120.0   # quick-chat endpoints — multi-turn LLM reasoning
 
 # Single source of truth = the repo-root VERSION file. This literal is kept in
 # sync by scripts/release.sh (which stamps VERSION into every manifest), and
-# tests/test_version.py fails CI if the two ever drift. Do NOT hand-edit — bump
+# tests/contract/test_version.py fails CI if the two ever drift. Do NOT hand-edit — bump
 # VERSION and run scripts/release.sh. `version=` is a first-class MCPServer ctor arg
 # (mcp 2.x) and is what surfaces as serverInfo.version in the MCP `initialize`
 # handshake (what ChatGPT, claude.ai and any raw MCP client display). Without it the
@@ -169,7 +169,7 @@ mcp = MCPServer(
     # `initialize` (README documents that gateway). Editing the text below to
     # change what hosted users read is a **silent no-op**. The two documents are
     # meant to differ (CI-405) — do not merge them. Guard:
-    # `tests/test_ci1101_instructions_audience.py` makes the edit noisy.
+    # `tests/contract/test_instructions_audience.py` makes the edit noisy.
     instructions=textwrap.dedent("""
         MSDS Chain provides chemical safety intelligence backed by traceable, sourced SDS data.
 
@@ -255,7 +255,7 @@ mcp = MCPServer(
 # risk-warnings / 相容性 reason 实际回的是整段简体且不带 `language_note`。
 # ⚠️ 转发时必须是 `zh-TW` 原样大小写：报告路由**只认 `zh-TW`**（小写 422），归一化里还原。
 # ⚠️ 本文件各张包装表的 `zh-TW` 条目由 `zh` 经 OpenCC s2twp 派生（与前端 gen-zh-tw.py 同一转换），
-# 改 `zh` 就要重新派生，`tests/test_ci1167_zh_tw_tables.py` 会在两者不一致时红。
+# 改 `zh` 就要重新派生，`tests/tools/test_zh_tw_tables.py` 会在两者不一致时红。
 _BACKEND_LANGS = ("en", "zh")
 _CATALOG_LANGS = ("en", "zh", "zh-TW", "ja", "de", "id", "ko", "ru", "fr", "es")
 
@@ -931,7 +931,7 @@ _DIRECT_TIMEOUT_MSG = {
 # 「usual cause」这种因果断言配不上 n=1，而它正是 CI-915 要消灭的那类东西（只是轻一档）。
 # ⇒ 只留**可行动的条件建议**（「包含很多化学品的话可以拆小再试」），不说成因。
 # ⇒ 按**被包函数的签名**推导用哪一句，**不手写名单**：名单会腐化，签名不会
-# （新加一个收列表的工具自动拿到批量那句；守卫按同一条规则全量扫，见 tests/test_ci914_*）。
+# （新加一个收列表的工具自动拿到批量那句；守卫按同一条规则全量扫，见 tests/transport/test_timeout_is_error.py）。
 _DIRECT_TIMEOUT_HINT_BATCH = {
     "en": " If the request covered many chemicals, try splitting it into smaller calls.",
     "zh": "若这次查询包含很多化学品，可以拆成更小的几次再试。",
@@ -974,7 +974,7 @@ def _graceful_timeout(fn):
     消灭的那种样板。「`raise` 与同仓 4xx 惯例一致」这个理由**听起来对、实际让文案更差**。
     ⇒ 两条性质要同时满足：**位是 `True`** 且 **文字逐字是 `_DIRECT_TIMEOUT_MSG` 那句**。
     🔴 **别改回 `return msg`（位会变假），也别改成 `raise`（文字会被加英文前缀）。**
-    守卫 `tests/test_ci914_timeout_is_error.py` 对这两个方向各有一条，断言是**逐字相等**
+    守卫 `tests/transport/test_timeout_is_error.py` 对这两个方向各有一条，断言是**逐字相等**
     不是子串 —— 子串断言正是当初没看见那个前缀的原因。
     """
     # 这个工具收不收化学品**列表**，决定要不要给「拆小一点」的建议。
@@ -1750,7 +1750,7 @@ def _raise_for_status_with_reason(res: "httpx.Response") -> None:
 # 🔴 **为什么在入口剥而不是在出口**：`structured_content=` 在本文件有 25 个构造点，
 # 实测 23 个工具里有 **15 个**会把它透出去（探针给每个容器都塞上这个键再全量调一遍）。
 # 挑其中几处改 ＝ 作用域手写 ⇒ 必漏。入口只有本函数 + 少数直接 `.json()` 的旁路，
-# 而旁路由守卫 `test_ci937_tail_not_exposed.py` 扫出来（它按 `list_tools()` 发现成员，
+# 而旁路由守卫 `test_preparation_tail_not_exposed.py` 扫出来（它按 `list_tools()` 发现成员，
 # 新工具自动进来；变异＝往仓里加一个透传新工具看它红不红）。
 _TAIL_ONLY_KEYS = frozenset({"preparation_disclosure_tail"})
 
@@ -2071,7 +2071,7 @@ async def _direct_compliance(chemical: str, regions: list[str],
     `MSDS_LANG` 被配成后端不认的值时，**只归一化调用方那一侧、让 `LANG` 直通**的写法
     会把那个非法值原样转发，而别的工具都会把它夹成 `en`。
     ⚠️ 今天 `LANG` 恒 `en` 所以两种写法行为相同 ——**这正是它不会被任何测试抓到的原因**。
-    守卫 `test_ci356_lang_param.py::test_lang_forwarding_has_exactly_one_spelling`
+    守卫 `test_lang_param.py::test_lang_forwarding_has_exactly_one_spelling`
     钉住只能有这一种拼写。
     🔴 上面那个反例**故意不写成可执行的字面量**：全量替换会命中散文里的反例并把它改成反的，
     而散文那一半不会有任何东西报错（命中代码会立刻炸，命中反例只是那句话从此是假的）。
@@ -2947,7 +2947,7 @@ def _insufficient_lines(item: dict, what: str) -> list[str]:
     # ⚠️ 我一度以为 emergency/waste 只有一种成因、想加个开关只给 storage 用 —— 那是错的，
     # **加开关反而会留下「哪些调用方传了」这份要人记得维护的名单**。
     # 📌 backend 有字面守卫钉这两句话（`test_ci679_no_record_wording.py`），但它**只扫 backend 仓**
-    # ⇒ 跨不了仓，这处才活到今天。本仓自己的守卫在 `tests/test_storage_insufficient_disclosure.py`。
+    # ⇒ 跨不了仓，这处才活到今天。本仓自己的守卫在 `tests/rendering/test_storage_insufficient_disclosure.py`。
     lines = [
         f"- **{what}: CANNOT BE DETERMINED** — we have no SDS hazard data on file "
         "for this substance that we can answer from. This is NOT a "
@@ -3752,7 +3752,7 @@ def _exposure_item_lines(item: dict) -> list[str]:
         unit = lim.get("unit", "")
         # CI-578: 别叫 `region` —— 它会盖掉调用方传的过滤条件，而 `finally`
         # 里的 `_log_intent` 在循环之后跑，记进日志的就成了最后一条限值的
-        # region。守卫见 tests/test_ci578_logged_params_not_reassigned.py。
+        # region。守卫见 tests/call_logging/test_logged_params_not_reassigned.py。
         lim_region = lim.get("region", "")
         region_suffix = f" ({lim_region})" if lim_region else ""
         # 同一 CAS 在法规值表里可有多行（粉尘总量 / 可吸入、各附表行），entry_name 是唯一区分。
@@ -4707,7 +4707,7 @@ def _precursor_disclosure_block(data: dict) -> list[str]:
     ⚠️ Do NOT repeat the CI-553 ticket's claim that `batch_safety_check` "returns a
     bare string so it has no structuredContent" — measured false: it is annotated
     `-> str` but actually returns a CallToolResult carrying `_expose(data)`
-    (`test_ci342_structured_passthrough.py` asserts exactly that). All three tools
+    (`test_structured_passthrough.py` asserts exactly that). All three tools
     reach structured clients; what was missing everywhere is the text面.
 
     🔴 The disclosure is informational and the answer still stands — Blake's CI-541
@@ -5562,7 +5562,7 @@ def _order_scope_note(data: dict) -> str:
 
     🔴 **别把这次改动读成「放宽」**：不相容分支仍然明确「不要在没有成文受控工艺的情况下
     混合」，而且是两个分支里唯一带 INCOMPATIBLE 的那句。守卫 + 变异见
-    `tests/test_ci611_order_not_a_clearance.py`。
+    `tests/rendering/test_coexistence_not_order_clearance.py`。
     """
     incompatible = False
     for tr in data.get("tool_results", []):
@@ -6314,7 +6314,7 @@ async def upload_msds_pdf(
 #
 # 🔴 **它今天不额外收费**（`create_audit_session` 在后端是 `_zero_priced("session_create")`），
 # 而那是**配置不是代码** —— 后端那段注释明写「把 `VALUE_CREDITS[result_type]` 改成非 0
-# 就开始收费，不需要改任何代码」。守卫 `test_ci1135_session_side_effect.py` 钉住这个前提：
+# 就开始收费，不需要改任何代码」。守卫 `test_batch_session_side_effect.py` 钉住这个前提：
 # 定价那天必须先决定「批量分析可不可以静默产生一笔费用」，**而不是让它静默发生**。
 async def _session_from_batch(chemicals: list[str]) -> str | None:
     """把这次批量分析落成一个会话，返回 session_id；拿不到就返回 None（绝不抛）。"""
@@ -6861,7 +6861,7 @@ async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToo
 # 🔴 **内容不是新写的，是搬家**：同样的流程本来就在 `skills/msds-safety-check/rules/`，
 # 但那是 **Claude Code skill 格式，只有 Claude Code 用户吃得到**。搬成 prompt 之后任何
 # MCP host 都能用。⇒ **改流程时两处都要改**，否则两个受众拿到的步骤会分叉。
-# 📌 守卫 `test_ci1140_prompts.py` 钉住「prompt 里提到的工具名必须真实注册」——
+# 📌 守卫 `test_prompts.py` 钉住「prompt 里提到的工具名必须真实注册」——
 # 教错一个参数名比不教更糟：模型会照着调，然后拿到一个它无法归因的错误。
 #
 # 🔴 **措辞红线（与工具文案同源）**：不许出现「未收录 / 没有数据 / 建议上传」那类断言

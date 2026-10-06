@@ -24,18 +24,18 @@ scripts/hooks/install.sh                 # 每个 clone 装一次 git hooks；--
 
 ```bash
 python -m pytest tests/ -v               # 与 deploy.yml 的 test 步骤一致；必须全绿才能推 main
-python -m pytest tests/test_version.py -q   # 改了 VERSION / 清单后的快速检查（release.yml 也跑它）
+python -m pytest tests/contract/test_version.py -q   # 改了 VERSION / 清单后的快速检查（release.yml 也跑它）
 ```
 
-- 工具面守卫 `tests/test_ci848_tool_surface_drift.py` 红了不是坏事，是要你判断这次改动对已接入的外部客户端是否安全，确认后再更新基线。
-- 新增 scheduled workflow 时，必须把它的 `name:` 登记进 `cron-failure-alert.yml` 的 `workflows:` 清单，`tests/test_cron_alert_coverage.py` 会查。
+- 工具面守卫 `tests/contract/test_tool_surface_drift.py` 红了不是坏事，是要你判断这次改动对已接入的外部客户端是否安全，确认后再更新基线。
+- 新增 scheduled workflow 时，必须把它的 `name:` 登记进 `cron-failure-alert.yml` 的 `workflows:` 清单，`tests/repo_guards/test_cron_alert_coverage.py` 会查。
 
 ## 红线
 
-- 🔴 **这是公开仓，推上去就进了别人的 clone，撤回 commit 删不掉历史。** 不许提交：真实语料 / 客户配方（`tests/test_ci906_no_real_corpus_in_fixtures.py` 守夹具）、密钥与 token、内部系统名与人名。
-- 🔴 **注释和 docstring 不写「某天在哪被撞到、量多小」的事故叙事或运行数字**（`tests/test_ci987_no_incident_narrative_in_public_repo.py` 按「日期 + 叙事词」查注释与 docstring）。要写就写「为什么现在是这样」。
+- 🔴 **这是公开仓，推上去就进了别人的 clone，撤回 commit 删不掉历史。** 不许提交：真实语料 / 客户配方（`tests/repo_guards/test_no_real_corpus_in_fixtures.py` 守夹具）、密钥与 token、内部系统名与人名。
+- 🔴 **注释和 docstring 不写「某天在哪被撞到、量多小」的事故叙事或运行数字**（`tests/repo_guards/test_no_incident_narrative.py` 按「日期 + 叙事词」查注释与 docstring）。要写就写「为什么现在是这样」。
 - 🔴 **`push main` 即发布，没有 promote 闸。** commit message 的**正文**里不许出现 CI 跳过令牌的字面量（GitHub 只认字面量，提到它也会让 CI 静默不跑）；要跳过就把令牌放在 subject。`scripts/hooks/commit-msg` 守这条，没装 hooks 就没人守。
 - 🔴 **`release.yml` 必须跑在 GitHub-hosted runner**（`ubuntu-latest`）：npm 的 provenance 拒绝 self-hosted。npm 发布走 OIDC trusted publishing，**别给它加 `NODE_AUTH_TOKEN`**，token 存在时 npm 会优先用它并失败。
 - 🔴 `scripts/refresh_backend_surface.py` 在**写盘前**裁掉后端内部面，只留本仓真的调用的 `/api/v2` 端点。**别绕过它手工复制后端导出**，公开仓的历史删不掉。
-- 工具的返回文本和描述是对外契约：改措辞、参数名、必填项，先看 `tests/test_ci1088_description_matches_payload.py` 与工具面守卫，别只改 `server.py`。
+- 工具的返回文本和描述是对外契约：改措辞、参数名、必填项，先看 `tests/contract/test_description_matches_payload.py` 与工具面守卫，别只改 `server.py`。
 - 单副本约束：SSE 传输有状态，`deploy.yml` 把实例固定为 `min=max=1` 并开 sticky sessions。改成多副本之前先想清楚 `/messages/` 会不会 404。

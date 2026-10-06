@@ -34,7 +34,7 @@
 #    逐字相同）。改了任何一份，四个仓都要改——判据见 scripts/hooks/README.md 末节。
 #
 # 自测见 scripts/hooks/README.md；自动化用例在
-# tests/test_commit_msg_hook.py（含反向变异）。
+# tests/repo_guards/test_commit_msg_hook.py（含反向变异）。
 set -uo pipefail
 
 _msg_file="${1:?commit-msg hook 需要 message 文件路径}"

@@ -46,7 +46,7 @@ subject，事故形态只出现在 body。
 
 ## 自动化用例
 
-`tests/test_commit_msg_hook.py`。🔴 **这里不写条数**——写死的数字下次就过期，
+`tests/repo_guards/test_commit_msg_hook.py`。🔴 **这里不写条数**——写死的数字下次就过期，
 而过期的数字读起来和准确的一模一样。要数就现数：`pytest --collect-only -q`。
 
 🔴 **判据不是「文件在仓里」**。钩子不受版本控制 ⇒ 文件躺在仓里但没人跑 `install.sh`
@@ -74,7 +74,7 @@ subject，事故形态只出现在 body。
 ```bash
 cd <workspace>/products
 for f in scripts/hooks/commit-msg scripts/hooks/install.sh scripts/hooks/README.md \
-         scripts/lib/ci-skip-token.sh tests/test_commit_msg_hook.py; do
+         scripts/lib/ci-skip-token.sh tests/repo_guards/test_commit_msg_hook.py; do
   for r in msds-chain-gateway msds-chain-mcp msds-chain-mcp-gateway; do
     [ -e "$r/$f" ] || { echo "MISSING: $r/$f  ← 先看这个，别读成 DRIFT"; continue; }
     diff -q "msds-chain-gateway/$f" "$r/$f" >/dev/null || echo "DRIFT: $r/$f"

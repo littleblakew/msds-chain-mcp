@@ -11,7 +11,7 @@ hand-maintained:
   * the primary endpoint URL + transport type in the machine-readable manifests.
 
 The tool count was policed after the fact by a "surface list + regex" guard in
-tests/test_version.py, which missed drift FIVE times (npm package.json, two
+tests/contract/test_version.py, which missed drift FIVE times (npm package.json, two
 marketplace.json files, the root README, and skills/.../SKILL.md — the last
 stuck at 20). The file's own comment said "the guard is only worth as much as
 its surface list" and it kept losing ground. The endpoint/transport had NO
@@ -21,20 +21,20 @@ hand-edits with no safety net.
 The fix: release.sh now DERIVES these (the count from the live registry, the
 rest from this module) and stamps them the same way it stamps VERSION. The guard
 downgrades from "audit the copy" to "check the wiring". The writer
-(scripts/stamp_derived.py) and the verifier (tests/test_version.py) both import
+(scripts/stamp_derived.py) and the verifier (tests/contract/test_version.py) both import
 THIS module, so their surface lists can no longer drift apart.
 """
 import re
 
 # --- Release-version manifests --------------------------------------------
 # Every JSON manifest whose "version" field(s) carry the release version.
-# scripts/release.sh stamps each from VERSION; tests/test_version.py verifies.
+# scripts/release.sh stamps each from VERSION; tests/contract/test_version.py verifies.
 # Both import THIS list, so writer and verifier cannot drift apart (before
 # CI-1091 the list was spelled out twice — adding a manifest to one and not the
 # other left it permanently unstamped, and nothing went red).
 #
 # 🔴 A new manifest added to the repo but NOT listed here is caught by
-# tests/test_ci1091_manifest_registry.py, which discovers candidates from git
+# tests/contract/test_manifest_registry.py, which discovers candidates from git
 # rather than trusting anyone to come back and edit this list.
 JSON_MANIFESTS = [
     "npm-package/package.json",

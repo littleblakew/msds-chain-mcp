@@ -1,7 +1,7 @@
 """CI-245：23 个 MCP 工具的 live 调用用例集（数据，不含执行逻辑）。
 
 放在 repo 根、与 `release_metadata.py` 同一模式：**数据与执行分离**，让
-`tests/test_ci245_live_coverage_cases.py` 能在**不联网、不花 credits** 的前提下
+`tests/repo_guards/test_live_coverage_cases.py` 能在**不联网、不花 credits** 的前提下
 守住「用例集 == live registry」。执行逻辑在 `scripts/live_tool_coverage.py`。
 
 ## 两层断言（刻意分开，别合并）

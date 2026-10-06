@@ -1,0 +1,296 @@
+"""CI-356：调用方给的 `lang` 必须真的进到发给后端的请求体里。
+
+🔴 判据打在 **HTTP 边界捕获到的 payload** 上，不是「参数在不在 schema 里」，也不是
+「工具函数收没收到这个形参」。这三件事是分开的，而**只有最后一件对用户有意义**：
+schema 有参数、函数收下了、却在拼 payload 时仍然用服务端那个全局 `LANG`——这正是
+CI-356 之前的状态（`"lang": LANG` 硬编码在 13 处）。同族：memory「修了，但没到达真正
+的消费者」——这里真正的消费者是**后端**。
+
+🔴 第二条判据同样重要：**没有后端支持的工具不许挂这个参数**。 逐端点实测
+（同一入参跑 `lang=en` 与 `lang=zh` 比响应）：6 个端点认、6 个完全不认（en/zh 响应
+逐字节等长、零中文）。给不认的工具挂上 `lang`＝在 schema 里承诺一件做不到的事，
+而客户端无从分辨。等后端补齐再加，别提前写。
+"""
+import asyncio
+
+import pytest
+
+import server
+from request_identity import set_caller_credential
+
+# 后端实测**认** lang 的端点所对应的工具 → 调用参数
+SUPPORTED = {
+    "check_chemical_compatibility": {"chemicals": ["a", "b"]},
+    "get_chemical_risk_warnings": {"chemicals": ["a"]},
+    "batch_safety_check": {"chemicals": ["a", "b"]},
+    "get_storage_guidance": {"chemicals": ["a"]},
+    "get_emergency_response": {"chemical": "a", "scenario": "spill"},
+    "ask_chemical_safety": {"question": "q"},
+    "get_chemical_alternatives": {"chemical": "a"},
+    "validate_protocol_chemicals": {"protocol_text": "add acetone"},
+    "check_mixing_order": {"chemical_a": "a", "chemical_b": "b"},
+    "check_regulatory_lists": {"chemical": "a"},
+    # 🔴 下面两条是从 UNSUPPORTED **搬上来**的——搬的依据是**重跑对比**，
+    # 不是「后端说改好了」：
+    #   get_ppe_recommendation：CI-361 第二步切片一让 P 码描述跟 lang 走（此前那 11 条
+    #     描述是本模块自己的英文副本，所以 en/zh 逐字节等长）。
+    #   get_sds_section：CI-361 第一步把 `no_section_text_note` 搬进 5 语言 catalog，
+    #     Prod 实测 zh 与 en 的响应 md5 不同（此前返回的是 SDS 原文，确实无从翻译；
+    #     现在**说明文字**这一段是我们自己的）。
+    "get_ppe_recommendation": {"chemicals": ["a"]},
+    "get_sds_section": {"chemical": "a", "section": 4},
+    #   check_regulatory_compliance：后端把 compliance 的 flags / details /
+    #     inventory.note 收进了自己的文案表，实测对比已通过。
+    #     🔴 **判据是数汉字，不是比字节**：这一对里 zh 侧反而**更短**，
+    #     所以「长度不同」会误过、「中文更长」会误判失败。
+    #     🔴 对比要带**阴性**那侧：en 必须零汉字，否则「不管传什么都给中文」
+    #     （比恒英文更糟）同样会被读成通过。探针在后端仓 `scripts/prod-db/`。
+    "check_regulatory_compliance": {"chemicals": ["a"]},
+}
+
+# 后端实测**不认** lang 的端点 → 这些工具**不该**有 lang 参数。
+# value = 实测证据，改这张表之前先重跑那个对比。
+UNSUPPORTED = {
+    "search_msds_online": "online-search：en/zh 均 1599 字节、零中文",
+    "get_transport_classification": "transport-classification：en/zh 均 325 字节、零中文",
+    "get_waste_disposal": "waste-disposal：en/zh 均 792 字节、零中文",
+}
+
+# 🔴 **这张表是快照，不是事实**：它记的是「某天实测后端不认 lang」。后端每修好一个端点，
+# 这里就多一条**过期证据**——而过期证据长得和有效证据一模一样。 一次就搬走了
+# 两条（ppe / sds-section）。⇒ 改这张表之前**重跑那个对比**（同一入参、两种语言、比响应），
+# 别照抄括号里的旧字节数。
+
+
+class _Resp:
+    status_code = 200
+    headers: dict[str, str] = {}
+
+    def raise_for_status(self): ...
+    def json(self): return {"answer": "", "tool_results": [], "pairs": [], "warnings": [],
+                            "results": [], "unresolved": [], "documents": [],
+                            "compatibility": {}, "risk_warnings": [], "chemicals": []}
+
+
+class _CapturingClient:
+    """替掉 httpx.AsyncClient，把发出去的 json body 记下来。
+
+    捕获点选在 HTTP 边界——再往上任何一层（工具函数 / `_direct_*` 的形参）都可能
+    「收到了但没往下传」，那正是本票要修的 bug 形状。
+    """
+
+    def __init__(self, sent: list):
+        self._sent = sent
+
+    def __call__(self, *a, **kw):
+        return self
+
+    async def __aenter__(self): return self
+    async def __aexit__(self, *a): return False
+
+    async def post(self, url, json=None, headers=None, **kw):
+        self._sent.append((url, json or {}))
+        return _Resp()
+
+    async def get(self, url, headers=None, **kw):
+        self._sent.append((url, {}))
+        return _Resp()
+
+
+@pytest.fixture
+def sent(monkeypatch):
+    box: list = []
+    monkeypatch.setattr(server.httpx, "AsyncClient", _CapturingClient(box))
+    set_caller_credential("sk-msds-test")
+    yield box
+    set_caller_credential(None)
+
+
+@pytest.mark.parametrize("tool", sorted(SUPPORTED))
+def test_caller_lang_reaches_the_backend_payload(sent, tool):
+    asyncio.run(getattr(server, tool)(**SUPPORTED[tool], lang="zh"))
+    langs = [body.get("lang") for _, body in sent if "lang" in body]
+    assert langs, f"{tool} 一次带 lang 的后端请求都没发出去（捕获到 {len(sent)} 个请求）"
+    assert all(l == "zh" for l in langs), (
+        f"{tool} 把 lang 发成了 {langs} —— 调用方给的值没到后端，"
+        f"检查 payload 里是不是还写着硬编码的 `LANG`"
+    )
+
+
+@pytest.mark.parametrize("tool", sorted(SUPPORTED))
+def test_omitting_lang_falls_back_to_server_default(sent, tool):
+    """不传就用服务端默认（英文）——CI-258 定的兜底语义，不该因为加了参数而改变。"""
+    asyncio.run(getattr(server, tool)(**SUPPORTED[tool]))
+    langs = [body.get("lang") for _, body in sent if "lang" in body]
+    assert langs and all(l == server.LANG for l in langs), f"{tool} 不传 lang 时发出了 {langs}"
+
+
+def test_tools_without_backend_support_do_not_advertise_lang():
+    """后端不认的工具不许挂 lang —— schema 不能承诺做不到的事。"""
+    tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+    wrong = [n for n in UNSUPPORTED
+             if "lang" in (tools[n].input_schema or {}).get("properties", {})]
+    assert not wrong, (
+        f"这些工具的后端端点实测忽略 lang，却在 schema 里挂了这个参数：{wrong}。"
+        f"证据见本文件 UNSUPPORTED 表；要加请先让后端支持并重跑那个对比"
+    )
+
+
+def test_supported_tools_all_advertise_lang():
+    """反过来也要钉住：后端支持了却漏挂参数 ⇒ 用户依然无法表达语言。"""
+    tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+    missing = [n for n in SUPPORTED
+               if "lang" not in (tools[n].input_schema or {}).get("properties", {})]
+    assert not missing, f"这些工具的后端认 lang，但工具没暴露参数：{missing}"
+
+
+def test_lang_is_documented_and_not_a_hard_enum():
+    """描述必须列出支持的语言码；但**故意不做 `Literal`**。
+
+    与 CI-521 给 `scenario` 加 enum 相反：`scenario` 传错后端硬拒（没有答案），
+    而语言有明确的英文兜底 ⇒ 把 `"zh-CN"` 打成参数校验错误、整次调用失败，
+    对一个装饰性参数来说代价过高。
+
+    🔴 **`enum` 要递归找**：这条初版写成 `assert "enum" not in schema`，而
+    `Literal[...] | None` 生成的是 `anyOf: [{"enum": [...]}, {"type": "null"}]`
+    —— `enum` 根本不在顶层。反向变异（把 `Lang` 改成 `Literal`）时这条**照样绿**，
+    是个空跑。空跑的守卫比没有守卫更糟：它让人以为这个决定被钉住了。
+    """
+    tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+    schema = (tools["ask_chemical_safety"].input_schema or {})["properties"]["lang"]
+    desc = schema.get("description") or ""
+    assert all(code in desc for code in server._BACKEND_LANGS), f"描述没列全语言码：{desc}"
+
+    def _has_enum(node) -> bool:
+        if isinstance(node, dict):
+            return "enum" in node or any(_has_enum(v) for v in node.values())
+        if isinstance(node, list):
+            return any(_has_enum(v) for v in node)
+        return False
+
+    assert not _has_enum(schema), f"lang 不该是硬枚举——见本用例 docstring。schema={schema}"
+
+
+@pytest.mark.parametrize("given,expected", [
+    ("zh", "zh"), ("ZH", "zh"), (" zh ", "zh"),
+    ("en", "en"), (None, "en"), ("", "en"),
+    # 🔴 这三条是本票最重要的断言。后端对**任何非 "en" 的值**都返回中文（实测
+    # `ja`/`de`/`id`/`fr`/`zh-CN`/空串全部→中文，quick-chat 亦然）。不归一的话，一个日语
+    # 用户会拿到**中文**——比现在的英文更糟：看不懂，还误以为我们支持日语。
+    ("ja", "en"), ("de", "en"), ("zh-CN", "en"),
+])
+def test_unsupported_languages_normalize_to_english_not_chinese(given, expected):
+    assert server._normalize_lang(given) == expected
+
+
+def test_supported_set_matches_what_the_backend_actually_does():
+    """🔴 往 `_BACKEND_LANGS` 加语言的判据是**实测那个语言真的出来了**，
+    不是后端文档说支持、更不是往元组里加一行。这条钉住当前实测结论。"""
+    assert server._BACKEND_LANGS == ("en", "zh"), (
+        "改了支持集合？请先重跑逐语言实测（同一入参跑各 lang 比响应），"
+        "确认新语言真的产出该语言的文本，再改这里和参数描述"
+    )
+
+
+def test_normalized_value_is_what_hits_the_wire(sent):
+    """归一化必须发生在**发出去之前**——在工具层归一、在 payload 里又用原值等于没归一。
+
+    🔴 CI-1095 起判据按族分开，**两族都要测**，否则只测一族时另一族改错了也不会红：
+    · catalog 族（`/api/v2`）：`ja` **原样发出去**（后端那五种是静态译好的）；
+    · quick-chat 族：`ja` 仍**夹成 `en`**（答案是 LLM 现写的，实测会偶发混入中文）。
+    两族都要验「非法值被夹掉」，那才是本条原本守的东西。
+    """
+    asyncio.run(server.get_chemical_risk_warnings(chemicals=["a"], lang="ja"))
+    langs = [b.get("lang") for _, b in sent if "lang" in b]
+    assert langs and all(l == "ja" for l in langs), (
+        f"catalog 族应原样转发 ja，实际发出 {langs}")
+
+    sent.clear()
+    asyncio.run(server.ask_chemical_safety(question="q", lang="ja"))
+    langs = [b.get("lang") for _, b in sent if "lang" in b]
+    assert langs and all(l == "en" for l in langs), (
+        f"quick-chat 族的 ja 应夹成 en，实际发出 {langs}")
+
+    sent.clear()
+    asyncio.run(server.get_chemical_risk_warnings(chemicals=["a"], lang="pt"))
+    langs = [b.get("lang") for _, b in sent if "lang" in b]
+    assert langs and all(l == "en" for l in langs), (
+        f"两族都不认的值必须夹成 en，实际发出 {langs}")
+
+
+def test_compliance_tool_actually_forwards_lang_to_the_backend(monkeypatch):
+    """🔴 挂了参数 ≠ 送出去了 —— CI-361 修的正是「声明了没人消费」那个形状。
+
+    `_direct_compliance` 此前发的是模块级 `LANG`（服务端环境变量，托管网关上**恒 en**）
+    ⇒ 调用方传什么都没用，而 schema 里那个参数看起来完全正常。判据打在
+    **后端实际收到的值**上，不是「工具接受这个参数」。
+
+    🔬 变异：把 `_direct_compliance(chemical, effective_regions, lang)` 的第三个实参
+    删掉 ⇒ 本条红（收到 None 而不是 "zh"）。实跑过。
+    """
+    import asyncio
+
+    import server
+
+    seen: dict = {}
+
+    async def _fake(chemical, regions, lang=None):
+        seen["lang"] = lang
+        return {"chemical": chemical, "cas": "71-43-2", "summary_level": "high",
+                "region_results": [{"region": r, "status": "restricted", "flags": []}
+                                   for r in regions],
+                "unresolved": []}
+
+    monkeypatch.setattr(server, "_direct_compliance", _fake)
+    asyncio.run(server.check_regulatory_compliance(["benzene"], ["EU"], lang="zh"))
+
+    assert seen, "工具没调到后端——这条断言会伪装成通过，先查为什么没走到"
+    assert seen["lang"] == "zh", (
+        f"`lang` 没送到后端：收到 {seen['lang']!r}。"
+        "这正是改动前的形状——参数在 schema 里，发出去的却是服务端默认。")
+
+
+def test_lang_forwarding_has_exactly_one_spelling():
+    """把 `lang` 转发给后端的写法**只许有一种**（外加不收 lang 的那批发裸 `LANG`）。
+
+    🔴 这是「同一策略两处拼写」那类熵：多出来的那种写法**行为今天相同**，
+    所以没有任何测试会红 —— 而它在 `MSDS_LANG` 被配成后端不认的值时才发散
+    （别的工具把它夹成 `en`，多出来那种原样转发非法值）。
+
+    🔴 判据**自己发现成员**：扫 `server.py` 里所有 `"lang": …` 的实参写法，
+    要求集合恰好是那两种。新增工具用了第三种写法自动会红，不靠人记得比对。
+
+    🔬 变异（实跑过）：把任一处改成
+    `_normalize_lang(lang) if lang is not None else LANG` ⇒ 本条红并印出那个写法。
+    """
+    import pathlib
+    import re
+
+    src = (pathlib.Path(__file__).resolve().parents[2] / "server.py").read_text(
+        encoding="utf-8")
+    shapes = {m.group(1).strip()
+              for m in re.finditer(r'"lang":\s*([^,\n}]+)', src)}
+
+    # 阳性对照：一个都没扫到时下面的差集恒空 —— 那和「全都合规」完全同形。
+    assert len(shapes) >= 2, (
+        f"只扫到 {len(shapes)} 种写法：{shapes} —— 先查这个扫描为什么没找到，"
+        "别把它读成「都合规」")
+
+    # 🔴 CI-361 ⑥ 起有**第三种合法写法**，理由是「`lang` 按端点不是全局」（同 CI-1095）：
+    # 报告那条路（`get_audit_report` → `/report/signed-url`）支持 en/zh/ja/de/id 五种，
+    # 因为 PDF 标签是**静态译好的**；而 `_BACKEND_LANGS` 描述的 quick-chat 一族实测只有
+    # en/zh 真照做。共用 `_normalize_lang` 会把一个真能出德语报告的通道压成英文且不报错。
+    # ⚠️ 放它进来**不放松本条守卫要的那件事**：它同样盖住 `LANG` 那一侧
+    # （`lang or LANG`），所以「MSDS_LANG 配了非法值会被原样转发」这个后果仍被挡住。
+    # 🔴 CI-1095 起有**第四种**：`_normalize_catalog_lang(lang or LANG)`，
+    # 族是 `/api/v2` 的确定性端点（文案由后端按 i18n 表静态渲染，五语都是译好的）。
+    # 它与 `_normalize_lang` 的区别**只有支持集合**，同样盖住 `LANG` 那一侧。
+    # 🔴 再新增语言族时别往这里加第五种写法，除非它也满足那一条。
+    allowed = {"_normalize_lang(lang or LANG)", "LANG",
+               "_normalize_report_lang(lang or LANG)",
+               "_normalize_catalog_lang(lang or LANG)"}
+    extra = shapes - allowed
+    assert not extra, (
+        f"出现了第三种转发 lang 的写法：{extra}。"
+        "归一化必须盖住 `LANG` 那一侧，否则 MSDS_LANG 配错时这个工具会把非法值原样转发，"
+        "而别的工具会夹成 en。统一成 `_normalize_lang(lang or LANG)`。")

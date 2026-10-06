@@ -13,7 +13,7 @@ file still marked `session_id` required, so that path was unreachable.)
 The output must be in MCP **wire** shape, because the consumer is Microsoft, not this SDK:
 `inputSchema` (not `input_schema`) and `readOnlyHint` (not `read_only_hint`). mcp 2.x names
 the python attributes snake_case, so both spellings are one forgotten argument apart —
-`tests/test_ci517_cowork_tools_export.py` pins them.
+`tests/contract/test_cowork_tools_export.py` pins them.
 """
 import asyncio
 import json
