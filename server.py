@@ -2949,7 +2949,30 @@ def _form_disclosure_lines(item: dict) -> list[str]:
     # （英文那条不带 `**`，所以这个 bug 只咬另外四种语言，本仓的默认 lang 恰恰是 zh。）
     if note:
         out.append(f"- ⚠️ {note}")
+    out.extend(_content_source_lines(item))
     return out
+
+
+def _content_source_lines(item: dict) -> list[str]:
+    """CI-938：作答那一行的出处（后端 `content_source`），六个单物质工具共用这一个出口。
+
+    后端此前只从 canonical 作答；现在 canonical 不覆盖的 CAS 也会从语料或 PubChem 的
+    GHS 分类汇总作答。文本面不说是哪一种，模型会照 server instructions 把它引成
+    「某家供应商的 SDS」⇒ PubChem 那一种必须明说「不是供应商 SDS」。
+
+    键缺席或为 `None` ＝ 没有作答行 ⇒ 什么都不说。没有供应商名时也不说
+    （同 `get_sds_section`：绝不写 "unknown supplier"）。
+    """
+    cs = item.get("content_source") if isinstance(item, dict) else None
+    if not isinstance(cs, dict):
+        return []
+    if cs.get("source") == "pubchem_ghs":
+        return ["- ⚠️ **Answering record:** PubChem aggregated GHS classification, "
+                "not a supplier SDS. Do not cite it as one."]
+    if not cs.get("supplier"):
+        return []
+    rev = f" · revision {cs['revision_date']}" if cs.get("revision_date") else ""
+    return [f"- **Answering SDS:** {cs['supplier']}{rev}"]
 
 
 def _insufficient_lines(item: dict, what: str) -> list[str]:
