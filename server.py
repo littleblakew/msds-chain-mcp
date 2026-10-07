@@ -44,6 +44,8 @@ from mcp.server import MCPServer
 from mcp.server.caching import CacheHint
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
+
+import ui_compat_card
 from pydantic import BaseModel, Field
 from request_identity import (
     caller_headers, get_caller_credential, get_mcp_call_id, reset_mcp_call_id,
@@ -1839,7 +1841,8 @@ def _with_usage(result: "CallToolResult", data: dict) -> "CallToolResult":
     sc = result.structured_content
     if sc is not None:
         sc = {**sc, "usage": usage}
-    return CallToolResult(content=content, structured_content=sc)
+    # `meta` 是只给组件的通道（CI-1098），重建时不带上就会静默丢掉。
+    return CallToolResult(content=content, structured_content=sc, meta=result.meta)
 
 
 # ---------------------------------------------------------------------------
@@ -1909,6 +1912,7 @@ def _relay_language_note(result):
                                   + content[0].text)] + content[1:],
         structured_content=sc,
         is_error=bool(getattr(result, "is_error", False)),
+        meta=getattr(result, "meta", None),
     )
 
 
@@ -3070,6 +3074,8 @@ def _storage_item_lines(item: dict) -> list[str]:
 @mcp.tool(
     annotations=ToolAnnotations(title="Check Chemical Compatibility", read_only_hint=True, destructive_hint=False, open_world_hint=False),
     structured_output=False,
+    # CI-1098：链到内联卡片模板。不渲染组件的宿主忽略它，文本答复不变。
+    meta=ui_compat_card.tool_meta(),
 )
 @_graceful_timeout
 @_reported
@@ -3182,6 +3188,8 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
         return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=structured,
+            # CI-1098：只给组件、模型看不到的那条通道。内容都是上面文本里已有的。
+            meta={ui_compat_card.CARD_META_KEY: ui_compat_card.card_payload(structured)},
         ), data)
     finally:
         _log_intent("check_chemical_compatibility", chemicals,
@@ -6955,6 +6963,19 @@ _PROMPT_TAIL = (
     "- Do not add hazard, medical or regulatory claims that the tool output does not "
     "contain. General knowledge may be added only if labelled as such.\n"
 )
+
+
+@mcp.resource(
+    ui_compat_card.CARD_URI,
+    name="compat_card",
+    title="Compatibility card",
+    description="Inline card for check_chemical_compatibility: verdicts, precursor notices, source SDS.",
+    mime_type=ui_compat_card.CARD_MIME,
+    meta=ui_compat_card.resource_meta(ui_compat_card.SDS_LINK_ORIGIN),
+)
+def compat_card() -> str:
+    """CI-1098：`check_chemical_compatibility` 的卡片模板（MCP Apps）。见 `ui_compat_card.py`。"""
+    return ui_compat_card.CARD_HTML
 
 
 @mcp.prompt(
