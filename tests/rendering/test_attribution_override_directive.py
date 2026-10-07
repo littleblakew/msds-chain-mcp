@@ -1,7 +1,7 @@
 """CI-978（本仓这一半）：后端刚拼的那条确定性更正，不许在客户端重写中消失。
 
 后端那半的病灶与修法见 msds-chain 的
-`backend/tests/test_ci978_unchecked_intent_attribution.py`。本仓只负责一件事：
+`backend/tests/quick/test_unchecked_intent_attribution.py`。本仓只负责一件事：
 `answer` 在这条通道上要过**第三个模型**（claude.ai / Copilot 重写之后才到用户眼前），
 所以后端的确定性拼串在这里**不是**承重层，得配一条显式指令。
 
