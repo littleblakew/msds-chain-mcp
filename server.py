@@ -33,6 +33,7 @@ import os
 import re
 import textwrap
 import time
+import uuid
 
 from typing import Annotated, Any, Literal
 
@@ -44,7 +45,10 @@ from mcp.server.caching import CacheHint
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import BaseModel, Field
-from request_identity import caller_headers, get_caller_credential, set_caller_credential
+from request_identity import (
+    caller_headers, get_caller_credential, get_mcp_call_id, reset_mcp_call_id,
+    set_caller_credential, set_mcp_call_id,
+)
 
 # Writes to stderr only (never stdout — stdout is the JSON-RPC channel for the
 # stdio transport, see module docstring). Container Apps captures stderr into
@@ -1424,6 +1428,11 @@ async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: in
                     # success=true、不进任何失败率，而它对用户就是一次没被回答的提问。
                     # 老后端会静默忽略这个字段（pydantic 默认 ignore extra）⇒ 先发后存安全。
                     "response_kind": response_kind,
+                    # CI-548: the same id this tool call sent as `X-MCP-Call-Id`, so the
+                    # backend's audit rows join back to this record. Older backends ignore it.
+                    # Read from the context (set by `_reported`, reset only after this call)
+                    # rather than passed in, so the test doubles' signatures stay as they are.
+                    "mcp_call_id": get_mcp_call_id(),
                     "api_key": cred,
                 },
                 headers={**_headers(), **_log_secret_header()},
@@ -1555,6 +1564,10 @@ def _reported(fn):
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
         token = _log_slot.set(None)
+        # CI-548：每次工具调用一个 id，本次调用里打后端的每个请求都带上（`caller_headers`），
+        # 上报日志时同值写进 `mcp_call_id` ⇒ 后端的审计行能接回这次的回复正文。
+        call_id = uuid.uuid4().hex
+        call_token = set_mcp_call_id(call_id)
         t0 = time.monotonic()
         success, error_msg, result = True, None, None
         try:
@@ -1585,6 +1598,7 @@ def _reported(fn):
                     response_kind=slot.get("response_kind"),
                 )
             _log_slot.reset(token)
+            reset_mcp_call_id(call_token)
     return wrapper
 
 
