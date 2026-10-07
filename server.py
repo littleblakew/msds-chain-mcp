@@ -2953,6 +2953,9 @@ def _form_disclosure_lines(item: dict) -> list[str]:
     return out
 
 
+_SUPPLIER_SDS_SOURCES = frozenset({"canonical", "system_library", "session"})
+
+
 def _content_source_lines(item: dict) -> list[str]:
     """CI-938：作答那一行的出处（后端 `content_source`），六个单物质工具共用这一个出口。
 
@@ -2966,9 +2969,15 @@ def _content_source_lines(item: dict) -> list[str]:
     cs = item.get("content_source") if isinstance(item, dict) else None
     if not isinstance(cs, dict):
         return []
-    if cs.get("source") == "pubchem_ghs":
+    source = cs.get("source")
+    if source == "pubchem_ghs":
         return ["- ⚠️ **Answering record:** PubChem aggregated GHS classification, "
                 "not a supplier SDS. Do not cite it as one."]
+    # 白名单是「已知出自供应商 SDS」的那几种；认不出的 source 往少声称那侧落，
+    # 否则一种新的非供应商来源会在下面「没有供应商名就不说」那条里静默。
+    if source not in _SUPPLIER_SDS_SOURCES:
+        return [f"- ⚠️ **Answering record:** source `{source or 'unspecified'}`, "
+                "not identified as a supplier SDS. Do not cite it as one."]
     if not cs.get("supplier"):
         return []
     rev = f" · revision {cs['revision_date']}" if cs.get("revision_date") else ""
