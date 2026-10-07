@@ -58,3 +58,12 @@ def test_nothing_to_name_means_silence(tool_name, patch_name, payload, args, bod
     assert "unknown supplier" not in txt.lower()
     assert body in txt
 
+
+
+@pytest.mark.parametrize("source", ["some_new_feed", None])
+def test_unrecognised_source_is_not_presented_as_a_supplier_sds(source):
+    """反向：认不出的 source 没有供应商名时不许静默（会被当成供应商 SDS 引用）。"""
+    lines = server._content_source_lines(
+        {"content_source": {"source": source, "supplier": "", "revision_date": ""}})
+    assert len(lines) == 1 and "not identified as a supplier SDS" in lines[0]
+    assert "Answering SDS" not in lines[0]
