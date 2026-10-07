@@ -61,7 +61,7 @@ logger = logging.getLogger("msds_mcp")
 API_KEY = os.environ.get("MSDS_API_KEY", "")
 API_URL = os.environ.get(
     "MSDS_API_URL",
-    "https://msds-chain-backend-prod.orangepond-4b408d49.southeastasia.azurecontainerapps.io",
+    "https://api.msdschain.lagentbot.com",
 ).rstrip("/")
 LANG = os.environ.get("MSDS_LANG", "en")  # 实测后端只认 en / zh，见下 _BACKEND_LANGS
 

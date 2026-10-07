@@ -47,8 +47,7 @@ class _Resp:
         if self.status_code >= 400:
             raise RuntimeError(
                 f"RAW raise_for_status: Client error '{self.status_code}' for url "
-                f"'https://msds-chain-backend-prod.orangepond-4b408d49."
-                f"southeastasia.azurecontainerapps.io/api/v2/compatibility/check'")
+                f"'https://backend.example.invalid/api/v2/compatibility/check'")
 
     def json(self):
         if self._p is None:
@@ -113,7 +112,7 @@ def test_401_is_not_readable_as_a_safety_conclusion(monkeypatch):
 def test_401_does_not_leak_the_internal_backend_url(monkeypatch):
     """🔴 原来那串完整 Azure 后端 URL 直接进了第三方客户端的上下文。"""
     text = _tool_error_text(monkeypatch, 401, {"detail": "password_auth_disabled"})
-    assert "azurecontainerapps.io" not in text, text
+    assert "example.invalid" not in text, text
     assert "https://" not in text, text
     # 🔴 后端 401 的 detail 是内部代号，对调用方无信息量且是实现泄露 ⇒ 不许附上
     assert "password_auth_disabled" not in text, text
