@@ -2933,6 +2933,12 @@ def _form_disclosure_lines(item: dict) -> list[str]:
     # 下面那两条逐字相同，第二份不带版本的副本会各漂各的。
     if qform := item.get("query_form_disclosure"):
         out.append(f"- ⚠️ {qform}")
+    # 🔴 CI-237-a：用户在名字里写了浓度（`50% 乙醇`），而作答那份 SDS 标的是别的浓度
+    # 或没标。后端在六个单物质端点的条目上（急救是顶层）给出已渲染好的一句话；
+    # 它与 `documents[].concentration_mismatch` 不同，不挂在「有没有 PDF」上，
+    # 所以储存这类根本不带 documents 的工具也拿得到。原样念，措辞归后端 catalog。
+    if conc := item.get("concentration_disclosure"):
+        out.append(f"- ⚠️ {conc}")
     if prep := item.get("preparation_disclosure"):
         out.append(f"- ⚠️ {prep}")
     note = item.get("physical_form_disclosure")
@@ -3351,7 +3357,10 @@ async def check_regulatory_compliance(
                           CLP Annex VI, Seveso III or the Water Framework Directive
                           priority list. Those hits are still named in `flags`, each
                           marked "not a restriction" — relay that marking, do not
-                          upgrade it. 🔴 NOT a clearance and NOT a violation.
+                          upgrade it. (EU) A diisocyanate matched by name to REACH
+                          Annex XVII Entry 74 is also `detected`: relay its training
+                          condition, do not upgrade it to `restricted`.
+                          🔴 NOT a clearance and NOT a violation.
          `not_restricted` we DID check that region's restriction lists and it is not on
                           them. `details` names which lists were checked. Lists we do not
                           hold were not checked, so this is not a clearance either.
