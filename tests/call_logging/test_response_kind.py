@@ -1,7 +1,7 @@
 r"""CI-977（本仓这一半）：把「这一轮我们给了什么」当成一条独立事实发出去。
 
 后端那半（表、列、取值白名单）在 msds-chain 的
-`backend/tests/test_ci977_response_kind.py`。本仓负责**产生**这个值。
+`backend/tests/mcp/test_response_kind.py`。本仓负责**产生**这个值。
 
 病灶：2026-09-07 一个真实外部用户问「请提供乙酸乙酯的 16 章节 SDS」——产品的核心用例——
 被 RAI 分类器整条拒了，而那条调用记的是 `success=true`（传输层确实成功）。
