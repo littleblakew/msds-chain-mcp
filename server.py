@@ -134,7 +134,7 @@ TIMEOUT_LLM = 120.0   # quick-chat endpoints — multi-turn LLM reasoning
 # (mcp 2.x) and is what surfaces as serverInfo.version in the MCP `initialize`
 # handshake (what ChatGPT, claude.ai and any raw MCP client display). Without it the
 # SDK falls back to reporting the `mcp` package version — a meaningless value.
-__version__ = "1.5.10"
+__version__ = "1.5.11"
 
 # ---------------------------------------------------------------------------
 # 缓存提示（CI-515，2026-07-28 spec / SEP-2549）
