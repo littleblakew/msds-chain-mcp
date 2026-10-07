@@ -81,7 +81,9 @@ CASES: dict[str, dict] = {
     },
     "get_ppe_recommendation": {
         "args": {"chemicals": ["sulfuric acid"]},
-        "expect_mentions": ['sulfuric acid'],
+        # 回复引用的是选中那份 SDS 的品名，供应商可能用英式拼写（"Sulphuric acid"）；
+        # CAS 对上同样算谈到了问的东西。
+        "expect_mentions": ['sulfuric acid', 'sulphuric acid', '7664-93-9'],
         "note": "腐蚀性酸；质量层会检查它没退化成通用手套建议",
     },
     "get_storage_guidance": {
