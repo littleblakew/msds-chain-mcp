@@ -3312,7 +3312,7 @@ async def check_regulatory_compliance(
     chemicals: ChemicalList,
     regions: Annotated[list[str] | None, Field(
         description='Region codes to check. Valid codes: "EU", "US", "CN", "JP", "KR", '
-                    '"CA", "AU", "TW". Omit to check EU + US (the default pair) — the '
+                    '"CA", "AU", "SG", "TW". Omit to check EU + US (the default pair) — the '
                     'response says explicitly which regions were used.',
     )] = None, lang: Lang = None, intent: Intent = None,
 ) -> str:
@@ -3320,13 +3320,20 @@ async def check_regulatory_compliance(
     Check multi-region regulatory status for chemicals. Answers TWO separate questions
     per region — do not collapse them (CI-493):
 
-    1. `status` — is it on a RESTRICTION list (SVHC / REACH Annex XVII / CLP Annex VI /
-       Prop 65 / China Catalogue of Hazardous Chemicals / JP CSCL / SG EPMA /
-       Korea Restricted / Prohibited Substances / Taiwan MOENV Listed Toxic and Concerned Chemical Substances / Taiwan OSHA
-       Priority Management and Controlled Chemicals)?
-         `restricted`     on at least one restriction list, or a CMR hazard code
-         `detected`       only indirect evidence (occupational exposure limit, or an SDS
-                          Section 15 mention). 🔴 NOT a clearance and NOT a violation.
+    1. `status` — is it on a RESTRICTION list (EU SVHC / REACH Annex XVII, US Prop 65,
+       China Catalogue of Hazardous Chemicals, JP CSCL, SG EPMA, Korea Restricted /
+       Prohibited Substances, Taiwan MOENV Listed Toxic and Concerned Chemical Substances,
+       Taiwan OSHA Priority Management and Controlled Chemicals)?
+         `restricted`     on at least one restriction list. A REACH Annex XVII flag names
+                          the entry numbers, e.g. "REACH Annex XVII (Entry 5; Entry 72)";
+                          each entry restricts specific uses, concentrations or articles,
+                          so pass the entry on rather than calling the substance banned.
+         `detected`       only indirect evidence: a CMR hazard code, an occupational
+                          exposure limit, an SDS Section 15 mention, or (EU) a hit on
+                          CLP Annex VI, Seveso III or the Water Framework Directive
+                          priority list. Those hits are still named in `flags`, each
+                          marked "not a restriction" — relay that marking, do not
+                          upgrade it. 🔴 NOT a clearance and NOT a violation.
          `not_restricted` we DID check that region's restriction lists and it is not on
                           them. `details` names which lists were checked. Lists we do not
                           hold were not checked, so this is not a clearance either.
@@ -7003,7 +7010,7 @@ def ehs_compliance_review(chemicals: str = "", regions: str = "EU,US") -> str:
         "1. If the user gave a protocol or document instead of a list, call "
         "`validate_protocol_chemicals(protocol_text=...)` first.\n"
         "2. `check_regulatory_compliance(chemicals=[...], regions=[...])` — valid region "
-        "codes are EU, US, CN, JP, KR, CA, AU, TW.\n"
+        "codes are EU, US, CN, JP, KR, CA, AU, SG, TW.\n"
         "3. `get_exposure_limits(chemicals=[...], region=...)` for occupational limits.\n"
         "4. `get_chemical_risk_warnings(chemicals=[...])` for GHS class, signal word and "
         "H-codes.\n"
