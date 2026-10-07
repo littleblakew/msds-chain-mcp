@@ -10,6 +10,7 @@ The backend half (columns, header parsing, the join) lives in msds-chain
 | `test_backend_request_and_call_log_share_one_id` | drop the header in `caller_headers`, or the `"mcp_call_id"` field in `_log_call`'s POST body |
 | `test_each_call_gets_its_own_id` | mint the id once at import instead of per call |
 | `test_id_does_not_outlive_the_call` | drop `reset_mcp_call_id(call_token)` |
+| `test_id_is_reset_even_if_the_log_post_is_cancelled` | move the resets back out of the inner `finally` |
 
 Async cases use `asyncio.run` (no pytest-asyncio in requirements-dev.txt, see test_response_kind.py).
 """
@@ -89,6 +90,25 @@ def test_id_does_not_outlive_the_call(monkeypatch):
 
     async def run_then_read():
         await _probe_tool()
+        return caller_headers()
+
+    headers = asyncio.run(run_then_read())
+    assert "X-MCP-Call-Id" not in headers, headers
+
+
+def test_id_is_reset_even_if_the_log_post_is_cancelled(monkeypatch):
+    _fake_backend(monkeypatch)
+
+    async def cancelled_log(*a, **kw):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(server, "_log_call", cancelled_log)
+
+    async def run_then_read():
+        try:
+            await _probe_tool()
+        except asyncio.CancelledError:
+            pass
         return caller_headers()
 
     headers = asyncio.run(run_then_read())

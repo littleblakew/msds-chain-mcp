@@ -1581,24 +1581,28 @@ def _reported(fn):
             success, error_msg = False, _error_text(e)
             raise
         finally:
-            slot = _log_slot.get()
-            if slot is not None:
-                # 只能降级：工具报的失败与「抛了异常」取与
-                ok = success and slot.get("success", True)
-                err = error_msg or slot.get("error_message")
-                await _log_call(
-                    slot["tool_name"], slot["chemicals"],
-                    int((time.monotonic() - t0) * 1000), ok, err,
-                    slot["input_params"], _response_text(result),
-                    # CI-977：工具没报就是 `None`（＝「这一轮没算」），**别在这里填
-                    # `answered` 兜底**——那会把「不经 quick-chat 的工具」和「真的答了」
-                    # 揉成一个桶，正是本票要拆开的那种同形。
-                    # 🔴 **关键字传参**：位置传参会让每个测试替身的签名都成为隐式契约，
-                    # 加一个参数就会一次性打翻一批不相干的守卫。
-                    response_kind=slot.get("response_kind"),
-                )
-            _log_slot.reset(token)
-            reset_mcp_call_id(call_token)
+            try:
+                slot = _log_slot.get()
+                if slot is not None:
+                    # 只能降级：工具报的失败与「抛了异常」取与
+                    ok = success and slot.get("success", True)
+                    err = error_msg or slot.get("error_message")
+                    await _log_call(
+                        slot["tool_name"], slot["chemicals"],
+                        int((time.monotonic() - t0) * 1000), ok, err,
+                        slot["input_params"], _response_text(result),
+                        # CI-977：工具没报就是 `None`（＝「这一轮没算」），**别在这里填
+                        # `answered` 兜底**——那会把「不经 quick-chat 的工具」和「真的答了」
+                        # 揉成一个桶，正是本票要拆开的那种同形。
+                        # 🔴 **关键字传参**：位置传参会让每个测试替身的签名都成为隐式契约，
+                        # 加一个参数就会一次性打翻一批不相干的守卫。
+                        response_kind=slot.get("response_kind"),
+                    )
+            finally:
+                # 上报被取消（CancelledError 落在 `await _log_call` 上）时也要复位，否则这个
+                # task 之后再打后端，会带着这次调用的 id 和日志槽。
+                _log_slot.reset(token)
+                reset_mcp_call_id(call_token)
     return wrapper
 
 
