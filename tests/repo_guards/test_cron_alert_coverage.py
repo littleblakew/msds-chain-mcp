@@ -1,6 +1,6 @@
 """`cron-failure-alert.yml` 的监听清单必须和本仓实际的 scheduled workflow 对得上。
 
-从 msds-chain 移植（那边是 `backend/tests/scripts/test_ci646_integrity_cron.py` 的
+从 msds-chain 移植（那边是 `backend/tests/scripts/test_integrity_cron.py` 的
 两条），因为**这个仓正是那两条守卫的受害者**：`live-probes-weekly` 在 msds-chain 那边
 的登记里漏过一次，而本仓在 2026-08-16 建这份告警之前，`Live Probes Weekly`
 （每周一真扣 credits 的 live 覆盖）失败时**没有任何人会收到通知**。

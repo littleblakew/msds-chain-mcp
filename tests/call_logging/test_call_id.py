@@ -3,7 +3,7 @@ on every request the tool makes, and as `mcp_call_id` in the call-log POST. The 
 stores both, which is what lets an audit row be joined to the reply we logged.
 
 The backend half (columns, header parsing, the join) lives in msds-chain
-`backend/tests/test_ci548_mcp_call_id.py`.
+`backend/tests/mcp/test_mcp_call_id.py`.
 
 | guard | what reverting makes it fail |
 |---|---|

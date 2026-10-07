@@ -3006,7 +3006,7 @@ def _insufficient_lines(item: dict, what: str) -> list[str]:
     # 且失效方向很坏：用户因此更不会自己去找 SDS。
     # ⚠️ 我一度以为 emergency/waste 只有一种成因、想加个开关只给 storage 用 —— 那是错的，
     # **加开关反而会留下「哪些调用方传了」这份要人记得维护的名单**。
-    # 📌 backend 有字面守卫钉这两句话（`test_ci679_no_record_wording.py`），但它**只扫 backend 仓**
+    # 📌 backend 有字面守卫钉这两句话（`tools/test_no_record_wording.py`），但它**只扫 backend 仓**
     # ⇒ 跨不了仓，这处才活到今天。本仓自己的守卫在 `tests/rendering/test_storage_insufficient_disclosure.py`。
     lines = [
         f"- **{what}: CANNOT BE DETERMINED** — we have no SDS hazard data on file "
