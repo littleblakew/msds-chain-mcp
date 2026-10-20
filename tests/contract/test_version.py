@@ -73,6 +73,18 @@ def test_registry_description_within_limit():
     )
 
 
+def test_npm_description_within_limit():
+    """The npm registry silently truncates package.json `description` to 255
+    chars: the publish succeeds and the listing just stops mid-word. Nothing at
+    publish time goes red, so the limit has to be checked here."""
+    with open(os.path.join(ROOT, "npm-package/package.json")) as f:
+        desc = json.load(f)["description"]
+    assert len(desc) <= 255, (
+        f"npm-package/package.json description is {len(desc)} chars; npm "
+        f"truncates it to 255 without any error"
+    )
+
+
 def test_all_json_manifests_stamped():
     want = _version_file()
     for rel in JSON_MANIFESTS:
