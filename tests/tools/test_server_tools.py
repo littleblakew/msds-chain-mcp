@@ -1466,9 +1466,9 @@ def test_upload_docstring_warns_remote_clients_about_local_paths():
 
 
 def test_upload_docstring_tells_model_to_use_inline_base64():
-    """CI-169 remainder: a remote client holding the file's bytes (the common
-    case — user just uploaded a PDF into ChatGPT/claude.ai) must be told to
-    base64-encode and pass them inline, not go hunting for a local path."""
+    """CI-169 remainder: a remote client holding a file small enough to pass whole
+    must be told it can base64-encode and pass it inline, not go hunting for a
+    local path."""
     doc = server.upload_msds_pdf.__doc__.lower()
     assert "base64" in doc
     assert "data:application/pdf;base64" in doc

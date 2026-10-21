@@ -6104,15 +6104,14 @@ def _upload_local_path_message(pdf_source: str) -> str:
         "(A local file path only works for a self-hosted stdio server running on the "
         "same machine as the file.)\n\n"
         "Three ways to get this SDS in, best first:\n"
-        "1. **Send the bytes inline (do this if you can read the file at all)** — "
-        "base64-encode the PDF and call `upload_msds_pdf` again with that string, or "
-        "with a `data:application/pdf;base64,<...>` data URI. Max 10 MB decoded. This "
-        "is the only route that needs nothing from the user, and it is usually "
-        "available: if the file was attached to this conversation, or your sandbox can "
-        "open the path you just tried, you already hold the bytes.\n"
-        "2. **Public link** — if the PDF has a publicly reachable HTTPS URL (supplier "
+        "1. **Public link** — if the PDF has a publicly reachable HTTPS URL (supplier "
         "site, or a share link that needs no login), call `upload_msds_pdf` again with "
         "that URL and it will be fetched and parsed right here.\n"
+        "2. **Send the bytes inline (small files only)** — base64-encode the PDF and "
+        "call `upload_msds_pdf` again with that string, or with a "
+        "`data:application/pdf;base64,<...>` data URI. Max 10 MB decoded. The whole "
+        "encoded string must fit in one call (~4/3 the file size, so a typical 150 KB "
+        "SDS is ~200,000 characters); if you cannot emit all of it, use 1 or 3.\n"
         "3. **Web upload** — go to https://msdschain.lagentbot.com, sign in with the "
         "same account, and upload the PDF there. This works for any local file.\n\n"
         "Either way the PDF is parsed into structured safety data (chemical name, CAS, "
@@ -6130,8 +6129,10 @@ async def upload_msds_pdf(
                     "(1) a publicly reachable HTTPS URL, fetched server-side; "
                     "(2) inline base64 of the raw PDF bytes — either a data URI "
                     "(`data:application/pdf;base64,<...>`) or a bare base64 string, max "
-                    "10 MB decoded — use this whenever you already hold the file's bytes, "
-                    "which is the normal case for hosted clients like ChatGPT/claude.ai; "
+                    "10 MB decoded — only if you can emit the WHOLE encoded string in this "
+                    "one call (base64 is ~4/3 the file size, so a typical 150 KB SDS is "
+                    "~200,000 characters; if you cannot hold it all, ask the user for a "
+                    "public link or send them to the web uploader instead); "
                     "(3) a local file path, which works ONLY for a self-hosted stdio "
                     "server on the same machine as the file. Never pass a path from the "
                     "user's machine or your own sandbox to the hosted server — it does "
@@ -6165,13 +6166,13 @@ async def upload_msds_pdf(
         pdf_source:      One of, tried in this order:
                          1. A publicly reachable HTTPS URL of the PDF (fetched
                             server-side).
-                         2. **Inline file bytes, base64-encoded** — use this
-                            when you already have the PDF's bytes in this
-                            conversation (e.g. the user just uploaded a PDF to
-                            you and you can read/attach it), which is the
-                            common case for remote clients like ChatGPT or
-                            claude.ai where the file lives in YOUR sandbox with
-                            no public URL. Pass either a data URI
+                         2. **Inline file bytes, base64-encoded** — only when
+                            you can put the ENTIRE encoded string into this one
+                            call. base64 is ~4/3 the file size (a typical 150 KB
+                            SDS is ~200,000 characters) and cannot be split
+                            across calls, so a PDF attached to a chat in a
+                            remote client usually does not fit; prefer a public
+                            link (1) or the web uploader. Pass either a data URI
                             (`data:application/pdf;base64,<...>`) or a bare
                             base64 string of the raw PDF bytes. Max 10 MB
                             decoded.
@@ -6183,10 +6184,10 @@ async def upload_msds_pdf(
                             cannot get a URL or the raw bytes, send the user to
                             the web uploader instead.
 
-                         Rule of thumb: if you (the model) can see/hold the PDF's
-                         bytes right now, base64-encode them and pass that —
-                         don't go looking for a local path that only exists on
-                         the user's machine, not the server's.
+                         Rule of thumb: a public HTTPS link is the most reliable
+                         route; inline base64 only for files small enough to pass
+                         whole; never a local path that only exists on the user's
+                         machine, not the server's.
         session_id:      Existing session ID to attach this upload to. If omitted,
                          a new session is created automatically.
         experiment_name: Label for the auto-created session (ignored if
