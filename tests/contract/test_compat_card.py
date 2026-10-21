@@ -15,6 +15,7 @@ host's model cannot rewrite.
 | `test_caps_report_what_they_left_out` | drop the `omitted` counts |
 | `test_verdict_is_lowercased_for_the_css_class` | drop `.lower()` on the verdict |
 | `test_template_initializes_checks_sender_and_pins_origin` | drop the `ui/initialize` handshake, the `e.source` check or the origin injection |
+| `test_template_follows_host_theme_and_reports_size` | drop the `color-scheme` declaration, the `hostContext.theme` read or the `size-changed` report |
 
 Async cases use `asyncio.run` (no pytest-asyncio in requirements-dev.txt, see test_response_kind.py).
 """
@@ -149,3 +150,12 @@ def test_template_initializes_checks_sender_and_pins_origin():
     assert "e.source !== window.parent" in html
     assert "__ALLOWED_ORIGIN__" not in html
     assert f"var ALLOWED_ORIGIN = \"{server._CARD_LINK_ORIGIN}\";" in html
+
+
+def test_template_follows_host_theme_and_reports_size():
+    """Without a declared colour scheme the host gives the iframe an opaque light canvas, and
+    without a size report the host keeps it at its default height and clips the card."""
+    html = str(list(asyncio.run(server.mcp.read_resource(card.CARD_URI)))[0].content)
+    assert '<meta name="color-scheme" content="light dark">' in html
+    assert "hostContext" in html and '"ui/notifications/host-context-changed"' in html
+    assert '"ui/notifications/size-changed"' in html

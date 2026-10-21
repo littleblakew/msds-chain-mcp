@@ -118,9 +118,12 @@ def card_payload(data: dict, allowed_origin: str) -> dict:
 # `__ALLOWED_ORIGIN__` is replaced by `card_html()` with the one origin links may open on.
 _CARD_HTML_TEMPLATE = """<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <style>
-:root{--fg:#141413;--muted:#5e5d59;--line:#e6e4dd;--bad:#b42318;--warn:#b54708;--ok:#067647;--bg:transparent}
-@media (prefers-color-scheme:dark){:root{--fg:#f5f4ef;--muted:#a8a69f;--line:#3a3935;--bad:#f97066;--warn:#fdb022;--ok:#47cd89}}
+:root{color-scheme:light dark;--fg:#141413;--muted:#5e5d59;--line:#e6e4dd;--bad:#b42318;--warn:#b54708;--ok:#067647;--bg:transparent}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--fg:#f5f4ef;--muted:#a8a69f;--line:#3a3935;--bad:#f97066;--warn:#fdb022;--ok:#47cd89}}
+:root[data-theme=dark]{color-scheme:dark;--fg:#f5f4ef;--muted:#a8a69f;--line:#3a3935;--bad:#f97066;--warn:#fdb022;--ok:#47cd89}
+:root[data-theme=light]{color-scheme:light}
 body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--fg);background:var(--bg)}
 .card{padding:12px 4px}
 h2{font-size:13px;font-weight:600;color:var(--muted);margin:10px 0 6px;text-transform:uppercase;letter-spacing:.04em}
@@ -160,6 +163,17 @@ button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1
     }
     return null;
   }
+  // The host's theme wins over the OS preference: an iframe whose colour scheme differs from
+  // the page around it gets an opaque canvas, so light-on-light text would be unreadable.
+  function applyTheme(t){
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  }
+  function reportSize(){
+    var r = document.getElementById("root").getBoundingClientRect();
+    var h = Math.ceil(r.bottom);
+    notify("ui/notifications/size-changed", {width: Math.ceil(r.right), height: h});
+    if (window.openai && typeof window.openai.notifyIntrinsicHeight === "function") window.openai.notifyIntrinsicHeight(h);
+  }
   function more(n, what){ return n > 0 ? '<div class="more">+ ' + esc(n) + " more " + what + " not shown here; see the full answer.</div>" : ""; }
   function render(p){
     if (!p) return;
@@ -193,6 +207,7 @@ button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1
     }
     var root = document.getElementById("root");
     root.innerHTML = h;
+    reportSize();
     root.querySelectorAll("button[data-i]").forEach(function(b){
       b.addEventListener("click", function(){
         var url = safeUrl(p.documents[+b.getAttribute("data-i")].url);
@@ -203,18 +218,27 @@ button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1
       });
     });
   }
-  function fromGlobals(){ return window.openai ? findPayload(window.openai.toolResponseMetadata) : null; }
+  function fromGlobals(){
+    if (!window.openai) return null;
+    applyTheme(window.openai.theme);
+    return findPayload(window.openai.toolResponseMetadata);
+  }
   render(fromGlobals());
   window.addEventListener("openai:set_globals", function(){ render(fromGlobals()); });
+  if (window.ResizeObserver) new ResizeObserver(reportSize).observe(document.getElementById("root"));
   window.addEventListener("message", function(e){
     if (e.source !== window.parent) return;
     var m = e.data; if (!m || m.jsonrpc !== "2.0") return;
     if (m.id != null && pending[m.id]){ var f = pending[m.id]; delete pending[m.id]; f(m); return; }
     if (m.method === "ui/notifications/tool-result") render(findPayload(m.params));
+    if (m.method === "ui/notifications/host-context-changed") applyTheme((m.params || {}).theme);
   });
   // MCP Apps: the host sends tool-result only after the view has initialized.
   rpc("ui/initialize", {appInfo: {name: "msds-chain-compat-card", version: "1"}, appCapabilities: {}},
-      function(){ notify("ui/notifications/initialized"); });
+      function(m){
+        applyTheme(((m.result || {}).hostContext || {}).theme);
+        notify("ui/notifications/initialized");
+      });
 })();
 </script></body></html>
 """
