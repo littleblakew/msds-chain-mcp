@@ -16,6 +16,7 @@ host's model cannot rewrite.
 | `test_verdict_is_lowercased_for_the_css_class` | drop `.lower()` on the verdict |
 | `test_template_initializes_checks_sender_and_pins_origin` | drop the `ui/initialize` handshake, the `e.source` check or the origin injection |
 | `test_link_origin_is_the_public_one_not_the_backend_call_url` | derive the card's link origin from `API_URL` again |
+| `test_template_change_ships_under_a_new_uri` | edit the template without bumping `CARD_URI` (or bump without re-pinning) |
 | `test_template_follows_host_theme_and_reports_size` | drop the `color-scheme` declaration, the `hostContext.theme` read or the `size-changed` report |
 
 Async cases use `asyncio.run` (no pytest-asyncio in requirements-dev.txt, see test_response_kind.py).
@@ -167,3 +168,19 @@ def test_link_origin_is_the_public_one_not_the_backend_call_url():
     public domain; tying the allowlist to API_URL filters every link out of the card."""
     assert server.API_URL.startswith("http://127.0.0.1"), "precondition: tests point API_URL elsewhere"
     assert server._CARD_LINK_ORIGIN == "https://api.msdschain.lagentbot.com"
+
+
+# One entry per published template URI. Add a line for the new URI; never edit an old one.
+_TEMPLATE_PINS = {
+    "ui://msds-chain/compat-card-v2.html": "d10c99c3aaa5db0e",
+}
+
+
+def test_template_change_ships_under_a_new_uri():
+    """Hosts cache the template by URI, so an edited template under an unchanged URI is never
+    fetched again by clients that already hold it."""
+    import hashlib
+    got = hashlib.sha256(card.card_html("https://api.msdschain.lagentbot.com").encode()).hexdigest()[:16]
+    assert card.CARD_URI in _TEMPLATE_PINS, f"new URI {card.CARD_URI}: add it to _TEMPLATE_PINS with {got}"
+    assert _TEMPLATE_PINS[card.CARD_URI] == got, (
+        f"template changed under {card.CARD_URI}: bump CARD_URI and pin the new one with {got}")

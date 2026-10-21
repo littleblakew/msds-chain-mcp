@@ -15,8 +15,10 @@ from __future__ import annotations
 import json
 from urllib.parse import urlsplit
 
-# A breaking change to the HTML must ship under a new URI (hosts cache by URI).
-CARD_URI = "ui://msds-chain/compat-card-v1.html"
+# Any change to the HTML must ship under a new URI: hosts cache the template by URI, so an
+# edited template under the old one keeps serving the stale copy. A pinned hash in
+# tests/contract/test_compat_card.py goes red when the template changes and the URI does not.
+CARD_URI = "ui://msds-chain/compat-card-v2.html"
 CARD_MIME = "text/html;profile=mcp-app"
 # Signed SDS links (`sds_document_url`) are issued on the backend's public origin, which the
 # caller derives from its API base URL; it is the only target the card opens.
