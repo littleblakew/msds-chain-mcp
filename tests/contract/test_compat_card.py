@@ -15,6 +15,7 @@ host's model cannot rewrite.
 | `test_caps_report_what_they_left_out` | drop the `omitted` counts |
 | `test_verdict_is_lowercased_for_the_css_class` | drop `.lower()` on the verdict |
 | `test_template_initializes_checks_sender_and_pins_origin` | drop the `ui/initialize` handshake, the `e.source` check or the origin injection |
+| `test_link_origin_is_the_public_one_not_the_backend_call_url` | derive the card's link origin from `API_URL` again |
 | `test_template_follows_host_theme_and_reports_size` | drop the `color-scheme` declaration, the `hostContext.theme` read or the `size-changed` report |
 
 Async cases use `asyncio.run` (no pytest-asyncio in requirements-dev.txt, see test_response_kind.py).
@@ -159,3 +160,10 @@ def test_template_follows_host_theme_and_reports_size():
     assert '<meta name="color-scheme" content="light dark">' in html
     assert "hostContext" in html and '"ui/notifications/host-context-changed"' in html
     assert '"ui/notifications/size-changed"' in html
+
+
+def test_link_origin_is_the_public_one_not_the_backend_call_url():
+    """The core may call the backend on an internal address while signed links are issued on the
+    public domain; tying the allowlist to API_URL filters every link out of the card."""
+    assert server.API_URL.startswith("http://127.0.0.1"), "precondition: tests point API_URL elsewhere"
+    assert server._CARD_LINK_ORIGIN == "https://api.msdschain.lagentbot.com"

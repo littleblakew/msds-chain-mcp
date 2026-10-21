@@ -65,8 +65,11 @@ API_URL = os.environ.get(
     "MSDS_API_URL",
     "https://api.msdschain.lagentbot.com",
 ).rstrip("/")
-# Signed SDS links are issued on the backend's origin; the compatibility card opens only those.
-_CARD_LINK_ORIGIN = ui_compat_card.link_origin(API_URL)
+# Signed SDS links are issued on the backend's PUBLIC origin, which is not necessarily API_URL:
+# a deployment can reach the backend through an internal address while the links it hands to
+# users still point at the public domain. The compatibility card opens only this origin.
+_CARD_LINK_ORIGIN = ui_compat_card.link_origin(
+    os.environ.get("MSDS_SDS_LINK_ORIGIN", "https://api.msdschain.lagentbot.com"))
 LANG = os.environ.get("MSDS_LANG", "en")  # 实测后端只认 en / zh，见下 _BACKEND_LANGS
 
 
