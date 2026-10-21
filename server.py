@@ -65,6 +65,8 @@ API_URL = os.environ.get(
     "MSDS_API_URL",
     "https://api.msdschain.lagentbot.com",
 ).rstrip("/")
+# Signed SDS links are issued on the backend's origin; the compatibility card opens only those.
+_CARD_LINK_ORIGIN = ui_compat_card.link_origin(API_URL)
 LANG = os.environ.get("MSDS_LANG", "en")  # 实测后端只认 en / zh，见下 _BACKEND_LANGS
 
 
@@ -3227,7 +3229,7 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=structured,
             # CI-1098：只给组件、模型看不到的那条通道。内容都是上面文本里已有的。
-            meta={ui_compat_card.CARD_META_KEY: ui_compat_card.card_payload(structured)},
+            meta={ui_compat_card.CARD_META_KEY: ui_compat_card.card_payload(structured, _CARD_LINK_ORIGIN)},
         ), data)
     finally:
         _log_intent("check_chemical_compatibility", chemicals,
@@ -7013,11 +7015,11 @@ _PROMPT_TAIL = (
     title="Compatibility card",
     description="Inline card for check_chemical_compatibility: verdicts, precursor notices, source SDS.",
     mime_type=ui_compat_card.CARD_MIME,
-    meta=ui_compat_card.resource_meta(ui_compat_card.SDS_LINK_ORIGIN),
+    meta=ui_compat_card.resource_meta(_CARD_LINK_ORIGIN),
 )
 def compat_card() -> str:
     """CI-1098：`check_chemical_compatibility` 的卡片模板（MCP Apps）。见 `ui_compat_card.py`。"""
-    return ui_compat_card.CARD_HTML
+    return ui_compat_card.card_html(_CARD_LINK_ORIGIN)
 
 
 @mcp.prompt(

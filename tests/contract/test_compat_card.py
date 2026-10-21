@@ -10,6 +10,11 @@ host's model cannot rewrite.
 | `test_card_payload_survives_the_language_note_rebuild` | drop `meta=` in `_relay_language_note` |
 | `test_meta_goes_on_the_wire_as_underscore_meta` | (SDK) the field serializing under another name |
 | `test_dockerfile_ships_the_module` | drop `ui_compat_card.py` from the Dockerfile COPY line |
+| `test_card_basis_is_the_field_the_text_prints` | read `citation` (or anything but `source`) for the pair basis |
+| `test_only_https_links_on_the_allowed_origin_survive` | drop the `_allowed_link` filter in `card_payload` |
+| `test_caps_report_what_they_left_out` | drop the `omitted` counts |
+| `test_verdict_is_lowercased_for_the_css_class` | drop `.lower()` on the verdict |
+| `test_template_initializes_checks_sender_and_pins_origin` | drop the `ui/initialize` handshake, the `e.source` check or the origin injection |
 
 Async cases use `asyncio.run` (no pytest-asyncio in requirements-dev.txt, see test_response_kind.py).
 """
@@ -21,18 +26,19 @@ import ui_compat_card as card
 
 _PAYLOAD = {
     "pairs": [{"chem1": "thionyl chloride", "chem2": "ethanol", "level": "incompatible",
-               "reason": "r", "citation": "Supplier X SDS rev 2020-01-01",
+               "reason": "r", "source": "Supplier X SDS rev 2020-01-01",
+               "citation": "lit:internal-rule-id",
                "traceability": "rule_based"}],
     "unresolved": [],
     "precursor_disclosure": [{"query_name": "thionyl chloride",
                               "tier": "CWC Schedule 3B", "statement": "Listed on CWC Schedule 3B."}],
     "documents": [
         {"chemical": "thionyl chloride", "chemical_name": "Thionyl chloride", "supplier": "Supplier X",
-         "revision_date": "2020-01-01", "sds_document_url": card.SDS_LINK_ORIGIN + "/msds/token/a"},
+         "revision_date": "2020-01-01", "sds_document_url": server._CARD_LINK_ORIGIN + "/msds/token/a"},
         {"chemical": "ethanol", "chemical_name": "Ethanol", "supplier": "Supplier Y",
-         "revision_date": "2021-01-01", "sds_document_url": card.SDS_LINK_ORIGIN + "/msds/token/b"},
+         "revision_date": "2021-01-01", "sds_document_url": server._CARD_LINK_ORIGIN + "/msds/token/b"},
         {"chemical": "water", "chemical_name": "Water", "supplier": "Supplier Z",
-         "revision_date": "2022-01-01", "sds_document_url": card.SDS_LINK_ORIGIN + "/msds/token/c"},
+         "revision_date": "2022-01-01", "sds_document_url": server._CARD_LINK_ORIGIN + "/msds/token/c"},
     ],
     "_usage": {"cost": 3, "balance": 9},
 }
@@ -93,7 +99,7 @@ def test_meta_goes_on_the_wire_as_underscore_meta(monkeypatch):
 
 def test_malformed_entries_are_skipped_not_raised():
     out = card.card_payload({"pairs": ["x", None], "precursor_disclosure": "nope",
-                             "documents": [1, {"supplier": "S"}]})
+                             "documents": [1, {"supplier": "S"}]}, server._CARD_LINK_ORIGIN)
     assert out["pairs"] == [] and out["precursor"] == []
     assert out["documents"] == [{"chemical": None, "supplier": "S", "revision_date": None, "url": None}]
 
@@ -102,3 +108,44 @@ def test_dockerfile_ships_the_module():
     dockerfile = (Path(__file__).resolve().parents[2] / "Dockerfile").read_text()
     copy_lines = [line for line in dockerfile.splitlines() if line.startswith("COPY")]
     assert any("ui_compat_card.py" in line for line in copy_lines), copy_lines
+
+
+def test_card_basis_is_the_field_the_text_prints(monkeypatch):
+    result = _call(monkeypatch)
+    pair = result.meta[card.CARD_META_KEY]["pairs"][0]
+    assert pair["source"] == "Supplier X SDS rev 2020-01-01", pair
+    assert "citation" not in pair, pair
+    assert pair["source"] in result.content[0].text, "card basis must be text the answer already shows"
+
+
+def test_only_https_links_on_the_allowed_origin_survive():
+    origin = server._CARD_LINK_ORIGIN
+    docs = [{"supplier": s, "sds_document_url": u} for s, u in [
+        ("js", "javascript:alert(1)"), ("data", "data:text/html,x"),
+        ("scheme", ("http://" if origin.startswith("https://") else "https://")
+                   + origin.split("://", 1)[1] + "/msds/token/a"),
+        ("foreign", "https://evil.example/msds/token/a"), ("bad", "https://[::1"),
+        ("ok", origin + "/msds/token/ok"),
+    ]]
+    out = card.card_payload({"documents": docs}, origin)
+    assert [d["url"] for d in out["documents"]] == [None] * 5 + [origin + "/msds/token/ok"]
+
+
+def test_caps_report_what_they_left_out():
+    pairs = [{"chemical_a": f"a{i}", "chemical_b": "b", "level": "caution"} for i in range(15)]
+    out = card.card_payload({"pairs": pairs}, server._CARD_LINK_ORIGIN)
+    assert len(out["pairs"]) == 12 and out["omitted"]["pairs"] == 3, out["omitted"]
+
+
+def test_verdict_is_lowercased_for_the_css_class():
+    out = card.card_payload({"pairs": [{"chemical_a": "a", "chemical_b": "b", "level": "INCOMPATIBLE"}]},
+                            server._CARD_LINK_ORIGIN)
+    assert out["pairs"][0]["verdict"] == "incompatible"
+
+
+def test_template_initializes_checks_sender_and_pins_origin():
+    html = str(list(asyncio.run(server.mcp.read_resource(card.CARD_URI)))[0].content)
+    assert '"ui/initialize"' in html and '"ui/notifications/initialized"' in html
+    assert "e.source !== window.parent" in html
+    assert "__ALLOWED_ORIGIN__" not in html
+    assert f"var ALLOWED_ORIGIN = \"{server._CARD_LINK_ORIGIN}\";" in html

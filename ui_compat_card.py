@@ -12,19 +12,20 @@ guarantee that the user sees it.
 """
 from __future__ import annotations
 
+import json
 from urllib.parse import urlsplit
 
 # A breaking change to the HTML must ship under a new URI (hosts cache by URI).
 CARD_URI = "ui://msds-chain/compat-card-v1.html"
 CARD_MIME = "text/html;profile=mcp-app"
-# Signed SDS links (`sds_document_url`) are issued on the backend's public domain; it is the
-# only redirect target the card opens.
-SDS_LINK_ORIGIN = "https://api.msdschain.lagentbot.com"
+# Signed SDS links (`sds_document_url`) are issued on the backend's public origin, which the
+# caller derives from its API base URL; it is the only target the card opens.
 # Key under the tool result's `_meta` that carries the card payload.
 CARD_META_KEY = "msdschain/compat_card"
 
 _MAX_PAIRS = 12
 _MAX_PRECURSOR = 8
+_MAX_DOCS = 12
 # The card is limited to two calls to action, so at most two source documents get a link.
 _MAX_LINKED_DOCS = 2
 
@@ -54,40 +55,68 @@ def _dicts(value) -> list[dict]:
     return [x for x in value if isinstance(x, dict)] if isinstance(value, list) else []
 
 
-def card_payload(data: dict) -> dict:
+def _allowed_link(url, allowed_origin: str) -> str | None:
+    """A link the card may open: exactly the origin (scheme, host, port) the template's CSP
+    allowlists. Anything else (other schemes, other hosts, malformed) is dropped, not opened."""
+    if not isinstance(url, str):
+        return None
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or link_origin(url) != allowed_origin:
+        return None
+    return url
+
+
+def card_payload(data: dict, allowed_origin: str) -> dict:
     """Build the card payload from the tool's structuredContent (pairs already renamed to
     `chemical_a` / `chemical_b`), copying only fields the text answer already shows; nothing
-    here is new information, it just cannot be rewritten.
+    here is new information, it just cannot be rewritten. `omitted` counts what the caps
+    left out, so the card can say it is not the whole answer.
 
     Malformed entries are skipped, never raised on: the card is an extra channel and must not
     take the text answer down with it."""
+    all_pairs = _dicts(data.get("pairs"))
     pairs = []
-    for p in _dicts(data.get("pairs"))[:_MAX_PAIRS]:
+    for p in all_pairs[:_MAX_PAIRS]:
+        verdict = p.get("verdict") or p.get("level")
         pairs.append({
             "a": p.get("chemical_a"), "b": p.get("chemical_b"),
-            "verdict": p.get("verdict") or p.get("level"),
-            "citation": p.get("citation"),
+            "verdict": verdict.lower() if isinstance(verdict, str) else verdict,
+            # The text answer prints this pair's `source` as its basis line.
+            "source": p.get("source"),
         })
+    all_precursor = [d for d in _dicts(data.get("precursor_disclosure")) if d.get("statement")]
     precursor = [
         {"chemical": d.get("query_name") or d.get("matched_name"), "tier": d.get("tier"),
          "statement": d.get("statement")}
-        for d in _dicts(data.get("precursor_disclosure"))[:_MAX_PRECURSOR]
-        if d.get("statement")
+        for d in all_precursor[:_MAX_PRECURSOR]
     ]
+    all_docs = _dicts(data.get("documents"))
     documents = []
-    for d in _dicts(data.get("documents")):
+    linked = 0
+    for d in all_docs[:_MAX_DOCS]:
+        url = _allowed_link(d.get("sds_document_url"), allowed_origin) \
+            if linked < _MAX_LINKED_DOCS else None
+        linked += bool(url)
         documents.append({
             "chemical": d.get("chemical_name") or d.get("chemical"),
             "supplier": d.get("supplier"),
             "revision_date": d.get("revision_date"),
-            "url": d.get("sds_document_url") if len(
-                [x for x in documents if x.get("url")]) < _MAX_LINKED_DOCS else None,
+            "url": url,
         })
-    return {"pairs": pairs, "precursor": precursor, "documents": documents}
+    return {
+        "pairs": pairs, "precursor": precursor, "documents": documents,
+        "omitted": {"pairs": len(all_pairs) - len(pairs),
+                    "precursor": len(all_precursor) - len(precursor),
+                    "documents": len(all_docs) - len(documents)},
+    }
 
 
 # Plain HTML + one inline script: no build step, no external assets, nothing fetched.
-CARD_HTML = """<!doctype html>
+# `__ALLOWED_ORIGIN__` is replaced by `card_html()` with the one origin links may open on.
+_CARD_HTML_TEMPLATE = """<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 :root{--fg:#141413;--muted:#5e5d59;--line:#e6e4dd;--bad:#b42318;--warn:#b54708;--ok:#067647;--bg:transparent}
@@ -97,7 +126,7 @@ body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-se
 h2{font-size:13px;font-weight:600;color:var(--muted);margin:10px 0 6px;text-transform:uppercase;letter-spacing:.04em}
 .pair{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--line)}
 .v{font-weight:600;white-space:nowrap}.incompatible{color:var(--bad)}.caution{color:var(--warn)}.compatible{color:var(--ok)}
-.cite,.doc{color:var(--muted);font-size:12.5px}
+.cite,.doc,.more{color:var(--muted);font-size:12.5px}
 .notice{border-left:3px solid var(--warn);padding:4px 0 4px 10px;margin:6px 0;font-size:13px}
 button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--fg);cursor:pointer;margin-left:6px}
 </style></head>
@@ -105,7 +134,22 @@ button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1
 <script>
 (function(){
   var KEY = "msdschain/compat_card";
+  var ALLOWED_ORIGIN = __ALLOWED_ORIGIN__;
+  var inHost = window.parent && window.parent !== window;
+  var nextId = 1, pending = {};
   function esc(s){ return String(s == null ? "" : s).replace(/[&<>"]/g, function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c];}); }
+  function rpc(method, params, onResult){
+    if (!inHost) return;
+    var id = nextId++; if (onResult) pending[id] = onResult;
+    window.parent.postMessage({jsonrpc: "2.0", id: id, method: method, params: params || {}}, "*");
+  }
+  function notify(method, params){
+    if (inHost) window.parent.postMessage({jsonrpc: "2.0", method: method, params: params || {}}, "*");
+  }
+  function safeUrl(u){
+    try { var x = new URL(u); return (/^https?:$/.test(x.protocol) && x.origin === ALLOWED_ORIGIN) ? x.href : null; }
+    catch (e) { return null; }
+  }
   function findPayload(meta){
     if (!meta) return null;
     var cands = [meta, meta.call_tool_result, meta.mcp_tool_result];
@@ -116,16 +160,19 @@ button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1
     }
     return null;
   }
+  function more(n, what){ return n > 0 ? '<div class="more">+ ' + esc(n) + " more " + what + " not shown here; see the full answer.</div>" : ""; }
   function render(p){
     if (!p) return;
+    var om = p.omitted || {};
     var h = "";
     if (p.pairs && p.pairs.length){
       h += "<h2>Compatibility</h2>";
       p.pairs.forEach(function(x){
         h += '<div class="pair"><div>' + esc(x.a) + " + " + esc(x.b)
-          + (x.citation ? '<div class="cite">' + esc(x.citation) + "</div>" : "")
+          + (x.source ? '<div class="cite">Basis: ' + esc(x.source) + "</div>" : "")
           + '</div><div class="v ' + esc(x.verdict) + '">' + esc(x.verdict) + "</div></div>";
       });
+      h += more(om.pairs, "pairs");
     }
     if (p.precursor && p.precursor.length){
       h += "<h2>Regulated precursor notice</h2>";
@@ -133,22 +180,26 @@ button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1
         h += '<div class="notice"><strong>' + esc(x.chemical) + (x.tier ? " (" + esc(x.tier) + ")" : "")
           + "</strong><br>" + esc(x.statement) + "</div>";
       });
+      h += more(om.precursor, "notices");
     }
     if (p.documents && p.documents.length){
       h += "<h2>Source SDS</h2>";
       p.documents.forEach(function(d, i){
         h += '<div class="doc">' + esc(d.chemical) + ": " + esc(d.supplier || "unknown supplier")
           + (d.revision_date ? ", rev " + esc(d.revision_date) : "")
-          + (d.url ? '<button data-i="' + i + '">Open SDS</button>' : "") + "</div>";
+          + (safeUrl(d.url) ? '<button data-i="' + i + '">Open SDS</button>' : "") + "</div>";
       });
+      h += more(om.documents, "documents");
     }
     var root = document.getElementById("root");
     root.innerHTML = h;
     root.querySelectorAll("button[data-i]").forEach(function(b){
       b.addEventListener("click", function(){
-        var d = p.documents[+b.getAttribute("data-i")];
-        if (window.openai && window.openai.openExternal) window.openai.openExternal({href: d.url});
-        else window.open(d.url, "_blank", "noopener");
+        var url = safeUrl(p.documents[+b.getAttribute("data-i")].url);
+        if (!url) return;
+        if (window.openai && window.openai.openExternal) window.openai.openExternal({href: url});
+        else if (inHost) rpc("ui/open-link", {url: url});
+        else window.open(url, "_blank", "noopener");
       });
     });
   }
@@ -156,9 +207,18 @@ button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1
   render(fromGlobals());
   window.addEventListener("openai:set_globals", function(){ render(fromGlobals()); });
   window.addEventListener("message", function(e){
-    var m = e.data; if (!m || m.method !== "ui/notifications/tool-result") return;
-    render(findPayload(m.params));
+    if (e.source !== window.parent) return;
+    var m = e.data; if (!m || m.jsonrpc !== "2.0") return;
+    if (m.id != null && pending[m.id]){ var f = pending[m.id]; delete pending[m.id]; f(m); return; }
+    if (m.method === "ui/notifications/tool-result") render(findPayload(m.params));
   });
+  // MCP Apps: the host sends tool-result only after the view has initialized.
+  rpc("ui/initialize", {appInfo: {name: "msds-chain-compat-card", version: "1"}, appCapabilities: {}},
+      function(){ notify("ui/notifications/initialized"); });
 })();
 </script></body></html>
 """
+
+
+def card_html(allowed_origin: str) -> str:
+    return _CARD_HTML_TEMPLATE.replace("__ALLOWED_ORIGIN__", json.dumps(allowed_origin))
