@@ -3,10 +3,11 @@ that hosted users never see.
 
 - **This file's copy** (the `instructions=` ctor arg in `server.py`) is what a
   **self-hosted / stdio** install serves. Real, but a minority of installs.
-- **The hosted deployment** (`mcp.lagentbot.com`) is fronted by the distribution
-  gateway documented in README, and that gateway **replaces `result.instructions`
-  wholesale** on the `initialize` response. Every client that connects to the
-  hosted endpoint reads the gateway's onboarding copy instead of this one.
+- **The hosted deployment** (`mcp.lagentbot.com`) serves `hosted_instructions.txt`
+  instead: `server_remote.py` swaps it in when `MSDS_MCP_EDGE=1`, and until the
+  edge takes over, the distribution gateway in front **replaces
+  `result.instructions` wholesale** with its own copy of that text. Every client
+  that connects to the hosted endpoint reads the onboarding copy, not this one.
 
 🔴 The reason this needs a guard: editing the copy below to change what users see
 is a **silent no-op** for hosted clients. Tests pass, the deploy is green, the

@@ -175,12 +175,12 @@ mcp = MCPServer(
     # 四个方法在本服务上没有 handler），凭空给它们 hint 是写一份永远不执行的配置。
     cache_hints={"tools/list": _LIST_CACHE, "server/discover": _LIST_CACHE},
     # 🔴 CI-1101: this copy is served to **self-hosted / stdio** installs only.
-    # Clients on the hosted endpoint get the distribution gateway's own onboarding
-    # copy, because the gateway replaces `result.instructions` wholesale on
-    # `initialize` (README documents that gateway). Editing the text below to
-    # change what hosted users read is a **silent no-op**. The two documents are
-    # meant to differ (CI-405) — do not merge them. Guard:
-    # `tests/contract/test_instructions_audience.py` makes the edit noisy.
+    # Hosted clients read `hosted_instructions.txt` instead: with MSDS_MCP_EDGE=1
+    # `server_remote.py` swaps it in (until the edge takes over, the distribution
+    # gateway replaces `result.instructions` with its own copy of that text).
+    # Editing the text below to change what hosted users read is a **silent
+    # no-op**. The two documents are meant to differ (CI-405) — do not merge them.
+    # Guard: `tests/contract/test_instructions_audience.py` makes the edit noisy.
     instructions=textwrap.dedent("""
         MSDS Chain provides chemical safety intelligence backed by traceable, sourced SDS data.
 
