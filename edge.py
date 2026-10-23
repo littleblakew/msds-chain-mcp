@@ -55,6 +55,10 @@ def _canonical_base() -> str:
 
 _OAUTH_PREFIX = "/oauth/"
 _AS_METADATA_PATH = "/.well-known/oauth-authorization-server"
+# Echoes the caller's address as the backend resolved it. Passed through so the one
+# question that decides whether per-IP limits work behind this edge (does the backend
+# see the user, or us?) can be answered by reading it back rather than by inference.
+_CLIENT_IP_PATH = "/health/client-ip"
 # 🔴 Allowlist, not denylist: the backend trusts headers that only our own components may
 # set (`x-internal-proxy`, `x-mcp-log-secret`, `x-bot-secret`, tenant / schema selectors).
 # Forwarding whatever a caller sent would let them assert any of those; a denylist would
@@ -383,7 +387,7 @@ class EdgeMiddleware:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         path = scope["path"]
-        if path.startswith(_OAUTH_PREFIX) or path == _AS_METADATA_PATH:
+        if path.startswith(_OAUTH_PREFIX) or path in (_AS_METADATA_PATH, _CLIENT_IP_PATH):
             return await self._to_backend(scope, receive, send)
         if path == _PRM_PATH or path.startswith(_PRM_PATH + "/"):
             rest = path[len(_PRM_PATH):].strip("/")

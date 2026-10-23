@@ -340,3 +340,11 @@ def test_failed_funnel_send_is_retried(backend):
                     await asyncio.sleep(0)
     _run(go())
     assert posts.count("first_call") == 2, posts
+
+
+def test_client_ip_probe_is_passed_through(backend):
+    async def go():
+        async with _client(_Inner()) as c:
+            return await c.get("/health/client-ip")
+    assert _run(go()).status_code == 200
+    assert backend.calls[-1][1] == "https://backend.test/health/client-ip"
