@@ -12,7 +12,7 @@
 #
 # Authentication: an API key is REQUIRED — unlike some hosted endpoints there is no
 # anonymous tier here; without a key the gateway answers 401 and no tools register.
-# Get one at https://msdschain.lagentbot.com → API Keys (free tier: 100 calls/month)
+# Get one at https://msdschain.lagentbot.com → API Keys (free plan available)
 # and export it as MSDS_API_KEY. The headers expression attaches the header only when
 # the variable is set, so an unset variable produces a clean 401 at activation rather
 # than a malformed header.

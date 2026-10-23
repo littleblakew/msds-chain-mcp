@@ -19,7 +19,7 @@
       "environmentVariables": [
         {
           "name": "MSDS_API_KEY",
-          "description": "API key from msdschain.lagentbot.com (free: 100 calls/month)",
+          "description": "API key from msdschain.lagentbot.com (free plan available)",
           "isRequired": true,
           "format": "string",
           "isSecret": true

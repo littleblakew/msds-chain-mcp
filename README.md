@@ -25,7 +25,7 @@ claude mcp add msds-chain --transport http https://mcp.lagentbot.com/mcp
 
 Then run `/mcp` in Claude Code and sign in. A browser opens, you enter your email, and you paste
 back the code we send you. Your account is provisioned automatically and the free plan includes
-a monthly call allowance. There is no API key to create beforehand.
+a credit allowance. There is no API key to create beforehand.
 
 On another platform? See [Platform Setup](#platform-setup) below.
 
@@ -207,7 +207,7 @@ Industry-sourced, AI-verified, and cryptographically signed.
 | `401 Unauthorized` on connect | Missing or invalid API key | Check the `Authorization: Bearer sk-msds-...` header. Generate a fresh key at [msdschain.lagentbot.com](https://msdschain.lagentbot.com) > API Keys. |
 | Tools don't appear in the client | Server not loaded | Fully restart the client after adding the server, then confirm `msds-chain` shows in the MCP/tools list. |
 | Connection drops or times out | Wrong transport | Prefer `https://mcp.lagentbot.com/mcp`; SSE sessions can drop when the server redeploys. `GET https://mcp.lagentbot.com/health` should return `{"status":"ok"}`. |
-| `Quota exceeded` / 429 | Monthly call limit hit | Free plans are capped; upgrade or wait for the monthly reset. |
+| `Credit balance exhausted` | Credit allowance used up | The error says how to continue: an upgrade link and, on the free plan, when credits reset. |
 | Empty results for a known chemical | Name not matched | Retry with the CAS number or a common synonym; `search_chemical_database` accepts name, synonym, or CAS. |
 | OAuth sign-in fails | OAuth metadata unreachable | Confirm `GET https://mcp.lagentbot.com/.well-known/oauth-authorization-server` returns 200; the client should auto-discover the authorize and token endpoints. |
 

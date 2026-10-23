@@ -20,8 +20,8 @@ dsh plugin --profile web add github:littleblakew/msds-chain-mcp#path:/plugins/ds
 ## Configure
 
 An API key is required — there is no anonymous tier on this endpoint. Create one at
-[msdschain.lagentbot.com](https://msdschain.lagentbot.com) → API Keys (free tier:
-100 calls/month), then:
+[msdschain.lagentbot.com](https://msdschain.lagentbot.com) → API Keys (free plan
+available), then:
 
 ```sh
 export MSDS_API_KEY=sk-msds-your-key
