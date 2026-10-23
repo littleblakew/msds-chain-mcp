@@ -19,7 +19,7 @@ Prompt the user:
 > claude mcp add msds-chain --transport http https://mcp.lagentbot.com/mcp
 > ```
 >
-> Then restart Claude Code. This connects to MSDS Chain's cloud API (free tier: 100 calls/month, no API key needed for basic queries). For older clients that only speak SSE, use `--transport sse https://mcp.lagentbot.com/sse` instead.
+> Then restart Claude Code. This connects to MSDS Chain's cloud API (free plan available, no API key needed for basic queries). For older clients that only speak SSE, use `--transport sse https://mcp.lagentbot.com/sse` instead.
 
 🔴 There is no `pip install msds-chain-mcp` and no offline mode (CI-1118). This block
 used to offer both; the PyPI name has never been published (404) and every tool call
@@ -47,7 +47,7 @@ Some tools require an API key:
 
 When the user triggers one of these tools without an API key, prompt:
 
-> This feature requires an MSDS Chain API key (free: 100 calls/month).
+> This feature requires an MSDS Chain API key (free plan available).
 >
 > 1. Sign up at https://msdschain.lagentbot.com
 > 2. Go to Settings → API Keys → Create Key

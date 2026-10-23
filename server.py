@@ -430,7 +430,7 @@ Intent = Annotated[str | None, Field(
 
 _API_KEY_REQUIRED_MSG = (
     "⚠️ MSDS_API_KEY is required for all tools.\n\n"
-    "Get a free API key (100 calls/month) at https://msdschain.lagentbot.com:\n"
+    "Get a free API key at https://msdschain.lagentbot.com (the free plan includes a credit allowance):\n"
     "1. Sign up / log in\n"
     "2. Go to API Keys tab\n"
     "3. Create a key\n"
@@ -1506,6 +1506,15 @@ def _cap_intent(text: str) -> str:
     return text if len(text) <= _MAX_INTENT_CHARS else text[:_MAX_INTENT_CHARS] + "…[truncated]"
 
 
+def _supplier_params(chemicals: list[str], suppliers: dict[str, str] | None) -> dict:
+    """CI-226：调用日志里记归一化后的 `suppliers`（发给后端的那一份），没带就是空 dict。
+
+    展开进 `_intent_params` 的手写 dict ⇒ 没带 supplier 时日志与之前逐字节相同。
+    """
+    cleaned = _normalize_suppliers(chemicals, suppliers)
+    return {"suppliers": cleaned} if cleaned else {}
+
+
 def _intent_params(payload: dict, intent: str | None) -> str:
     """把工具**手写的**脱敏 dict 序列化，调用方给了 `intent` 就多挂一个键（截断后）。
 
@@ -1793,17 +1802,25 @@ def _billed_json(res: "httpx.Response") -> dict:
     """raise_for_status with a caller-friendly 402 (balance exhausted) message, then
     return the JSON body with any credit usage attached under `_usage`."""
     if res.status_code == 402:
-        bal = None
+        detail = {}
         try:
-            bal = (res.json().get("detail") or {}).get("balance")
+            detail = res.json().get("detail") or {}
         except Exception:
             pass
+        if not isinstance(detail, dict):
+            detail = {}
+        bal = detail.get("balance")
         msg = "Credit balance exhausted."
         if bal is not None:
             try:
                 msg += f" Remaining: {float(bal):g} credits."
             except (TypeError, ValueError):
                 pass
+        # CI-1396：后端的 `message` 按钱包算好了去路（升级链接 + 免费档几点重置），比我们
+        # 这句通用话准 ⇒ 有就用它；没有（旧后端）才退回通用话。
+        hint = detail.get("message")
+        if isinstance(hint, str) and hint.strip():
+            raise ToolReason(f"{msg} {hint.strip()}")
         raise ToolReason(msg + " Top up at msdschain.lagentbot.com to continue.")
     # CI-410：pydantic 把「为什么不合法」放在响应体的 `detail` 里，而这条错误路径此前
     # 从不读它 ⇒ 调用方只拿到 `Client error '422 Unprocessable Entity' for url …`。
@@ -3236,7 +3253,7 @@ async def check_chemical_compatibility(chemicals: ChemicalList, lang: Lang = Non
         ), data)
     finally:
         _log_intent("check_chemical_compatibility", chemicals,
-                        _intent_params({"chemicals": chemicals}, intent),
+                        _intent_params({"chemicals": chemicals, **_supplier_params(chemicals, suppliers)}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -3324,7 +3341,7 @@ async def get_chemical_risk_warnings(chemicals: ChemicalList, lang: Lang = None,
         ), data)
     finally:
         _log_intent("get_chemical_risk_warnings", chemicals,
-                        _intent_params({"chemicals": chemicals}, intent),
+                        _intent_params({"chemicals": chemicals, **_supplier_params(chemicals, suppliers)}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -3649,7 +3666,7 @@ async def get_ppe_recommendation(chemicals: ChemicalList, lang: Lang = None,
         )
     finally:
         _log_intent("get_ppe_recommendation", chemicals,
-                        _intent_params({"chemicals": chemicals}, intent),
+                        _intent_params({"chemicals": chemicals, **_supplier_params(chemicals, suppliers)}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -3688,7 +3705,7 @@ async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None,
         )
     finally:
         _log_intent("get_storage_guidance", chemicals,
-                        _intent_params({"chemicals": chemicals}, intent),
+                        _intent_params({"chemicals": chemicals, **_supplier_params(chemicals, suppliers)}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -4045,7 +4062,7 @@ async def get_transport_classification(chemicals: ChemicalList,
         )
     finally:
         _log_intent("get_transport_classification", chemicals,
-                        _intent_params({"chemicals": chemicals}, intent),
+                        _intent_params({"chemicals": chemicals, **_supplier_params(chemicals, suppliers)}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -5835,7 +5852,7 @@ async def get_waste_disposal(chemicals: ChemicalList, suppliers: Suppliers = Non
         )
     finally:
         _log_intent("get_waste_disposal", chemicals,
-                        _intent_params({"chemicals": chemicals}, intent),
+                        _intent_params({"chemicals": chemicals, **_supplier_params(chemicals, suppliers)}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -6659,7 +6676,7 @@ async def batch_safety_check(
         ), data)
     finally:
         _log_intent("batch_safety_check", chemicals,
-                        _intent_params({"chemicals": chemicals}, intent),
+                        _intent_params({"chemicals": chemicals, **_supplier_params(chemicals, suppliers)}, intent),
                     success=success, error_message=error_msg)
 
 
@@ -6841,11 +6858,8 @@ async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToo
     or downloaded with `curl -O`. The response also includes the document's
     source (supplier, region, revision date) so the provenance is clear.
 
-    If only parsed text is available (no original PDF on file), the tool says
-    so and suggests using `get_sds_section` to query specific sections instead.
-
-    If the chemical is not in the database at all, the tool suggests uploading
-    an SDS PDF via `upload_msds_pdf`.
+    If no original PDF is on file, or the chemical is not in the database at
+    all, the tool says so and suggests uploading an SDS PDF via `upload_msds_pdf`.
 
     Args:
         chemical: Chemical name or CAS number, e.g. "acetone" or "67-64-1"

@@ -116,3 +116,18 @@ def test_402_special_case_still_wins(monkeypatch):
     with pytest.raises(Exception) as exc:
         asyncio.run(server.check_chemical_compatibility(chemicals=["a", "b"]))
     assert "Credit balance exhausted" in str(exc.value)
+
+
+def test_402_relays_the_backend_message(monkeypatch):
+    """CI-1396：后端给了 `message`（升级链接 + 重置时间）就转它，别换成我们的通用话。
+
+    变异：删掉 `_billed_json` 里读 `message` 的分支，本条红。
+    """
+    message = "Today's free credits are used up. They reset at 00:00 UTC. Upgrade: https://x.test/up"
+    monkeypatch.setattr(server.httpx, "AsyncClient", _client_returning(
+        _Resp({"detail": {"error": "credit_floor", "balance": 0, "message": message}}, status=402)))
+    with pytest.raises(Exception) as exc:
+        asyncio.run(server.check_chemical_compatibility(chemicals=["a", "b"]))
+    text = str(exc.value)
+    assert "Credit balance exhausted" in text and message in text, text
+    assert "Top up at" not in text, text
