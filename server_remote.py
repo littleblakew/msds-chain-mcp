@@ -136,7 +136,7 @@ if edge.enabled():
     # The hosted copy is written for a first-time user of the connector; `server.py`'s
     # own instructions stay what stdio and self-hosted clients receive.
     mcp._lowlevel_server.instructions = _HOSTED_INSTRUCTIONS.read_text(encoding="utf-8")
-    app.add_middleware(edge.EdgeMiddleware)
+    app.add_middleware(edge.EdgeMiddleware, max_body_bytes=_MAX_BODY_BYTES)
 
 # IdentityMiddleware: extracts caller credentials (Bearer token / X-Api-Key)
 # from inbound request headers and stores them in a request-scoped contextvar

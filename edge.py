@@ -53,8 +53,14 @@ def _canonical_base() -> str:
     return os.environ.get("MSDS_MCP_PUBLIC_URL", "https://mcp.lagentbot.com").rstrip("/")
 
 
-_OAUTH_PATHS = ("/oauth/register", "/oauth/authorize", "/oauth/token", "/oauth/consent-event",
-                "/.well-known/oauth-authorization-server")
+_OAUTH_PREFIX = "/oauth/"
+_AS_METADATA_PATH = "/.well-known/oauth-authorization-server"
+# 🔴 Allowlist, not denylist: the backend trusts headers that only our own components may
+# set (`x-internal-proxy`, `x-mcp-log-secret`, `x-bot-secret`, tenant / schema selectors).
+# Forwarding whatever a caller sent would let them assert any of those; a denylist would
+# miss the next one someone adds. The OAuth endpoints need nothing beyond these.
+_FORWARD_HEADERS = {"content-type", "accept", "accept-language", "user-agent", "origin",
+                    "referer", "x-forwarded-for", "x-forwarded-proto"}
 _PRM_PATH = "/.well-known/oauth-protected-resource"
 _RESOURCE_PATHS = ("/mcp", "/sse")
 _CHALLENGE_PATH = "/.well-known/openai-apps-challenge"
@@ -107,6 +113,8 @@ _CACHE_SECRET = secrets.token_bytes(32)
 _CACHE_MAX = 2048
 _VALID_TTL = 60.0
 _INVALID_TTL = 10.0
+# Briefly, so a backend outage costs one timeout per credential, not one per request.
+_UNKNOWN_TTL = 5.0
 _verdicts: "OrderedDict[str, tuple[str, int | None, float]]" = OrderedDict()
 
 
@@ -124,6 +132,7 @@ async def check_credential(cred: str) -> tuple[str, int | None]:
     key = _cache_key(cred)
     hit = _verdicts.get(key)
     if hit and hit[2] > time.monotonic():
+        _verdicts.move_to_end(key)
         return hit[0], hit[1]
     header = ({"Authorization": cred} if cred.startswith("Bearer ")
               else {"X-API-Key": cred})
@@ -132,6 +141,7 @@ async def check_credential(cred: str) -> tuple[str, int | None]:
             r = await c.get(f"{_backend_url()}/api/v2/whoami", headers=header)
     except httpx.HTTPError as exc:
         logger.warning("edge whoami failed: %s", type(exc).__name__)
+        _remember(key, UNKNOWN, None, _UNKNOWN_TTL)
         return UNKNOWN, None
     if r.status_code == 200:
         try:
@@ -143,11 +153,17 @@ async def check_credential(cred: str) -> tuple[str, int | None]:
         verdict, uid, ttl = INVALID, None, _INVALID_TTL
     else:
         logger.warning("edge whoami returned %s", r.status_code)
+        _remember(key, UNKNOWN, None, _UNKNOWN_TTL)
         return UNKNOWN, None
+    _remember(key, verdict, uid, ttl)
+    return verdict, uid
+
+
+def _remember(key: str, verdict: str, uid: int | None, ttl: float) -> None:
     _verdicts[key] = (verdict, uid, time.monotonic() + ttl)
+    _verdicts.move_to_end(key)
     while len(_verdicts) > _CACHE_MAX:
         _verdicts.popitem(last=False)
-    return verdict, uid
 
 
 # --------------------------------------------------------------------------- discovery
@@ -233,26 +249,41 @@ _FUNNEL_SEEN_MAX = 20000
 _funnel_seen: "OrderedDict[tuple[str, str], None]" = OrderedDict()
 
 
-def _post_funnel(step: str, cred: str, detail: str) -> None:
+_pending: set = set()
+
+
+def _post_funnel(step: str, cred: str, detail: str, seen_key: tuple[str, str]) -> None:
     """Fire-and-forget `/mcp/funnel-event`. The backend resolves user and OAuth client
-    from the credential, which this process has no table for."""
+    from the credential, which this process has no table for.
+
+    A failed send un-marks `seen_key` so the next request retries it: otherwise one
+    backend blip would erase that credential's first call for the life of the process.
+    Tasks are held in `_pending` because the loop keeps only weak references to them.
+    """
     secret = os.environ.get("MCP_LOG_SECRET", "")
 
     async def _send() -> None:
+        ok = False
         try:
             async with _http(timeout=5) as c:
                 r = await c.post(f"{_backend_url()}/mcp/funnel-event",
                                  json={"step": step, "detail": detail or None, "api_key": cred},
                                  headers={"X-MCP-Log-Secret": secret} if secret else {})
-            if r.status_code >= 300:
+            ok = r.status_code < 300
+            if not ok:
                 logger.warning("edge funnel post %s returned %s", step, r.status_code)
         except Exception as exc:
             logger.warning("edge funnel post %s failed: %s", step, type(exc).__name__)
+        if not ok:
+            _funnel_seen.pop(seen_key, None)
 
     try:
-        asyncio.get_running_loop().create_task(_send())
+        task = asyncio.get_running_loop().create_task(_send())
     except RuntimeError:
-        pass
+        _funnel_seen.pop(seen_key, None)
+        return
+    _pending.add(task)
+    task.add_done_callback(_pending.discard)
 
 
 def record_funnel(payload, cred: str | None) -> None:
@@ -276,7 +307,7 @@ def record_funnel(payload, cred: str | None) -> None:
             _funnel_seen.popitem(last=False)
         detail = (str(params.get("name", ""))[:200]
                   if s in _STEPS_WITH_NAME_DETAIL and isinstance(params, dict) else "")
-        _post_funnel(s, cred, detail)
+        _post_funnel(s, cred, detail, (fp, s))
 
 
 def jsonrpc_succeeded(body: bytes, content_type: str) -> bool:
@@ -299,16 +330,24 @@ def jsonrpc_succeeded(body: bytes, content_type: str) -> bool:
 
 
 # --------------------------------------------------------------------------- ASGI
-async def _read_body(receive: Receive) -> bytes:
-    chunks = []
+async def _read_body(receive: Receive, limit: int) -> bytes | None:
+    """The whole request body, or None once it exceeds `limit` (we stop reading there)."""
+    chunks, size = [], 0
     while True:
         msg = await receive()
         if msg["type"] == "http.disconnect":
             break
-        chunks.append(msg.get("body", b""))
+        chunk = msg.get("body", b"")
+        size += len(chunk)
+        if size > limit:
+            return None
+        chunks.append(chunk)
         if not msg.get("more_body"):
             break
     return b"".join(chunks)
+
+
+_OAUTH_BODY_MAX = 64 * 1024
 
 
 def _replay(body: bytes, receive: Receive) -> Receive:
@@ -334,14 +373,17 @@ _CAPTURE_LIMIT = 65536
 
 
 class EdgeMiddleware:
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, max_body_bytes: int = 4 * 1024 * 1024) -> None:
         self.app = app
+        # Same ceiling the MCP transport enforces downstream; we buffer the body to read
+        # the JSON-RPC method, so without it this layer would be the unbounded one.
+        self.max_body_bytes = max_body_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         path = scope["path"]
-        if path in _OAUTH_PATHS:
+        if path.startswith(_OAUTH_PREFIX) or path == _AS_METADATA_PATH:
             return await self._to_backend(scope, receive, send)
         if path == _PRM_PATH or path.startswith(_PRM_PATH + "/"):
             rest = path[len(_PRM_PATH):].strip("/")
@@ -368,18 +410,25 @@ class EdgeMiddleware:
         leg = ("streamable" if path == "/mcp" else
                "sse-open" if path == "/sse" else "sse-post")
         resource = "/mcp" if path == "/mcp" else "/sse"
-        body = await _read_body(receive) if method == "POST" else b""
+        # 🔴 Authenticate from headers BEFORE reading any body: an unauthenticated caller
+        # must not get to make us buffer anything.
+        cred, how = presented_credential(headers)
+        verdict, uid = (await check_credential(cred)) if cred else (INVALID, None)
+        if verdict == INVALID:
+            log_client(headers, None, leg, "denied",
+                       "presented_invalid" if cred else "none", cred, None)
+            return await _respond(send, 401, b"Unauthorized",
+                                  unauthorized_headers(resource, presented=cred is not None))
+        body = b""
+        if method == "POST":
+            body = await _read_body(receive, self.max_body_bytes)
+            if body is None:
+                return await _respond(send, 413, b"Payload Too Large",
+                                      [(b"content-type", b"text/plain; charset=utf-8")])
         try:
             payload = json.loads(body) if body else None
         except Exception:
             payload = None
-        cred, how = presented_credential(headers)
-        verdict, uid = (await check_credential(cred)) if cred else (INVALID, None)
-        if verdict == INVALID:
-            log_client(headers, payload, leg, "denied",
-                       "presented_invalid" if cred else "none", cred, None)
-            return await _respond(send, 401, b"Unauthorized",
-                                  unauthorized_headers(resource, presented=cred is not None))
         log_client(headers, payload, leg, "ok", how, cred, uid)
 
         status = 0
@@ -406,9 +455,11 @@ class EdgeMiddleware:
         `mcp.lagentbot.com` as the authorization server, as published in the store
         listings; the backend serves it."""
         headers = Headers(scope=scope)
-        body = await _read_body(receive)
-        drop = _hop_by_hop(headers) | {"host", "content-length"}
-        fwd = [(k, v) for k, v in headers.items() if k.lower() not in drop]
+        body = await _read_body(receive, _OAUTH_BODY_MAX)
+        if body is None:
+            return await _respond(send, 413, b"Payload Too Large",
+                                  [(b"content-type", b"text/plain; charset=utf-8")])
+        fwd = [(k, v) for k, v in headers.items() if k.lower() in _FORWARD_HEADERS]
         proxy_secret = os.environ.get("MSDS_INTERNAL_PROXY_SECRET", "")
         if proxy_secret:
             fwd.append(("x-internal-proxy", proxy_secret))

@@ -287,3 +287,56 @@ def test_edge_mode_serves_hosted_instructions_and_gates():
     on, off = _probe(True), _probe(False)
     assert on["instructions"] == hosted and "EdgeMiddleware" in on["stack"]
     assert off["instructions"] != hosted and "EdgeMiddleware" not in off["stack"]
+
+
+def test_oauth_passthrough_drops_caller_trust_headers(backend, monkeypatch):
+    monkeypatch.delenv("MSDS_INTERNAL_PROXY_SECRET", raising=False)
+
+    async def go():
+        async with _client(_Inner()) as c:
+            return await c.post("/oauth/token", content=b"x=1", headers={
+                "x-internal-proxy": "forged", "x-mcp-log-secret": "forged",
+                "x-bot-secret": "forged", "x-tenant-slug": "acme", "x-workspace-id": "1"})
+    _run(go())
+    sent = {k.lower() for k, _ in backend.calls[-1][2]}
+    assert not sent & {"x-internal-proxy", "x-mcp-log-secret", "x-bot-secret",
+                       "x-tenant-slug", "x-workspace-id"}, sent
+
+
+def test_unauthenticated_body_is_never_read(backend):
+    """401 is decided from headers alone; an oversized authenticated body gets 413."""
+    async def go():
+        mw = edge.EdgeMiddleware(_Inner(), max_body_bytes=10)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=mw),
+                                     base_url="https://mcp.test") as c:
+            return (await c.post("/mcp", content=b"x" * 1000),
+                    await c.post("/mcp", content=b"x" * 1000, headers={"X-API-Key": KEY}))
+    anon, big = _run(go())
+    assert anon.status_code == 401 and big.status_code == 413
+
+
+def test_failed_funnel_send_is_retried(backend):
+    posts = []
+
+    def client(*a, **kw):
+        c = backend.client()
+        orig = c.post
+
+        async def flaky(url, json=None, headers=None):
+            posts.append(json["step"])
+            if len(posts) <= 2:
+                raise httpx.ConnectError("blip")
+            return await orig(url, json=json, headers=headers)
+        c.post = flaky
+        return c
+
+    edge._http = client  # restored by monkeypatch in the fixture's teardown
+
+    async def go():
+        async with _client(_Inner()) as c:
+            for _ in range(2):
+                await c.post("/mcp", content=_rpc("tools/call", "t"), headers={"X-API-Key": KEY})
+                for _ in range(3):
+                    await asyncio.sleep(0)
+    _run(go())
+    assert posts.count("first_call") == 2, posts
