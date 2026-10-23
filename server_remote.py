@@ -30,13 +30,15 @@ Environment Variables:
     MSDS_MCP_PORT      - Port to listen on (default: 8080)
     MSDS_MCP_TRANSPORT - Kept for backward compat; ignored (both transports active)
 
-Note: OAuth 2.1 and well-known challenge endpoints have been moved to the
-      gateway layer (msds-chain-gateway). This is the clean public MCP core.
+Note: with MSDS_MCP_EDGE=1 (the hosted deployment) `edge.py` gates requests on a
+      credential and passes OAuth paths through to the backend, which is the
+      authorization server. Without it this is the plain MCP core.
 """
 from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
@@ -51,6 +53,9 @@ import server as _srv  # noqa: F401 — registers tools on `mcp`
 from server import mcp
 
 from identity_middleware import IdentityMiddleware
+import edge
+
+_HOSTED_INSTRUCTIONS = Path(__file__).with_name("hosted_instructions.txt")
 
 HOST = os.environ.get("MSDS_MCP_HOST", "0.0.0.0")
 PORT = int(os.environ.get("MSDS_MCP_PORT", "8080"))
@@ -122,6 +127,16 @@ app = Starlette(
     routes=_routes,
     lifespan=_streamable_app.router.lifespan_context,
 )
+
+# Hosted deployment only (MSDS_MCP_EDGE=1): this process faces the internet, so it serves
+# the onboarding-oriented instructions and gates every MCP request on a credential the
+# backend accepts. Added before CORS so CORS stays outermost and also decorates a 401.
+if edge.enabled():
+    edge.configure_logging()
+    # The hosted copy is written for a first-time user of the connector; `server.py`'s
+    # own instructions stay what stdio and self-hosted clients receive.
+    mcp._lowlevel_server.instructions = _HOSTED_INSTRUCTIONS.read_text(encoding="utf-8")
+    app.add_middleware(edge.EdgeMiddleware)
 
 # IdentityMiddleware: extracts caller credentials (Bearer token / X-Api-Key)
 # from inbound request headers and stores them in a request-scoped contextvar
