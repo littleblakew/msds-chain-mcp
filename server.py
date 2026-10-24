@@ -1792,6 +1792,21 @@ def _credits_exhausted_result(e: CreditsExhausted, tool_name: str) -> CallToolRe
     return CallToolResult(content=[TextContent(type="text", text=text)], meta=meta, is_error=True)
 
 
+def _rate_limited_message(res: "httpx.Response") -> str:
+    """The sentence for a 429: how long to wait (from `Retry-After` when it is a number of
+    seconds, else a short default) and to retry once rather than in a loop."""
+    wait = 30
+    try:
+        raw = (getattr(res, "headers", None) or {}).get("retry-after") \
+            or (getattr(res, "headers", None) or {}).get("Retry-After")
+        if raw is not None:
+            wait = max(1, min(int(float(str(raw).strip())), 3600))
+    except (TypeError, ValueError):
+        pass
+    return (f"MSDS Chain is rate-limiting this connection (too many calls in a short time). "
+            f"Wait about {wait} seconds, then retry this call once. Do not retry in a loop.")
+
+
 def _raise_for_status_with_reason(res: "httpx.Response") -> None:
     """`raise_for_status()` 的替身：422 带上后端说的原因（CI-410）、401/403 变成可行动的话（CI-868）。
 
@@ -1804,6 +1819,11 @@ def _raise_for_status_with_reason(res: "httpx.Response") -> None:
     """
     if res.status_code == 422:
         raise ToolReason(f"Request rejected (422): {_detail_text(res)}")
+    if res.status_code == 429:
+        # CI-1400：限流不是故障，也不是用户的错 ⇒ 告诉模型等多久、只重试一次。
+        # 裸 `raise_for_status()` 会给出 `Client error '429 …' for url <后端地址>`：
+        # 不可行动，还把后端地址交给了第三方客户端。
+        raise ToolReason(_rate_limited_message(res))
     if msg := _AUTH_FAILED_MSG.get(res.status_code):
         # 🔴 **不把 detail 拼进给模型那句话**：后端 401 的 detail 是内部代号
         # （`password_auth_disabled` 这类），对第三方客户端既无信息量又是内部实现的泄露。

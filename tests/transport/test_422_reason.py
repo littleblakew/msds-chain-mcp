@@ -131,3 +131,28 @@ def test_402_relays_the_backend_message(monkeypatch):
     text = res.content[0].text
     assert "Credit balance exhausted" in text and message in text, text
     assert "Top up at" not in text, text
+
+
+def _rate_limited_text(monkeypatch, headers) -> str:
+    resp = _Resp({"detail": "Too Many Requests"}, status=429)
+    resp.headers = headers
+    monkeypatch.setattr(server.httpx, "AsyncClient", _client_returning(resp))
+    with pytest.raises(Exception) as exc:  # noqa: PT011
+        asyncio.run(server.get_exposure_limits(chemicals=["acetone"]))
+    return str(exc.value)
+
+
+def test_429_says_wait_and_retry_once_without_the_backend_url(monkeypatch):
+    """CI-1400: a 429 reaches the model as "wait N seconds, retry once", never as the bare
+    `Client error '429 …' for url <backend>`. Mutation: drop the 429 branch → `_Resp`
+    raises its "should not reach raise_for_status" assertion and this fails."""
+    text = _rate_limited_text(monkeypatch, {"retry-after": "12"})
+    assert "rate-limiting" in text and "about 12 seconds" in text, text
+    assert "retry this call once" in text and "Do not retry in a loop" in text, text
+    assert "http" not in text.lower() and "429 Too Many" not in text, text
+
+
+def test_429_without_a_usable_retry_after_uses_a_short_default(monkeypatch):
+    for headers in ({}, {"retry-after": "Wed, 21 Oct 2026 07:28:00 GMT"}):
+        text = _rate_limited_text(monkeypatch, headers)
+        assert "about 30 seconds" in text, text
