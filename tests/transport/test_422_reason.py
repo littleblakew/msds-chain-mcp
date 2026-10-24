@@ -113,9 +113,9 @@ def test_402_special_case_still_wins(monkeypatch):
     """阳性对照：402（余额耗尽）有自己的话术，别被新分支抢走。"""
     monkeypatch.setattr(server.httpx, "AsyncClient",
                         _client_returning(_Resp({"detail": {"balance": 0}}, status=402)))
-    with pytest.raises(Exception) as exc:
-        asyncio.run(server.check_chemical_compatibility(chemicals=["a", "b"]))
-    assert "Credit balance exhausted" in str(exc.value)
+    res = asyncio.run(server.check_chemical_compatibility(chemicals=["a", "b"]))
+    assert res.is_error is True  # CI-1403：402 返回 is_error 结果，不再抛
+    assert "Credit balance exhausted" in res.content[0].text
 
 
 def test_402_relays_the_backend_message(monkeypatch):
@@ -126,8 +126,8 @@ def test_402_relays_the_backend_message(monkeypatch):
     message = "Today's free credits are used up. They reset at 00:00 UTC. Upgrade: https://x.test/up"
     monkeypatch.setattr(server.httpx, "AsyncClient", _client_returning(
         _Resp({"detail": {"error": "credit_floor", "balance": 0, "message": message}}, status=402)))
-    with pytest.raises(Exception) as exc:
-        asyncio.run(server.check_chemical_compatibility(chemicals=["a", "b"]))
-    text = str(exc.value)
+    res = asyncio.run(server.check_chemical_compatibility(chemicals=["a", "b"]))
+    assert res.is_error is True  # CI-1403：402 返回 is_error 结果，不再抛
+    text = res.content[0].text
     assert "Credit balance exhausted" in text and message in text, text
     assert "Top up at" not in text, text

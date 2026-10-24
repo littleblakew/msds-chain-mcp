@@ -109,10 +109,10 @@ def test_402_after_building_hands_the_session_back(wired):
     """核心：零参 + 402 ⇒ 那句话里必须有刚建好的 session id。"""
     wired(_Resp({"detail": {"balance": 3}}, status=402))
 
-    with pytest.raises(RuntimeError) as ei:
-        asyncio.run(server.get_audit_report())
-
-    msg = str(ei.value)
+    # CI-1403：余额耗尽是**返回** is_error 结果（带升级卡片），不再抛出。
+    res = asyncio.run(server.get_audit_report())
+    assert res.is_error is True, res
+    msg = "\n".join(getattr(b, "text", "") or "" for b in res.content)
     # 🔴 主判据：id 本身在消息里。没有它，重试只能再建一个。
     assert _BUILT_SESSION in msg, f"session id 没交回调用方：{msg!r}"
     # 原来那句话不能丢——用户仍要知道为什么失败、怎么解决
@@ -131,10 +131,10 @@ def test_402_message_tells_the_model_to_reuse_rather_than_rebuild(wired):
     """
     wired(_Resp({"detail": {"balance": 0}}, status=402))
 
-    with pytest.raises(RuntimeError) as ei:
-        asyncio.run(server.get_audit_report())
-
-    msg = str(ei.value)
+    # CI-1403：余额耗尽是**返回** is_error 结果（带升级卡片），不再抛出。
+    res = asyncio.run(server.get_audit_report())
+    assert res.is_error is True, res
+    msg = "\n".join(getattr(b, "text", "") or "" for b in res.content)
     assert f'get_audit_report(session_id="{_BUILT_SESSION}")' in msg, msg
     assert "second session" in msg, f"没说清重问的后果：{msg!r}"
 
@@ -147,10 +147,10 @@ def test_402_on_the_explicit_session_path_says_nothing_extra(wired):
     """
     wired(_Resp({"detail": {"balance": 3}}, status=402))
 
-    with pytest.raises(RuntimeError) as ei:
-        asyncio.run(server.get_audit_report("DEMO-CALLER-OWNED"))
-
-    msg = str(ei.value)
+    # CI-1403：余额耗尽是**返回** is_error 结果（带升级卡片），不再抛出。
+    res = asyncio.run(server.get_audit_report("DEMO-CALLER-OWNED"))
+    assert res.is_error is True, res
+    msg = "\n".join(getattr(b, "text", "") or "" for b in res.content)
     assert "Credit balance exhausted" in msg, msg
     # 改动前这条路的文案一个字都不该变
     assert "was already created" not in msg, f"给不需要的那条路加了噪音：{msg!r}"

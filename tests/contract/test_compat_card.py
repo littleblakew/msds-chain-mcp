@@ -173,6 +173,7 @@ def test_link_origin_is_the_public_one_not_the_backend_call_url():
 # One entry per published template URI. Add a line for the new URI; never edit an old one.
 _TEMPLATE_PINS = {
     "ui://msds-chain/compat-card-v2.html": "d10c99c3aaa5db0e",
+    "ui://msds-chain/compat-card-v3.html": "c951300812010d6f",
 }
 
 
@@ -180,7 +181,8 @@ def test_template_change_ships_under_a_new_uri():
     """Hosts cache the template by URI, so an edited template under an unchanged URI is never
     fetched again by clients that already hold it."""
     import hashlib
-    got = hashlib.sha256(card.card_html("https://api.msdschain.lagentbot.com").encode()).hexdigest()[:16]
+    got = hashlib.sha256(card.card_html("https://api.msdschain.lagentbot.com",
+                                        "https://msdschain.lagentbot.com").encode()).hexdigest()[:16]
     assert card.CARD_URI in _TEMPLATE_PINS, f"new URI {card.CARD_URI}: add it to _TEMPLATE_PINS with {got}"
     assert _TEMPLATE_PINS[card.CARD_URI] == got, (
         f"template changed under {card.CARD_URI}: bump CARD_URI and pin the new one with {got}")

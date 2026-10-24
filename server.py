@@ -70,6 +70,13 @@ API_URL = os.environ.get(
 # users still point at the public domain. The compatibility card opens only this origin.
 _CARD_LINK_ORIGIN = ui_compat_card.link_origin(
     os.environ.get("MSDS_SDS_LINK_ORIGIN", "https://api.msdschain.lagentbot.com"))
+# CI-1403：余额耗尽时卡片上「升级」按钮唯一能打开的源；后端给的链接不在这个源上就退回默认页。
+_UPGRADE_URL = os.environ.get("MSDS_UPGRADE_URL", "").strip() or "https://msdschain.lagentbot.com/pricing"
+_UPGRADE_ORIGIN = ui_compat_card.link_origin(_UPGRADE_URL)
+if not _UPGRADE_ORIGIN.startswith(("https://", "http://")) or _UPGRADE_ORIGIN.endswith("://"):
+    # 配置坏了就退回默认页，别把一个空源注入卡片（卡片那侧对空源是拒绝打开）。
+    _UPGRADE_URL = "https://msdschain.lagentbot.com/pricing"
+    _UPGRADE_ORIGIN = ui_compat_card.link_origin(_UPGRADE_URL)
 LANG = os.environ.get("MSDS_LANG", "en")  # 实测后端只认 en / zh，见下 _BACKEND_LANGS
 
 
@@ -1007,6 +1014,9 @@ def _graceful_timeout(fn):
             # （review 抓到的；探针输出里其实一直印着它。）
             # ⇒ 直接返回一个 `is_error=True` 的结果：位是对的，文字逐字保留。
             return CallToolResult(content=[TextContent(type="text", text=msg)], is_error=True)
+        except CreditsExhausted as e:
+            # CI-1403：同上，返回而不是抛 —— 抛出去只剩一句文字，卡片通道（`_meta`）带不出去。
+            return _credits_exhausted_result(e, fn.__name__)
     return wrapper
 
 
@@ -1742,6 +1752,46 @@ class ToolReason(ToolError, RuntimeError):
     """
 
 
+class CreditsExhausted(ToolReason):
+    """402 from the backend: the check did not run because the wallet is empty.
+
+    Carries where the user can upgrade, so `_graceful_timeout` can put it in the card
+    channel (`_meta`), which the host renders without passing through the model. A host's
+    model is free to rewrite an error sentence and drop its link, so the text alone cannot
+    be relied on to get the user to the upgrade page.
+    """
+
+    def __init__(self, text: str, *, upgrade_url: str | None = None,
+                 resets_at: str | None = None):
+        super().__init__(text)
+        self.upgrade_url = upgrade_url
+        self.resets_at = resets_at
+
+    def retold(self, text: str) -> "CreditsExhausted":
+        """Same upgrade target under a longer sentence (a caller adding context keeps the card)."""
+        return CreditsExhausted(text, upgrade_url=self.upgrade_url, resets_at=self.resets_at)
+
+
+# Tools whose definition points at the card template. A card payload on any other tool's
+# result would reach no template, so it is left off.
+_CARD_TOOLS = frozenset({"check_chemical_compatibility"})
+
+
+def _credits_exhausted_result(e: CreditsExhausted, tool_name: str) -> CallToolResult:
+    """The errored result for an empty wallet: what happened and the link for the user, plus
+    the card payload on tools that have the card template. No `structured_content`: that slot
+    holds each tool's own data shape, and an error must not pose as one."""
+    url = ui_compat_card.allowed_upgrade_link(e.upgrade_url, _UPGRADE_ORIGIN) or _UPGRADE_URL
+    text = (f"{e}\n\nThis check was NOT run: there is no MSDS Chain result for it. "
+            f"Give the user this link to upgrade or top up: {url}\n"
+            "If you add general knowledge, label it as general knowledge, not as an MSDS Chain result.")
+    meta = None
+    if tool_name in _CARD_TOOLS:
+        meta = {ui_compat_card.CARD_META_KEY: ui_compat_card.exhausted_payload(
+            str(e), url, e.resets_at, _UPGRADE_ORIGIN)}
+    return CallToolResult(content=[TextContent(type="text", text=text)], meta=meta, is_error=True)
+
+
 def _raise_for_status_with_reason(res: "httpx.Response") -> None:
     """`raise_for_status()` 的替身：422 带上后端说的原因（CI-410）、401/403 变成可行动的话（CI-868）。
 
@@ -1819,9 +1869,12 @@ def _billed_json(res: "httpx.Response") -> dict:
         # CI-1396：后端的 `message` 按钱包算好了去路（升级链接 + 免费档几点重置），比我们
         # 这句通用话准 ⇒ 有就用它；没有（旧后端）才退回通用话。
         hint = detail.get("message")
+        upgrade = detail.get("upgrade_url") if isinstance(detail.get("upgrade_url"), str) else None
+        resets = detail.get("resets_at") if isinstance(detail.get("resets_at"), str) else None
         if isinstance(hint, str) and hint.strip():
-            raise ToolReason(f"{msg} {hint.strip()}")
-        raise ToolReason(msg + " Top up at msdschain.lagentbot.com to continue.")
+            raise CreditsExhausted(f"{msg} {hint.strip()}", upgrade_url=upgrade, resets_at=resets)
+        raise CreditsExhausted(msg + " Top up at msdschain.lagentbot.com to continue.",
+                               upgrade_url=upgrade, resets_at=resets)
     # CI-410：pydantic 把「为什么不合法」放在响应体的 `detail` 里，而这条错误路径此前
     # 从不读它 ⇒ 调用方只拿到 `Client error '422 Unprocessable Entity' for url …`。
     # 不是哑失败（调用可见地失败了），但**不可行动**：模型看不出是"化学品超过 24 个"
@@ -4324,12 +4377,15 @@ async def get_audit_report(
                 # ⚠️ 只在 `built_here` 时补：调用方自己传 id 的那条路上什么都没丢，
                 # 多说一句只是噪音。
                 if built_here:
-                    raise ToolReason(
+                    told = (
                         f"{e} Your report session `{session_id}` was already created "
                         f"before the charge failed — once topped up, call "
                         f'get_audit_report(session_id="{session_id}") to finish it, '
                         f"rather than asking again (that would build a second session)."
-                    ) from e
+                    )
+                    # CI-1403：余额耗尽要保住类型，外层才会给出升级卡片。
+                    raise (e.retold(told) if isinstance(e, CreditsExhausted)
+                           else ToolReason(told)) from e
                 raise
             relative = billed["url"]
 
@@ -7032,11 +7088,11 @@ _PROMPT_TAIL = (
     title="Compatibility card",
     description="Inline card for check_chemical_compatibility: verdicts, precursor notices, source SDS.",
     mime_type=ui_compat_card.CARD_MIME,
-    meta=ui_compat_card.resource_meta(_CARD_LINK_ORIGIN),
+    meta=ui_compat_card.resource_meta(_CARD_LINK_ORIGIN, _UPGRADE_ORIGIN),
 )
 def compat_card() -> str:
     """CI-1098：`check_chemical_compatibility` 的卡片模板（MCP Apps）。见 `ui_compat_card.py`。"""
-    return ui_compat_card.card_html(_CARD_LINK_ORIGIN)
+    return ui_compat_card.card_html(_CARD_LINK_ORIGIN, _UPGRADE_ORIGIN)
 
 
 @mcp.prompt(
