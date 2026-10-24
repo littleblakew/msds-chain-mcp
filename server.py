@@ -1861,11 +1861,13 @@ def _billed_json(res: "httpx.Response") -> dict:
             detail = {}
         bal = detail.get("balance")
         msg = "Credit balance exhausted."
-        if bal is not None:
-            try:
+        # CI-1396：余额 ≤0 时不报数。soft_cap 的欠款按设计会抵扣次日额度，「Remaining: -2」
+        # 是真数字但对用户只有困惑；去路由由后端的 `message` 讲。
+        try:
+            if bal is not None and float(bal) > 0:
                 msg += f" Remaining: {float(bal):g} credits."
-            except (TypeError, ValueError):
-                pass
+        except (TypeError, ValueError):
+            pass
         # CI-1396：后端的 `message` 按钱包算好了去路（升级链接 + 免费档几点重置），比我们
         # 这句通用话准 ⇒ 有就用它；没有（旧后端）才退回通用话。
         hint = detail.get("message")
