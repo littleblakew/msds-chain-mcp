@@ -172,7 +172,8 @@ button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1
     if (inHost) window.parent.postMessage({jsonrpc: "2.0", method: method, params: params || {}}, "*");
   }
   function safeUrl(u, origin){
-    try { var x = new URL(u); return (/^https?:$/.test(x.protocol) && x.origin === (origin || ALLOWED_ORIGIN)) ? x.href : null; }
+    if (!origin) return null;
+    try { var x = new URL(u); return (/^https?:$/.test(x.protocol) && x.origin === origin) ? x.href : null; }
     catch (e) { return null; }
   }
   function openUrl(url){
@@ -184,7 +185,7 @@ button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1
     var up = safeUrl(p.upgrade_url, UPGRADE_ORIGIN);
     var root = document.getElementById("root");
     root.innerHTML = "<h2>Out of credits</h2>"
-      + '<div class="notice">' + esc(p.message) + "</div>"
+      + (p.message ? '<div class="notice">' + esc(p.message) + "</div>" : "")
       + '<div class="doc">This check was not run, so there is no MSDS Chain result for it.'
       + (up ? '<button data-up="1">Upgrade</button>' : "") + "</div>";
     reportSize();
@@ -240,7 +241,7 @@ button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1
       p.documents.forEach(function(d, i){
         h += '<div class="doc">' + esc(d.chemical) + ": " + esc(d.supplier || "unknown supplier")
           + (d.revision_date ? ", rev " + esc(d.revision_date) : "")
-          + (safeUrl(d.url) ? '<button data-i="' + i + '">Open SDS</button>' : "") + "</div>";
+          + (safeUrl(d.url, ALLOWED_ORIGIN) ? '<button data-i="' + i + '">Open SDS</button>' : "") + "</div>";
       });
       h += more(om.documents, "documents");
     }
@@ -249,7 +250,7 @@ button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1
     reportSize();
     root.querySelectorAll("button[data-i]").forEach(function(b){
       b.addEventListener("click", function(){
-        var url = safeUrl(p.documents[+b.getAttribute("data-i")].url);
+        var url = safeUrl(p.documents[+b.getAttribute("data-i")].url, ALLOWED_ORIGIN);
         if (!url) return;
         openUrl(url);
       });

@@ -71,8 +71,12 @@ API_URL = os.environ.get(
 _CARD_LINK_ORIGIN = ui_compat_card.link_origin(
     os.environ.get("MSDS_SDS_LINK_ORIGIN", "https://api.msdschain.lagentbot.com"))
 # CI-1403：余额耗尽时卡片上「升级」按钮唯一能打开的源；后端给的链接不在这个源上就退回默认页。
-_UPGRADE_URL = os.environ.get("MSDS_UPGRADE_URL", "https://msdschain.lagentbot.com/pricing")
+_UPGRADE_URL = os.environ.get("MSDS_UPGRADE_URL", "").strip() or "https://msdschain.lagentbot.com/pricing"
 _UPGRADE_ORIGIN = ui_compat_card.link_origin(_UPGRADE_URL)
+if not _UPGRADE_ORIGIN.startswith(("https://", "http://")) or _UPGRADE_ORIGIN.endswith("://"):
+    # 配置坏了就退回默认页，别把一个空源注入卡片（卡片那侧对空源是拒绝打开）。
+    _UPGRADE_URL = "https://msdschain.lagentbot.com/pricing"
+    _UPGRADE_ORIGIN = ui_compat_card.link_origin(_UPGRADE_URL)
 LANG = os.environ.get("MSDS_LANG", "en")  # 实测后端只认 en / zh，见下 _BACKEND_LANGS
 
 
@@ -1012,7 +1016,7 @@ def _graceful_timeout(fn):
             return CallToolResult(content=[TextContent(type="text", text=msg)], is_error=True)
         except CreditsExhausted as e:
             # CI-1403：同上，返回而不是抛 —— 抛出去只剩一句文字，卡片通道（`_meta`）带不出去。
-            return _credits_exhausted_result(e)
+            return _credits_exhausted_result(e, fn.__name__)
     return wrapper
 
 
@@ -1768,22 +1772,24 @@ class CreditsExhausted(ToolReason):
         return CreditsExhausted(text, upgrade_url=self.upgrade_url, resets_at=self.resets_at)
 
 
-def _credits_exhausted_result(e: CreditsExhausted) -> CallToolResult:
-    """The errored result for an empty wallet: what happened, the link for the user, and the
-    card payload for hosts that render `check_chemical_compatibility`'s template."""
+# Tools whose definition points at the card template. A card payload on any other tool's
+# result would reach no template, so it is left off.
+_CARD_TOOLS = frozenset({"check_chemical_compatibility"})
+
+
+def _credits_exhausted_result(e: CreditsExhausted, tool_name: str) -> CallToolResult:
+    """The errored result for an empty wallet: what happened and the link for the user, plus
+    the card payload on tools that have the card template. No `structured_content`: that slot
+    holds each tool's own data shape, and an error must not pose as one."""
     url = ui_compat_card.allowed_upgrade_link(e.upgrade_url, _UPGRADE_ORIGIN) or _UPGRADE_URL
     text = (f"{e}\n\nThis check was NOT run: there is no MSDS Chain result for it. "
             f"Give the user this link to upgrade or top up: {url}\n"
             "If you add general knowledge, label it as general knowledge, not as an MSDS Chain result.")
-    structured = {"error": "credits_exhausted", "message": str(e), "upgrade_url": url,
-                  "resets_at": e.resets_at}
-    return CallToolResult(
-        content=[TextContent(type="text", text=text)],
-        structured_content=structured,
-        meta={ui_compat_card.CARD_META_KEY: ui_compat_card.exhausted_payload(
-            str(e), url, e.resets_at, _UPGRADE_ORIGIN)},
-        is_error=True,
-    )
+    meta = None
+    if tool_name in _CARD_TOOLS:
+        meta = {ui_compat_card.CARD_META_KEY: ui_compat_card.exhausted_payload(
+            str(e), url, e.resets_at, _UPGRADE_ORIGIN)}
+    return CallToolResult(content=[TextContent(type="text", text=text)], meta=meta, is_error=True)
 
 
 def _raise_for_status_with_reason(res: "httpx.Response") -> None:

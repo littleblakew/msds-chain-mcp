@@ -173,7 +173,7 @@ def test_link_origin_is_the_public_one_not_the_backend_call_url():
 # One entry per published template URI. Add a line for the new URI; never edit an old one.
 _TEMPLATE_PINS = {
     "ui://msds-chain/compat-card-v2.html": "d10c99c3aaa5db0e",
-    "ui://msds-chain/compat-card-v3.html": "fa5f1951460e5aa5",
+    "ui://msds-chain/compat-card-v3.html": "c951300812010d6f",
 }
 
 

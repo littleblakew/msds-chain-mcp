@@ -10,6 +10,9 @@ upgrade button restricted to one origin.
 | `test_text_says_not_run_and_carries_the_link` | drop the "NOT run" sentence or the link from `_credits_exhausted_result` |
 | `test_off_origin_upgrade_link_is_replaced` | use the backend's `upgrade_url` without `allowed_upgrade_link` |
 | `test_retold_keeps_the_upgrade_target` | re-raise the report path's longer sentence as a plain `ToolReason` |
+| `test_tools_without_the_template_get_text_but_no_card` | attach the card payload regardless of `_CARD_TOOLS` |
+| `test_older_backend_without_link_falls_back_to_the_default_page` | drop the `or _UPGRADE_URL` fallback |
+| `test_card_link_check_fails_closed_without_an_origin` | let `safeUrl` default to the SDS origin when none is given |
 | `test_template_renders_the_exhausted_branch_and_pins_both_origins` | drop `renderExhausted`, or inject only one origin |
 | `test_upgrade_origin_is_allowlisted_for_redirects` | leave the upgrade origin out of `openai/widgetCSP.redirect_domains` |
 
@@ -58,7 +61,8 @@ def test_402_is_returned_as_an_errored_result_with_the_card(monkeypatch):
     assert payload and payload["kind"] == "credits_exhausted", res.meta
     assert payload["upgrade_url"] == "https://msdschain.lagentbot.com/pricing"
     assert payload["resets_at"] == _DETAIL["resets_at"]
-    assert res.structured_content["error"] == "credits_exhausted"
+    # The structuredContent slot holds the tool's own data shape; an error must not pose as one.
+    assert res.structured_content is None
 
 
 def test_card_is_on_the_wire_as_underscore_meta(monkeypatch):
@@ -99,3 +103,25 @@ def test_upgrade_origin_is_allowlisted_for_redirects():
     meta = card.resource_meta(server._CARD_LINK_ORIGIN, server._UPGRADE_ORIGIN)
     assert server._UPGRADE_ORIGIN in meta["openai/widgetCSP"]["redirect_domains"]
     assert server._CARD_LINK_ORIGIN in meta["openai/widgetCSP"]["redirect_domains"]
+
+
+def test_tools_without_the_template_get_text_but_no_card(monkeypatch):
+    async def _empty_wallet(*a, **kw):
+        return server._billed_json(_Resp402(_DETAIL))
+    monkeypatch.setattr(server, "_direct_risk", _empty_wallet)
+    res = asyncio.run(server.get_chemical_risk_warnings(chemicals=["acetone"]))
+    assert res.is_error is True
+    assert "NOT run" in _text(res) and "https://msdschain.lagentbot.com/pricing" in _text(res)
+    assert not (res.meta or {}).get(card.CARD_META_KEY), res.meta
+
+
+def test_older_backend_without_link_falls_back_to_the_default_page(monkeypatch):
+    res = _call(monkeypatch, {"error": "credit_floor", "balance": 0})
+    assert server._UPGRADE_URL in _text(res)
+    assert res.meta[card.CARD_META_KEY]["upgrade_url"] == server._UPGRADE_URL
+
+
+def test_card_link_check_fails_closed_without_an_origin():
+    html = card.card_html("https://a.example", "https://b.example")
+    assert "if (!origin) return null;" in html
+    assert "origin || ALLOWED_ORIGIN" not in html
