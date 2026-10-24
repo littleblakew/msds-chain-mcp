@@ -161,6 +161,19 @@ def test_billed_json_402_is_caller_friendly():
         assert "msdschain.lagentbot.com" in msg
 
 
+def test_billed_json_402_hides_a_non_positive_balance():
+    """CI-1396: a zero or negative balance is not shown (soft_cap debt is repaid from the next
+    day's allowance; the number only confuses). Mutation: drop the `> 0` check → red."""
+    for bal in (0, -2, -2.5):
+        r = _FakeResp(status=402, body={"detail": {"error": "credit_floor", "balance": bal}})
+        try:
+            server._billed_json(r)
+            assert False, "expected RuntimeError"
+        except RuntimeError as e:
+            assert "Remaining" not in str(e), str(e)
+            assert "exhausted" in str(e).lower()
+
+
 def test_usage_line_subscription_included():
     assert "plan" in server._usage_line({"cost": 0, "balance": -1, "reason": "subscription"}).lower()
 
