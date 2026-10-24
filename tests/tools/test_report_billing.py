@@ -129,10 +129,10 @@ def test_exhausted_balance_gets_the_actionable_message(wired):
     """
     wired(_Resp({"detail": {"balance": 3}}, status=402))
 
-    with pytest.raises(RuntimeError) as ei:
-        asyncio.run(server.get_audit_report("DEMO-123"))
-
-    msg = str(ei.value)
+    # CI-1403：余额耗尽是**返回** is_error 结果（带升级卡片），不再抛出。
+    res = asyncio.run(server.get_audit_report("DEMO-123"))
+    assert res.is_error is True, res
+    msg = "\n".join(getattr(b, "text", "") or "" for b in res.content)
     assert "Credit balance exhausted" in msg, msg
     assert "Remaining: 3 credits" in msg, msg
     assert "Top up" in msg, msg

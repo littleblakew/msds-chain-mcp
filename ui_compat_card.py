@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 # Any change to the HTML must ship under a new URI: hosts cache the template by URI, so an
 # edited template under the old one keeps serving the stale copy. A pinned hash in
 # tests/contract/test_compat_card.py goes red when the template changes and the URI does not.
-CARD_URI = "ui://msds-chain/compat-card-v2.html"
+CARD_URI = "ui://msds-chain/compat-card-v3.html"
 CARD_MIME = "text/html;profile=mcp-app"
 # Signed SDS links (`sds_document_url`) are issued on the backend's public origin, which the
 # caller derives from its API base URL; it is the only target the card opens.
@@ -37,13 +37,14 @@ def tool_meta() -> dict:
     return {"ui": {"resourceUri": CARD_URI}, "openai/outputTemplate": CARD_URI}
 
 
-def resource_meta(sds_link_origin: str) -> dict:
-    """`_meta` for the template resource. The card fetches nothing; its only outbound action
-    is opening a signed SDS link, which ChatGPT allowlists via `openai/widgetCSP`."""
+def resource_meta(sds_link_origin: str, upgrade_origin: str) -> dict:
+    """`_meta` for the template resource. The card fetches nothing; its only outbound actions
+    are opening a signed SDS link and, when the wallet is empty, the upgrade page. ChatGPT
+    allowlists both via `openai/widgetCSP`."""
     return {
         "ui": {"csp": {"connectDomains": [], "resourceDomains": []}},
         "openai/widgetCSP": {"connect_domains": [], "resource_domains": [],
-                             "redirect_domains": [sds_link_origin]},
+                             "redirect_domains": [sds_link_origin, upgrade_origin]},
         "openai/widgetDescription": "Compatibility verdicts with the source SDS for each chemical.",
     }
 
@@ -69,6 +70,23 @@ def _allowed_link(url, allowed_origin: str) -> str | None:
     if parts.scheme not in ("http", "https") or link_origin(url) != allowed_origin:
         return None
     return url
+
+
+def allowed_upgrade_link(url, upgrade_origin: str) -> str | None:
+    """The upgrade link if it is on the one origin the card may open for it, else None."""
+    return _allowed_link(url, upgrade_origin)
+
+
+def exhausted_payload(message: str, upgrade_url: str | None, resets_at: str | None,
+                      upgrade_origin: str) -> dict:
+    """Card payload for an empty wallet: the backend's sentence and an upgrade button. The
+    model may drop the link from its reply; this channel does not pass through the model."""
+    return {
+        "kind": "credits_exhausted",
+        "message": message if isinstance(message, str) else "",
+        "upgrade_url": _allowed_link(upgrade_url, upgrade_origin),
+        "resets_at": resets_at if isinstance(resets_at, str) else None,
+    }
 
 
 def card_payload(data: dict, allowed_origin: str) -> dict:
@@ -117,7 +135,8 @@ def card_payload(data: dict, allowed_origin: str) -> dict:
 
 
 # Plain HTML + one inline script: no build step, no external assets, nothing fetched.
-# `__ALLOWED_ORIGIN__` is replaced by `card_html()` with the one origin links may open on.
+# `__ALLOWED_ORIGIN__` / `__UPGRADE_ORIGIN__` are replaced by `card_html()`: SDS links may open
+# only on the first, the upgrade button only on the second.
 _CARD_HTML_TEMPLATE = """<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
@@ -140,6 +159,7 @@ button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1
 (function(){
   var KEY = "msdschain/compat_card";
   var ALLOWED_ORIGIN = __ALLOWED_ORIGIN__;
+  var UPGRADE_ORIGIN = __UPGRADE_ORIGIN__;
   var inHost = window.parent && window.parent !== window;
   var nextId = 1, pending = {};
   function esc(s){ return String(s == null ? "" : s).replace(/[&<>"]/g, function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c];}); }
@@ -151,9 +171,25 @@ button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1
   function notify(method, params){
     if (inHost) window.parent.postMessage({jsonrpc: "2.0", method: method, params: params || {}}, "*");
   }
-  function safeUrl(u){
-    try { var x = new URL(u); return (/^https?:$/.test(x.protocol) && x.origin === ALLOWED_ORIGIN) ? x.href : null; }
+  function safeUrl(u, origin){
+    try { var x = new URL(u); return (/^https?:$/.test(x.protocol) && x.origin === (origin || ALLOWED_ORIGIN)) ? x.href : null; }
     catch (e) { return null; }
+  }
+  function openUrl(url){
+    if (window.openai && window.openai.openExternal) window.openai.openExternal({href: url});
+    else if (inHost) rpc("ui/open-link", {url: url});
+    else window.open(url, "_blank", "noopener");
+  }
+  function renderExhausted(p){
+    var up = safeUrl(p.upgrade_url, UPGRADE_ORIGIN);
+    var root = document.getElementById("root");
+    root.innerHTML = "<h2>Out of credits</h2>"
+      + '<div class="notice">' + esc(p.message) + "</div>"
+      + '<div class="doc">This check was not run, so there is no MSDS Chain result for it.'
+      + (up ? '<button data-up="1">Upgrade</button>' : "") + "</div>";
+    reportSize();
+    var b = root.querySelector("button[data-up]");
+    if (b) b.addEventListener("click", function(){ openUrl(up); });
   }
   function findPayload(meta){
     if (!meta) return null;
@@ -179,6 +215,7 @@ button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1
   function more(n, what){ return n > 0 ? '<div class="more">+ ' + esc(n) + " more " + what + " not shown here; see the full answer.</div>" : ""; }
   function render(p){
     if (!p) return;
+    if (p.kind === "credits_exhausted") return renderExhausted(p);
     var om = p.omitted || {};
     var h = "";
     if (p.pairs && p.pairs.length){
@@ -214,9 +251,7 @@ button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1
       b.addEventListener("click", function(){
         var url = safeUrl(p.documents[+b.getAttribute("data-i")].url);
         if (!url) return;
-        if (window.openai && window.openai.openExternal) window.openai.openExternal({href: url});
-        else if (inHost) rpc("ui/open-link", {url: url});
-        else window.open(url, "_blank", "noopener");
+        openUrl(url);
       });
     });
   }
@@ -246,5 +281,6 @@ button{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1
 """
 
 
-def card_html(allowed_origin: str) -> str:
-    return _CARD_HTML_TEMPLATE.replace("__ALLOWED_ORIGIN__", json.dumps(allowed_origin))
+def card_html(allowed_origin: str, upgrade_origin: str) -> str:
+    return (_CARD_HTML_TEMPLATE.replace("__ALLOWED_ORIGIN__", json.dumps(allowed_origin))
+            .replace("__UPGRADE_ORIGIN__", json.dumps(upgrade_origin)))
