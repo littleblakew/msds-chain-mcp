@@ -3569,7 +3569,9 @@ async def check_regulatory_compliance(
                 # （`direct_compliance`: `{chemical, cas: None, region_results: [],
                 # summary_level: "unknown", unresolved: True}`），没有任何原因。
                 # 把它渲染成 "Not found in database" 是同一句我们无权说的话。
-                lines.append(f"### {chemical}\n- **Status:** {_unresolved_reason_note(data)}\n")
+                lines.append(f"### {chemical}\n- **Status:** {_unresolved_reason_note(data)}")
+                lines.extend(_identity_candidate_lines(data.get("unresolved_detail")))
+                lines.append("")
                 continue
             lines.append(f"### {data.get('chemical', chemical)} (CAS: {data.get('cas', 'N/A')})")
             lines.append(f"- **Overall compliance level:** {data.get('summary_level', 'unknown')}")
@@ -3909,6 +3911,7 @@ async def get_emergency_response(
             # 缺席时仍回退到通用句 —— 见 `_unresolved_reason_note` 的 docstring。
             lines.append(f"\n**Note:** {_unresolved_reason_note(data, lang)} "
                          "Showing general guidance only.")
+            lines.extend(_identity_candidate_lines(data.get("unresolved_detail")))
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
@@ -4486,7 +4489,41 @@ def _unresolved_block(data: dict, *, trailing_newline: bool = False) -> list[str
         # sentence dropped into an English answer reads as a rendering bug.
         why = (d or {}).get("reason_en")
         lines.append(f"- **{name}**" + (f" — {why}" if why else ""))
+        lines.extend(_identity_candidate_lines(d, indent="  "))
     return lines + ([""] if trailing_newline else [])
+
+
+def _identity_candidate_lines(detail: dict | None, *, indent: str = "") -> list[str]:
+    """Render `unresolved_detail.identity_confirmation`: the names the backend would
+    ask the user to choose between.
+
+    Without this the text surface says "please confirm which one you mean" and then
+    offers nothing to choose from — the candidates reach structuredContent only, and
+    the model reads the text.
+
+    🔴 `for_confirmation_only` means exactly that: these go to the USER as a question,
+    never into the answer as the resolved chemical. The heading says so in words,
+    because a bulleted CAS list reads as a result otherwise.
+    🔴 Order is the order the backend considered them, not a ranking — do not mark
+    the first one as best, and do not sort.
+    Key absent ⇒ nothing to ask about; render nothing rather than invent a choice.
+    """
+    conf = detail.get("identity_confirmation") if isinstance(detail, dict) else None
+    cands = [c for c in ((conf.get("candidates") if isinstance(conf, dict) else None) or [])
+             if isinstance(c, dict) and (c.get("cas") or c.get("name"))]
+    if not cands:
+        return []
+    out = [f"{indent}Possible matches (unranked) — ask the user which one they mean; "
+           "do NOT treat any of these as the identified chemical:"]
+    for c in cands:
+        label = c.get("name") or c.get("cas")
+        if c.get("cas") and c.get("name"):
+            label += f" (CAS {c['cas']})"
+        if c.get("matched_name"):
+            label += f", matched as \"{c['matched_name']}\""
+        why = c.get("why_not_auto")
+        out.append(f"{indent}- {label}" + (f" — not auto-selected: `{why}`" if why else ""))
+    return out
 
 
 def _rejected_products_block(data: dict) -> list[str]:
