@@ -82,3 +82,58 @@ def test_malformed_detail_does_not_break_the_whole_answer():
     # 非 dict 全被滤掉 ⇒ 退回旧的单行形状。名字**必须还在**（少列一个未解析项，
     # 读起来就是「那个我们查到了」）；退回旧形状本身是对的，不是缺陷。
     assert "a" in out and out.startswith("**Unresolved:**")
+
+
+def _confirmable_detail(query: str) -> dict:
+    """A name-split refusal that carries two candidates to put to the user."""
+    return {
+        "query": query, "code": "no_sds_name_split",
+        "reason_en": f"{query}: please confirm which substance you mean.",
+        "identity_confirmation": {
+            "reason": "no_sds_name_split",
+            "candidates": [
+                {"cas": "67-56-1", "name": "Methanol", "matched_name": None,
+                 "name_zh": None, "why_not_auto": "exact_name_no_sds",
+                 "for_confirmation_only": True},
+                {"cas": "64-17-5", "name": "Ethanol", "matched_name": "spirit",
+                 "name_zh": None, "why_not_auto": "not_corroborated",
+                 "for_confirmation_only": True},
+            ],
+        },
+    }
+
+
+def test_identity_candidates_are_rendered_as_a_question_not_an_answer():
+    """后端说「请确认是哪一个」时，文本面必须把可选的候选念出来——否则模型只看到一句
+    没有选项的确认请求。候选只能拿去问用户：标题要明说，且不排序、不标「最佳」。"""
+    data = {"unresolved": ["alcohol"], "unresolved_detail": [_confirmable_detail("alcohol")]}
+    out = "\n".join(server._unresolved_block(data))
+
+    assert "Methanol (CAS 67-56-1)" in out and "Ethanol (CAS 64-17-5)" in out
+    assert "ask the user" in out and "do NOT treat" in out
+    assert out.index("67-56-1") < out.index("64-17-5"), "候选顺序是后端考虑的顺序，别重排"
+    assert "`not_corroborated`" in out
+    assert 'matched as "spirit"' in out
+
+
+def test_no_confirmation_key_means_no_candidate_lines():
+    """键缺席＝没有可问的候选（真缺口）。渲染层不许为它造一个「请选择」。"""
+    data = {"unresolved": ["xyz"], "unresolved_detail": [
+        {"query": "xyz", "code": "not_in_database", "reason_en": "xyz: no record found."}]}
+    out = "\n".join(server._unresolved_block(data))
+    assert "Possible matches" not in out
+
+
+def test_malformed_confirmation_payload_does_not_break_rendering():
+    for conf in (None, "x", {"candidates": None}, {"candidates": ["x", None, {}]}):
+        d = {"query": "a", "reason_en": "a: no record.", "identity_confirmation": conf}
+        out = "\n".join(server._unresolved_block({"unresolved": ["a"], "unresolved_detail": [d]}))
+        assert "- **a**" in out and "Possible matches" not in out
+
+
+def test_single_substance_detail_dict_also_renders_candidates():
+    """单物质端点（compliance / emergency）的 `unresolved_detail` 是裸 dict，同一个 helper。"""
+    lines = server._identity_candidate_lines(_confirmable_detail("alcohol"))
+    assert lines and "ask the user" in lines[0]
+    assert server._identity_candidate_lines(None) == []
+    assert server._identity_candidate_lines({"query": "x"}) == []
