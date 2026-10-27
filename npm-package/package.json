@@ -2,7 +2,7 @@
   "name": "msds-chain-mcp",
   "version": "1.5.11",
   "mcpName": "io.github.littleblakew/msds-chain",
-  "description": "Chemical safety MCP server for AI-assisted lab work: 24 tools for compatibility, hazards, PPE, storage, waste disposal, exposure limits, transport, regulatory lists, first aid, SDS lookup and version diff, PDF upload, and signed audit reports.",
+  "description": "Chemical safety MCP server for AI-assisted lab work: 25 tools for compatibility, hazards, PPE, storage, waste disposal, exposure limits, transport, regulatory lists, first aid, SDS lookup and version diff, PDF upload, and signed audit reports.",
   "keywords": [
     "mcp",
     "model-context-protocol",

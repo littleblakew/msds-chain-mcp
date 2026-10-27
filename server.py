@@ -2788,6 +2788,306 @@ def _format_sds_draft(data: dict, lang: str | None = None) -> str:
     return "\n".join(lines).rstrip()
 
 
+_SDS_QUALITY_STRINGS = {'en': {'title': 'SDS quality check',
+        'revision': 'revision',
+        'revision_unknown': 'revision date not found',
+        'uploaded': 'uploaded',
+        'contradiction': 'Contradiction',
+        'missing': 'Missing',
+        'outdated': 'Outdated',
+        'format': 'Format',
+        'evidence': 'Original text',
+        'no_issues': 'No issues found by these checks. This does not mean the SDS is compliant.',
+        'skipped': 'Not checked (an input could not be read from this SDS)',
+        'newer': 'A newer revision of this SDS is in our library: {date} ({supplier}).',
+        'summary': '{n} SDS checked · {c} with a contradiction · {i} with any issue',
+        'truncated': 'This session holds more uploads than one call checks: only the most recent '
+                     'ones are above. Check older ones one at a time with `msds_id`.',
+        'empty': 'No uploaded SDS in this session. Upload one with `upload_msds_pdf`, then check '
+                 'it here.',
+        'not_found': 'That SDS was not found in this session. Pass the `session_id` and `msds_id` '
+                     'that `upload_msds_pdf` returned (only SDSs you uploaded can be checked).'},
+ 'zh': {'title': 'SDS 质量检查',
+        'revision': '修订',
+        'revision_unknown': '未找到修订日期',
+        'uploaded': '上传于',
+        'contradiction': '矛盾',
+        'missing': '缺项',
+        'outdated': '过期',
+        'format': '格式',
+        'evidence': '原文',
+        'no_issues': '这些检查没有发现问题。这不代表这份 SDS 合规。',
+        'skipped': '未检查（这份 SDS 里读不到所需的内容）',
+        'newer': '我们的库里有这份 SDS 的更新版本：{date}（{supplier}）。',
+        'summary': '检查了 {n} 份 SDS · {c} 份有矛盾 · {i} 份有问题',
+        'truncated': '这个会话里的上传超过一次调用能检查的数量：上面只有最近的那些。更早的请用 `msds_id` 逐份检查。',
+        'empty': '这个会话里没有上传的 SDS。先用 `upload_msds_pdf` 上传，再在这里检查。',
+        'not_found': '这个会话里没有这份 SDS。请传入 `upload_msds_pdf` 返回的 `session_id` 和 `msds_id`（只能检查你自己上传的 '
+                     'SDS）。'},
+ 'zh-TW': {'title': 'SDS 品質檢查',
+           'revision': '修訂',
+           'revision_unknown': '未找到修訂日期',
+           'uploaded': '上傳於',
+           'contradiction': '矛盾',
+           'missing': '缺項',
+           'outdated': '過期',
+           'format': '格式',
+           'evidence': '原文',
+           'no_issues': '這些檢查沒有發現問題。這不代表這份 SDS 合規。',
+           'skipped': '未檢查（這份 SDS 裡讀不到所需的內容）',
+           'newer': '我們的庫裡有這份 SDS 的更新版本：{date}（{supplier}）。',
+           'summary': '檢查了 {n} 份 SDS · {c} 份有矛盾 · {i} 份有問題',
+           'truncated': '這個會話裡的上傳超過一次呼叫能檢查的數量：上面只有最近的那些。更早的請用 `msds_id` 逐份檢查。',
+           'empty': '這個會話裡沒有上傳的 SDS。先用 `upload_msds_pdf` 上傳，再在這裡檢查。',
+           'not_found': '這個會話裡沒有這份 SDS。請傳入 `upload_msds_pdf` 返回的 `session_id` 和 '
+                        '`msds_id`（只能檢查你自己上傳的 SDS）。'},
+ 'ja': {'title': 'SDS 品質チェック',
+        'revision': '改訂',
+        'revision_unknown': '改訂日が見つかりません',
+        'uploaded': 'アップロード',
+        'contradiction': '矛盾',
+        'missing': '欠落',
+        'outdated': '古い版',
+        'format': '様式',
+        'evidence': '原文',
+        'no_issues': 'これらのチェックでは問題は見つかりませんでした。SDS が適合していることを意味するものではありません。',
+        'skipped': '未チェック（この SDS から必要な内容を読み取れませんでした）',
+        'newer': 'この SDS の新しい版が当社のライブラリにあります：{date}（{supplier}）。',
+        'summary': 'SDS {n} 件をチェック · 矛盾あり {c} 件 · 指摘あり {i} 件',
+        'truncated': 'このセッションのアップロード数が 1 回でチェックできる上限を超えています。上は最新分のみです。古いものは `msds_id` を指定して 1 '
+                     '件ずつチェックしてください。',
+        'empty': 'このセッションにはアップロードされた SDS がありません。`upload_msds_pdf` でアップロードしてから、ここでチェックしてください。',
+        'not_found': 'このセッションにその SDS はありません。`upload_msds_pdf` が返した `session_id` と `msds_id` '
+                     'を渡してください（チェックできるのは自分でアップロードした SDS のみです）。'},
+ 'de': {'title': 'SDB-Qualitätsprüfung',
+        'revision': 'Revision',
+        'revision_unknown': 'kein Revisionsdatum gefunden',
+        'uploaded': 'hochgeladen',
+        'contradiction': 'Widerspruch',
+        'missing': 'Fehlt',
+        'outdated': 'Veraltet',
+        'format': 'Form',
+        'evidence': 'Originaltext',
+        'no_issues': 'Diese Prüfungen haben nichts gefunden. Das heißt nicht, dass das SDB konform '
+                     'ist.',
+        'skipped': 'Nicht geprüft (eine Angabe war in diesem SDB nicht lesbar)',
+        'newer': 'In unserer Bibliothek liegt eine neuere Revision dieses SDB: {date} '
+                 '({supplier}).',
+        'summary': '{n} SDB geprüft · {c} mit Widerspruch · {i} mit Befund',
+        'truncated': 'Diese Sitzung enthält mehr Uploads, als ein Aufruf prüft: oben stehen nur '
+                     'die neuesten. Ältere einzeln mit `msds_id` prüfen.',
+        'empty': 'In dieser Sitzung wurde kein SDB hochgeladen. Erst mit `upload_msds_pdf` '
+                 'hochladen, dann hier prüfen.',
+        'not_found': 'Dieses SDB wurde in dieser Sitzung nicht gefunden. Übergeben Sie '
+                     '`session_id` und `msds_id` aus der Antwort von `upload_msds_pdf` (nur selbst '
+                     'hochgeladene SDB können geprüft werden).'},
+ 'id': {'title': 'Pemeriksaan kualitas SDS',
+        'revision': 'revisi',
+        'revision_unknown': 'tanggal revisi tidak ditemukan',
+        'uploaded': 'diunggah',
+        'contradiction': 'Kontradiksi',
+        'missing': 'Tidak ada',
+        'outdated': 'Kedaluwarsa',
+        'format': 'Format',
+        'evidence': 'Teks asli',
+        'no_issues': 'Pemeriksaan ini tidak menemukan masalah. Ini tidak berarti SDS tersebut '
+                     'patuh.',
+        'skipped': 'Tidak diperiksa (ada isi yang tidak dapat dibaca dari SDS ini)',
+        'newer': 'Revisi yang lebih baru dari SDS ini ada di pustaka kami: {date} ({supplier}).',
+        'summary': '{n} SDS diperiksa · {c} dengan kontradiksi · {i} dengan temuan',
+        'truncated': 'Sesi ini berisi lebih banyak unggahan daripada yang diperiksa satu '
+                     'panggilan: di atas hanya yang terbaru. Periksa yang lebih lama satu per satu '
+                     'dengan `msds_id`.',
+        'empty': 'Tidak ada SDS yang diunggah di sesi ini. Unggah dengan `upload_msds_pdf`, lalu '
+                 'periksa di sini.',
+        'not_found': 'SDS itu tidak ditemukan di sesi ini. Berikan `session_id` dan `msds_id` yang '
+                     'dikembalikan `upload_msds_pdf` (hanya SDS yang Anda unggah sendiri yang '
+                     'dapat diperiksa).'},
+ 'ko': {'title': 'SDS 품질 점검',
+        'revision': '개정',
+        'revision_unknown': '개정일을 찾지 못함',
+        'uploaded': '업로드',
+        'contradiction': '모순',
+        'missing': '누락',
+        'outdated': '오래됨',
+        'format': '형식',
+        'evidence': '원문',
+        'no_issues': '이 점검에서는 문제가 발견되지 않았습니다. SDS가 적합하다는 뜻은 아닙니다.',
+        'skipped': '점검 안 함 (이 SDS에서 필요한 내용을 읽지 못함)',
+        'newer': '이 SDS의 최신 개정본이 라이브러리에 있습니다: {date} ({supplier}).',
+        'summary': 'SDS {n}건 점검 · 모순 {c}건 · 지적 {i}건',
+        'truncated': '이 세션의 업로드가 한 번에 점검할 수 있는 수를 넘습니다. 위에는 최신 것만 있습니다. 이전 것은 `msds_id`로 한 건씩 '
+                     '점검하세요.',
+        'empty': '이 세션에는 업로드된 SDS가 없습니다. `upload_msds_pdf`로 업로드한 뒤 여기서 점검하세요.',
+        'not_found': '이 세션에서 해당 SDS를 찾지 못했습니다. `upload_msds_pdf`가 반환한 `session_id`와 `msds_id`를 '
+                     '전달하세요 (직접 업로드한 SDS만 점검할 수 있습니다).'},
+ 'ru': {'title': 'Проверка качества паспорта безопасности',
+        'revision': 'редакция',
+        'revision_unknown': 'дата редакции не найдена',
+        'uploaded': 'загружен',
+        'contradiction': 'Противоречие',
+        'missing': 'Отсутствует',
+        'outdated': 'Устарело',
+        'format': 'Форма',
+        'evidence': 'Исходный текст',
+        'no_issues': 'Эти проверки ничего не нашли. Это не означает, что паспорт соответствует '
+                     'требованиям.',
+        'skipped': 'Не проверено (не удалось прочитать нужные данные из паспорта)',
+        'newer': 'В нашей библиотеке есть более новая редакция этого паспорта: {date} '
+                 '({supplier}).',
+        'summary': 'Проверено паспортов: {n} · с противоречием: {c} · с замечаниями: {i}',
+        'truncated': 'В этой сессии больше загрузок, чем проверяет один вызов: выше только '
+                     'последние. Более ранние проверяйте по одному через `msds_id`.',
+        'empty': 'В этой сессии нет загруженных паспортов. Загрузите через `upload_msds_pdf`, '
+                 'затем проверьте здесь.',
+        'not_found': 'Этот паспорт не найден в данной сессии. Передайте `session_id` и `msds_id`, '
+                     'которые вернул `upload_msds_pdf` (проверить можно только паспорта, '
+                     'загруженные вами).'},
+ 'fr': {'title': 'Contrôle qualité de la FDS',
+        'revision': 'révision',
+        'revision_unknown': 'date de révision introuvable',
+        'uploaded': 'téléversée',
+        'contradiction': 'Contradiction',
+        'missing': 'Manquant',
+        'outdated': 'Obsolète',
+        'format': 'Forme',
+        'evidence': 'Texte original',
+        'no_issues': "Ces contrôles n'ont rien trouvé. Cela ne signifie pas que la FDS est "
+                     'conforme.',
+        'skipped': "Non contrôlé (une donnée n'a pas pu être lue dans cette FDS)",
+        'newer': 'Une révision plus récente de cette FDS figure dans notre bibliothèque : {date} '
+                 '({supplier}).',
+        'summary': '{n} FDS contrôlées · {c} avec contradiction · {i} avec constat',
+        'truncated': "Cette session contient plus de téléversements qu'un appel n'en contrôle : "
+                     'seuls les plus récents figurent ci-dessus. Contrôlez les plus anciens un par '
+                     'un avec `msds_id`.',
+        'empty': 'Aucune FDS téléversée dans cette session. Téléversez-en une avec '
+                 '`upload_msds_pdf`, puis contrôlez-la ici.',
+        'not_found': 'Cette FDS est introuvable dans cette session. Passez le `session_id` et le '
+                     '`msds_id` renvoyés par `upload_msds_pdf` (seules les FDS que vous avez '
+                     'téléversées peuvent être contrôlées).'},
+ 'es': {'title': 'Control de calidad de la FDS',
+        'revision': 'revisión',
+        'revision_unknown': 'fecha de revisión no encontrada',
+        'uploaded': 'subida',
+        'contradiction': 'Contradicción',
+        'missing': 'Falta',
+        'outdated': 'Desactualizada',
+        'format': 'Formato',
+        'evidence': 'Texto original',
+        'no_issues': 'Estas comprobaciones no encontraron nada. Eso no significa que la FDS sea '
+                     'conforme.',
+        'skipped': 'No comprobado (no se pudo leer un dato de esta FDS)',
+        'newer': 'En nuestra biblioteca hay una revisión más reciente de esta FDS: {date} '
+                 '({supplier}).',
+        'summary': '{n} FDS comprobadas · {c} con contradicción · {i} con hallazgos',
+        'truncated': 'Esta sesión tiene más subidas de las que comprueba una llamada: arriba solo '
+                     'están las más recientes. Compruebe las anteriores una a una con `msds_id`.',
+        'empty': 'No hay ninguna FDS subida en esta sesión. Súbala con `upload_msds_pdf` y '
+                 'compruébela aquí.',
+        'not_found': 'Esa FDS no está en esta sesión. Pase el `session_id` y el `msds_id` que '
+                     'devolvió `upload_msds_pdf` (solo se pueden comprobar las FDS que usted '
+                     'subió).'}}
+
+
+def _format_sds_quality(data: dict, lang: str | None = None) -> str:
+    """Render `/api/v2/validate-sds` and `/validate-sds/session` (CI-1444). Pure function.
+
+    🔴 Three rendering red lines — the backend guarantees the data; a template that
+    drops any of them turns a check into a false assurance:
+      ① `notice` goes first and verbatim: no issue found ≠ compliant.
+      ② every issue carries its `evidence` lines, verbatim: the finding is a pointer
+         into the user's own document, and without the quote it cannot be checked.
+      ③ `checks_skipped` is said out loud: a check that could not read its input
+         found nothing because it did not look, which is not the same as "passed".
+    Issue messages are already localised by the backend; this side only adds labels.
+    """
+    lg = _normalize_catalog_lang(lang or LANG)
+    s = _SDS_QUALITY_STRINGS.get(lg, _SDS_QUALITY_STRINGS["en"])
+
+    def flat(v) -> str:
+        # Document text (names, quoted lines) is the uploader's: one line, capped,
+        # so a crafted SDS cannot forge a heading or a verdict line.
+        return " ".join(str(v).split())[:300]
+
+    def one(doc_result: dict) -> list[str]:
+        d = doc_result.get("document") or {}
+        head = flat(d.get("chemical_name") or "?")
+        if d.get("supplier"):
+            head += f" — {flat(d['supplier'])}"
+        rev = d.get("revision_date")
+        head += f" ({s['revision']} {flat(rev)})" if rev else f" ({s['revision_unknown']})"
+        out = [f"### {head}", f"`msds_id`: {d.get('msds_id')}"]
+        issues = doc_result.get("issues") or []
+        if not issues:
+            out.append(f"- {s['no_issues']}")
+        for i in issues:
+            cat = s.get(i.get("category") or "", flat(i.get("category") or "?"))
+            secs = " / ".join(f"§{n}" for n in i.get("sections") or [])
+            out.append(f"- **[{cat}]**{' ' + secs if secs else ''} {flat(i.get('message') or '')}")
+            for line in i.get("evidence") or []:
+                out.append(f"  > {s['evidence']}: \"{flat(line)}\"")
+        if newer := doc_result.get("newer_version"):
+            out.append("- " + s["newer"].format(date=flat(newer.get("revision_date") or "?"),
+                                                supplier=flat(newer.get("supplier") or "?")))
+        if skipped := doc_result.get("checks_skipped"):
+            # Rule ids (`check_signal_word`), shown as words; the model can relay them.
+            names = ", ".join(flat(n).removeprefix("check_").replace("_", " ") for n in skipped)
+            out.append(f"- {s['skipped']}: {names}")
+        return out
+
+    lines = [f"**{s['title']}**\n"]
+    if data.get("notice"):
+        lines.append(f"> {data['notice']}\n")
+    if "documents" in data:
+        docs = data.get("documents") or []
+        if not docs:
+            lines.append(s["empty"])
+            return "\n".join(lines)
+        summ = data.get("summary") or {}
+        lines.append(s["summary"].format(n=summ.get("documents", len(docs)),
+                                         c=summ.get("with_contradictions", 0),
+                                         i=summ.get("with_issues", 0)) + "\n")
+        for doc_result in docs:
+            lines.extend(one(doc_result))
+            lines.append("")
+        if data.get("truncated"):
+            lines.append(f"⚠️ {s['truncated']}")
+    else:
+        lines.extend(one(data))
+    return "\n".join(lines).rstrip()
+
+
+async def _direct_validate_sds(session_id: str, msds_id: int | None,
+                               lang: str | None = None) -> dict | None:
+    """POST /api/v2/validate-sds (one upload) or /validate-sds/session (all of them).
+
+    Returns None on 403/404: the backend answers "not yours" and "does not exist" the
+    same way, and so do we. The session form checks up to 50 documents in one call,
+    so it sits on the multi-component budget.
+    """
+    # Two literal `post(f"{API_URL}/api/v2/...", json={...})` calls rather than one
+    # URL in a variable: the CI-822 backend-contract snapshot only sees endpoints
+    # (and the parameters sent) when they are written this way.
+    if msds_id is None:
+        async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
+            res = await client.post(
+                f"{API_URL}/api/v2/validate-sds/session",
+                json={"session_id": session_id, "jurisdiction": "US", "lang": _normalize_catalog_lang(lang or LANG)},
+                headers=_headers())
+    else:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            res = await client.post(
+                f"{API_URL}/api/v2/validate-sds",
+                json={"session_id": session_id, "msds_id": msds_id,
+                      "jurisdiction": "US", "lang": _normalize_catalog_lang(lang or LANG)},
+                headers=_headers())
+    # 403 too: a session that is not the caller's is the same answer to them.
+    if res.status_code in (403, 404):
+        return None
+    return _billed_json(res)
+
+
 async def _direct_online_search(chemical_name: str = "", cas_number: str = "") -> dict:
     """POST /api/v2/online-search — stateless PubChem GHS fallback (SE-19), unmetered."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -6481,6 +6781,10 @@ async def upload_msds_pdf(
 
             status_icon = {"success": "✅", "warning": "⚠️", "failed": "❌"}.get(status, "❓")
             lines.append(f"{status_icon} **{chem}** (CAS: {cas})")
+            # CI-1444: the stored record's id — the handle `validate_sds` needs. Absent
+            # when nothing was stored (failed parse, a chemical list rather than an SDS).
+            if r.get("msds_id") is not None:
+                lines.append(f"   msds_id: {r['msds_id']}")
             lines.append(f"   Risk level: {risk}")
 
             if fields:
@@ -6512,6 +6816,12 @@ async def upload_msds_pdf(
             f"{summary.get('warning', 0)} warning, "
             f"{summary.get('failed', 0)} failed"
         )
+        if any(isinstance(r, dict) and r.get("msds_id") is not None for r in results):
+            lines.append(
+                f"\nTo check an uploaded SDS for contradictions, gaps, age and US OSHA "
+                f"format, call `validate_sds(session_id=\"{sid}\", msds_id=<msds_id above>)`, "
+                f"or omit `msds_id` to check every SDS in this session."
+            )
         lines.append(
             f"\nCall `create_audit_session(\"{experiment_name}\", [...])` or "
             f"`get_audit_report(\"{sid}\")` to generate a signed PDF report."
@@ -6525,6 +6835,7 @@ async def upload_msds_pdf(
                     "status": r.get("status"),
                     "chemical_name": r.get("chemical_name"),
                     "cas_number": r.get("cas_number"),
+                    "msds_id": r.get("msds_id"),
                     "risk_level": r.get("risk_level"),
                     "missing": r.get("missing") or [],
                     "fail_reason": r.get("fail_reason"),
@@ -6959,6 +7270,69 @@ async def draft_sds_sections(
         _log_intent("draft_sds_sections", names,
                     _intent_params({"ingredients": names,
                                     "sections": sections, "region": region}, intent),
+                    success=success, error_message=error_msg)
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Validate SDS", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@_graceful_timeout
+@_reported
+async def validate_sds(
+    session_id: Annotated[str, Field(
+        description="The session the SDS was uploaded into: the `session_id` that "
+                    "`upload_msds_pdf` returned.")],
+    msds_id: Annotated[int | None, Field(
+        description="The uploaded SDS to check: the `msds_id` printed next to it by "
+                    "`upload_msds_pdf`. OMIT IT to check every SDS uploaded in the session.",
+        ge=1, le=2**31 - 1)] = None,
+    lang: Lang = None,
+    intent: Intent = None,
+) -> CallToolResult:
+    """
+    Check an SDS the user uploaded for quality problems: contradictions between its
+    own sections (e.g. Section 2 hazards vs Section 3 composition vs Section 14
+    transport), gaps, age, and US OSHA HazCom format rules. No LLM: rule-based, and
+    every finding quotes the lines of the SDS it is based on.
+
+    Use it after `upload_msds_pdf`, when the user wants to know whether a supplier's
+    SDS (or their own) is consistent and up to date. It checks only SDSs uploaded by
+    this user, not records from our library. Jurisdiction: US OSHA HazCom only.
+
+    How to present (do not violate):
+    - Show the `notice` first, verbatim. "No issues" means these checks found
+      nothing; it is NOT a statement that the SDS is compliant. Never say "compliant".
+    - Give every issue with its section(s) and its quoted original text, so the user
+      can find it in their document.
+    - Say which checks were skipped (`checks_skipped`): those could not read their
+      input from this SDS, so they did not look.
+    - It does not rewrite or correct the SDS; it only points at the problems.
+    """
+    error_msg = None
+    success = True
+    try:
+        # Same rule as upload_msds_pdf: it only reads the caller's own uploads, so
+        # there is nothing to answer without knowing who the caller is.
+        if err := _require_api_key():
+            success, error_msg = False, "no_credential"
+            return _text_result(
+                f"Authentication required: {err}\n\n"
+                "Get a free API key at https://msdschain.lagentbot.com (API Keys tab) "
+                "and set it via MSDS_API_KEY or gateway authentication."
+            )
+        data = await _direct_validate_sds(session_id, msds_id, lang=lang)
+        if data is None:
+            success, error_msg = False, "not_found"
+            lg = _normalize_catalog_lang(lang or LANG)
+            return _text_result(_SDS_QUALITY_STRINGS.get(lg, _SDS_QUALITY_STRINGS["en"])["not_found"])
+        # Free: the backend registers `validate_sds` / `validate_sds_session` as
+        # `_free()` in its MCP billing table, so no credits line. If either ever gets a
+        # price, this tool must start rendering usage like the value tools.
+        return CallToolResult(
+            content=[TextContent(type="text", text=_format_sds_quality(data, lang))],
+            structured_content=_strip_usage(data),
+        )
+    finally:
+        _log_intent("validate_sds", [],
+                    _intent_params({"session_id": session_id, "msds_id": msds_id}, intent),
                     success=success, error_message=error_msg)
 
 
