@@ -75,6 +75,24 @@ def test_the_original_repro_says_it_in_the_text():
     assert sc.get("preparation_disclosure")
 
 
+def test_a_range_keeps_its_lower_bound_in_structured_content():
+    """CI-1408：后端报区间时 `preparation_percent` 只是**上界**。白名单只抄它的话，
+    机器消费者拿到的就是「含 38%」——正是那张票要消灭的说法。"""
+    payload = {
+        "available": True, "record_kind": "substance", "chemical_name": "Hydrochloric acid",
+        "cas": "7647-01-0", "supplier": "S", "revision_date": "2024-01-01",
+        "region": "US", "record_id": 3, "pdf_hash": "d" * 64,
+        "pdf_url": "https://example/x", "expires_in_seconds": 300,
+        "physical_form": None, "physical_form_disclosure": None,
+        "preparation_percent": 38.0, "preparation_percent_low": 35.0,
+        "preparation_percent_text": "35–38%", "preparation_disclosure": _PREP,
+    }
+    sc = getattr(_run_doc(payload), "structured_content", None) or {}
+
+    assert sc.get("preparation_percent_low") == 35.0, f"白名单漏抄下界：{sorted(sc)}"
+    assert sc.get("preparation_percent_text") == "35–38%"
+
+
 def test_it_is_rendered_before_the_form_disclosure():
     """两条披露同时在场时，「这根本不是纯物质」排在「是哪一种形态」**之前**。
 

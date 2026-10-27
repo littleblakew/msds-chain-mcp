@@ -7053,6 +7053,10 @@ async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToo
                     # 而第一版只改了后端 ⇒ 这里漏抄 = 用户仍然什么都看不到。
                     # `null` ＝ 这份 SDS 没声明百分比，**不表示「就是纯的」**。
                     "preparation_percent": data.get("preparation_percent"),
+                    # CI-1408：`preparation_percent` 是区间的**上界**——只给它，机器消费者
+                    # 会把 `35–38%` 说成「含 38%」。下界与念给人看的区间文本一起抄。
+                    "preparation_percent_low": data.get("preparation_percent_low"),
+                    "preparation_percent_text": data.get("preparation_percent_text"),
                     "preparation_disclosure": data.get("preparation_disclosure"),
                     "pdf_url": full_url,
                     "expires_in_seconds": 300,
