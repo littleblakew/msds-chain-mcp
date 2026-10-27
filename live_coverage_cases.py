@@ -144,6 +144,12 @@ CASES: dict[str, dict] = {
                 "「报告功能是好的」。要补的话得把 create_audit_session 返回的真 session_id "
                 "串进来（有状态，会每跑一次多建一个 session），值不值得另议。",
     },
+    "validate_sds": {
+        "args": {"session_id": "00000000-0000-0000-0000-000000000000", "msds_id": 1},
+        "expect_error_ok": True,
+        "note": "同 get_audit_report：假 session 走**错误路径**，验「找不到」说得明白（后端对"
+                "「不是你的」和「不存在」同一个答复）。⚠️ 正常路径要先真上传一份，不在这里跑。",
+    },
     # ── 写工具（默认不跑；跑了就会在 Prod 留数据）──────────────
     "create_audit_session": {
         "args": {"experiment_name": "CI-245 live coverage", "chemicals": ["acetone"]},

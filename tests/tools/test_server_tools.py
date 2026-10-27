@@ -302,6 +302,8 @@ _DIRECT_TIMEOUT_EXPECTATIONS = {
     "_direct_compliance": (("acetone", ["EU"]), False),
     "_direct_regulatory_lists": (("acetone",), False),
     "_direct_sds_draft": (([{"chemical": "acetone"}], None, "EU"), True),
+    # no msds_id = the whole session, up to 50 documents in one call
+    "_direct_validate_sds": (("S", None), True),
     "_direct_recent_chemicals": ((), False),
     "_direct_alternatives": (("acetone",), False),
     "_direct_online_search": (("acetone",), False),
@@ -456,6 +458,7 @@ EXPECTED_TOOLS = frozenset({
     "check_regulatory_lists",
     "search_msds_online",
     "draft_sds_sections",
+    "validate_sds",
 })
 
 
@@ -471,7 +474,7 @@ def test_direct_tools_still_registered(monkeypatch):
         f"tool surface drifted: missing={EXPECTED_TOOLS - names}, "
         f"unexpected={names - EXPECTED_TOOLS}"
     )
-    assert len(EXPECTED_TOOLS) == 24
+    assert len(EXPECTED_TOOLS) == 25
 
 
 # ---------------------------------------------------------------------------

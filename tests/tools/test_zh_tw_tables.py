@@ -20,12 +20,12 @@ import pytest
 
 import server
 
-_OVERRIDES = {"副本里": "副本裡"}
+_OVERRIDES = {"副本里": "副本裡", "質量檢查": "品質檢查"}
 
 TABLES = [
     "_DIRECT_TIMEOUT_MSG", "_DIRECT_TIMEOUT_HINT_BATCH", "_TIMEOUT_ANSWER",
     "_REG_LIST_COVERAGE_NOTE", "_REG_LIST_STRINGS", "_UNRESOLVED_BOOLEAN_NOTE",
-    "_SDS_DRAFT_STRINGS",
+    "_SDS_DRAFT_STRINGS", "_SDS_QUALITY_STRINGS",
 ]
 
 _cc = opencc.OpenCC("s2twp")
