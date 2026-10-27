@@ -2791,7 +2791,6 @@ def _format_sds_draft(data: dict, lang: str | None = None) -> str:
 _SDS_QUALITY_STRINGS = {'en': {'title': 'SDS quality check',
         'revision': 'revision',
         'revision_unknown': 'revision date not found',
-        'uploaded': 'uploaded',
         'contradiction': 'Contradiction',
         'missing': 'Missing',
         'outdated': 'Outdated',
@@ -2810,7 +2809,6 @@ _SDS_QUALITY_STRINGS = {'en': {'title': 'SDS quality check',
  'zh': {'title': 'SDS 质量检查',
         'revision': '修订',
         'revision_unknown': '未找到修订日期',
-        'uploaded': '上传于',
         'contradiction': '矛盾',
         'missing': '缺项',
         'outdated': '过期',
@@ -2827,7 +2825,6 @@ _SDS_QUALITY_STRINGS = {'en': {'title': 'SDS quality check',
  'zh-TW': {'title': 'SDS 品質檢查',
            'revision': '修訂',
            'revision_unknown': '未找到修訂日期',
-           'uploaded': '上傳於',
            'contradiction': '矛盾',
            'missing': '缺項',
            'outdated': '過期',
@@ -2844,7 +2841,6 @@ _SDS_QUALITY_STRINGS = {'en': {'title': 'SDS quality check',
  'ja': {'title': 'SDS 品質チェック',
         'revision': '改訂',
         'revision_unknown': '改訂日が見つかりません',
-        'uploaded': 'アップロード',
         'contradiction': '矛盾',
         'missing': '欠落',
         'outdated': '古い版',
@@ -2862,7 +2858,6 @@ _SDS_QUALITY_STRINGS = {'en': {'title': 'SDS quality check',
  'de': {'title': 'SDB-Qualitätsprüfung',
         'revision': 'Revision',
         'revision_unknown': 'kein Revisionsdatum gefunden',
-        'uploaded': 'hochgeladen',
         'contradiction': 'Widerspruch',
         'missing': 'Fehlt',
         'outdated': 'Veraltet',
@@ -2884,7 +2879,6 @@ _SDS_QUALITY_STRINGS = {'en': {'title': 'SDS quality check',
  'id': {'title': 'Pemeriksaan kualitas SDS',
         'revision': 'revisi',
         'revision_unknown': 'tanggal revisi tidak ditemukan',
-        'uploaded': 'diunggah',
         'contradiction': 'Kontradiksi',
         'missing': 'Tidak ada',
         'outdated': 'Kedaluwarsa',
@@ -2906,7 +2900,6 @@ _SDS_QUALITY_STRINGS = {'en': {'title': 'SDS quality check',
  'ko': {'title': 'SDS 품질 점검',
         'revision': '개정',
         'revision_unknown': '개정일을 찾지 못함',
-        'uploaded': '업로드',
         'contradiction': '모순',
         'missing': '누락',
         'outdated': '오래됨',
@@ -2924,7 +2917,6 @@ _SDS_QUALITY_STRINGS = {'en': {'title': 'SDS quality check',
  'ru': {'title': 'Проверка качества паспорта безопасности',
         'revision': 'редакция',
         'revision_unknown': 'дата редакции не найдена',
-        'uploaded': 'загружен',
         'contradiction': 'Противоречие',
         'missing': 'Отсутствует',
         'outdated': 'Устарело',
@@ -2946,7 +2938,6 @@ _SDS_QUALITY_STRINGS = {'en': {'title': 'SDS quality check',
  'fr': {'title': 'Contrôle qualité de la FDS',
         'revision': 'révision',
         'revision_unknown': 'date de révision introuvable',
-        'uploaded': 'téléversée',
         'contradiction': 'Contradiction',
         'missing': 'Manquant',
         'outdated': 'Obsolète',
@@ -2969,7 +2960,6 @@ _SDS_QUALITY_STRINGS = {'en': {'title': 'SDS quality check',
  'es': {'title': 'Control de calidad de la FDS',
         'revision': 'revisión',
         'revision_unknown': 'fecha de revisión no encontrada',
-        'uploaded': 'subida',
         'contradiction': 'Contradicción',
         'missing': 'Falta',
         'outdated': 'Desactualizada',
@@ -3001,14 +2991,21 @@ def _format_sds_quality(data: dict, lang: str | None = None) -> str:
       ③ `checks_skipped` is said out loud: a check that could not read its input
          found nothing because it did not look, which is not the same as "passed".
     Issue messages are already localised by the backend; this side only adds labels.
+
+    A body without the fields these red lines need raises instead of rendering: a
+    missing `issues` would otherwise print as "no issues found".
     """
+    _sds_quality_shape(data)
     lg = _normalize_catalog_lang(lang or LANG)
     s = _SDS_QUALITY_STRINGS.get(lg, _SDS_QUALITY_STRINGS["en"])
 
-    def flat(v) -> str:
+    def flat(v, cap: int = 300) -> str:
         # Document text (names, quoted lines) is the uploader's: one line, capped,
-        # so a crafted SDS cannot forge a heading or a verdict line.
-        return " ".join(str(v).split())[:300]
+        # so a crafted SDS cannot forge a heading or a verdict line. A cut is marked:
+        # an evidence quote is presented as the original, so a silent cut would send
+        # the user looking for a string that is not in their PDF.
+        v = " ".join(str(v).split())
+        return v if len(v) <= cap else v[:cap] + "…"
 
     def one(doc_result: dict) -> list[str]:
         d = doc_result.get("document") or {}
@@ -3018,15 +3015,18 @@ def _format_sds_quality(data: dict, lang: str | None = None) -> str:
         rev = d.get("revision_date")
         head += f" ({s['revision']} {flat(rev)})" if rev else f" ({s['revision_unknown']})"
         out = [f"### {head}", f"`msds_id`: {d.get('msds_id')}"]
-        issues = doc_result.get("issues") or []
-        if not issues:
+        issues = doc_result["issues"]
+        # "No issues" only when at least one check actually looked: with every check
+        # skipped there is nothing to report either way, and the skipped line says so.
+        if not issues and doc_result.get("checks_run"):
             out.append(f"- {s['no_issues']}")
         for i in issues:
-            cat = s.get(i.get("category") or "", flat(i.get("category") or "?"))
+            raw = i.get("category") or "?"
+            cat = s[raw] if raw in _SDS_QUALITY_CATEGORIES else flat(raw)
             secs = " / ".join(f"§{n}" for n in i.get("sections") or [])
-            out.append(f"- **[{cat}]**{' ' + secs if secs else ''} {flat(i.get('message') or '')}")
+            out.append(f"- **[{cat}]**{' ' + secs if secs else ''} {flat(i.get('message') or '', 1000)}")
             for line in i.get("evidence") or []:
-                out.append(f"  > {s['evidence']}: \"{flat(line)}\"")
+                out.append(f"  > {s['evidence']}: \"{flat(line, 1000)}\"")
         if newer := doc_result.get("newer_version"):
             out.append("- " + s["newer"].format(date=flat(newer.get("revision_date") or "?"),
                                                 supplier=flat(newer.get("supplier") or "?")))
@@ -3036,11 +3036,9 @@ def _format_sds_quality(data: dict, lang: str | None = None) -> str:
             out.append(f"- {s['skipped']}: {names}")
         return out
 
-    lines = [f"**{s['title']}**\n"]
-    if data.get("notice"):
-        lines.append(f"> {data['notice']}\n")
+    lines = [f"**{s['title']}**\n", f"> {data['notice']}\n"]
     if "documents" in data:
-        docs = data.get("documents") or []
+        docs = data["documents"]
         if not docs:
             lines.append(s["empty"])
             return "\n".join(lines)
@@ -3056,6 +3054,24 @@ def _format_sds_quality(data: dict, lang: str | None = None) -> str:
     else:
         lines.extend(one(data))
     return "\n".join(lines).rstrip()
+
+
+_SDS_QUALITY_CATEGORIES = frozenset({"contradiction", "missing", "outdated", "format"})
+
+
+def _sds_quality_shape(data: dict) -> None:
+    """Refuse a `/validate-sds*` body that lacks what the rendering red lines need."""
+    def doc_ok(d) -> bool:
+        return (isinstance(d, dict) and isinstance(d.get("issues"), list)
+                and isinstance(d.get("document"), dict))
+    ok = isinstance(data, dict) and isinstance(data.get("notice"), str) and data["notice"].strip()
+    if ok and "documents" in data:
+        ok = isinstance(data["documents"], list) and all(doc_ok(d) for d in data["documents"])
+    elif ok:
+        ok = doc_ok(data)
+    if not ok:
+        raise ToolReason("The SDS check returned an incomplete result, so nothing is "
+                         "reported for it. Try again; this is not a finding about the SDS.")
 
 
 async def _direct_validate_sds(session_id: str, msds_id: int | None,
@@ -6820,7 +6836,7 @@ async def upload_msds_pdf(
             lines.append(
                 f"\nTo check an uploaded SDS for contradictions, gaps, age and US OSHA "
                 f"format, call `validate_sds(session_id=\"{sid}\", msds_id=<msds_id above>)`, "
-                f"or omit `msds_id` to check every SDS in this session."
+                f"or omit `msds_id` to check the session's uploads (the most recent 50)."
             )
         lines.append(
             f"\nCall `create_audit_session(\"{experiment_name}\", [...])` or "

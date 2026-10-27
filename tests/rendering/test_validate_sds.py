@@ -56,9 +56,46 @@ def test_no_issue_is_never_called_compliant():
     assert "compliant" not in own_lines.replace("does not mean the SDS is compliant", "")
 
 
+def test_every_check_skipped_is_not_reported_as_no_issues():
+    """Nothing looked ⇒ nothing to report either way; only the skipped line speaks."""
+    data = {"notice": _NOTICE, **_doc(skipped=["check_signal_word", "check_us_contact"])}
+    data["checks_run"] = []
+    text = server._format_sds_quality(data, "en")
+
+    assert server._SDS_QUALITY_STRINGS["en"]["no_issues"] not in text
+    assert "signal word, us contact" in text
+
+
+@pytest.mark.parametrize("broken", [
+    {"notice": _NOTICE, "document": {"msds_id": 1}},                 # no issues key
+    {"document": {"msds_id": 1}, "issues": []},                      # no notice
+    {"notice": " ", "document": {"msds_id": 1}, "issues": []},       # empty notice
+    {"notice": _NOTICE, "documents": [{"document": {"msds_id": 1}}]},  # session, no issues
+    {"notice": _NOTICE, "summary": {"documents": 0}, "truncated": False},  # no documents
+])
+def test_an_incomplete_body_is_an_error_not_a_clean_result(broken):
+    with pytest.raises(server.ToolReason):
+        server._format_sds_quality(broken, "en")
+
+
+def test_a_cut_quote_is_marked():
+    long_line = "Signal word Warning " + "x" * 1200
+    text = server._format_sds_quality(
+        {"notice": _NOTICE, **_doc(issues=[_issue(evidence=[long_line])])}, "en")
+    quoted = [ln for ln in text.splitlines() if ln.lstrip().startswith(">") and "Signal" in ln][0]
+    assert quoted.endswith('…"'), "a truncated quote must not pass for the verbatim original"
+
+
+def test_an_unknown_category_is_shown_as_is_not_as_a_template():
+    text = server._format_sds_quality(
+        {"notice": _NOTICE, **_doc(issues=[_issue(category="summary")])}, "en")
+    assert "**[summary]**" in text and "{n}" not in text
+
+
 def test_newer_version_is_mentioned():
-    data = _doc(newer_version={"canonical_id": 9, "revision_date": "2024-02-01",
-                               "supplier": "Matrix"})
+    data = {"notice": _NOTICE, **_doc(newer_version={"canonical_id": 9,
+                                                     "revision_date": "2024-02-01",
+                                                     "supplier": "Matrix"})}
     assert "2024-02-01 (Matrix)" in server._format_sds_quality(data, "en")
 
 
