@@ -3822,7 +3822,10 @@ async def check_regulatory_compliance(
                           marked "not a restriction" — relay that marking, do not
                           upgrade it. (EU) A diisocyanate matched by name to REACH
                           Annex XVII Entry 74 is also `detected`: relay its training
-                          condition, do not upgrade it to `restricted`.
+                          condition, do not upgrade it to `restricted`. (US) A metal
+                          compound matched by name to a Prop 65 category entry such
+                          as "Lead and lead compounds" is also `detected`: relay that
+                          it is a match by name, do not upgrade it to `restricted`.
                           🔴 NOT a clearance and NOT a violation.
          `not_restricted` we DID check that region's restriction lists and it is not on
                           them. `details` names which lists were checked. Lists we do not
