@@ -704,6 +704,24 @@ def test_get_sds_document_available_returns_absolute_url(monkeypatch):
     assert captured[0]["success"] is True
 
 
+def test_get_sds_document_reference_sheet_says_it_is_not_a_supplier_sds(monkeypatch):
+    from request_identity import set_caller_credential
+    set_caller_credential("sk-msds-test")
+    body = {"available": True, "chemical_name": "ETHANOL", "cas": "64-17-5",
+            "supplier": "Public Health Fact Sheets", "revision_date": None, "region": "",
+            "record_id": 1, "pdf_url": "/msds/token/ref", "document_kind": "reference_sheet"}
+    _patch_sds_doc_client(monkeypatch, 200, body)
+    log_fn, _ = _capture_log_call()
+    monkeypatch.setattr(server, "_log_call", log_fn)
+
+    res = asyncio.run(server.get_sds_document("64-17-5"))
+
+    text = res.content[0].text
+    assert "SDS Document:" not in text
+    assert "not a supplier SDS" in text and "not the supplier's SDS" in text
+    assert res.structured_content["document_kind"] == "reference_sheet"
+
+
 def test_get_sds_document_parsed_only_no_pdf(monkeypatch):
     """available=False + parsed-only message → suggest get_sds_section."""
     from request_identity import set_caller_credential
@@ -946,6 +964,24 @@ def test_format_sds_documents_url_verbatim():
              "sds_document_url": "https://example-custom-domain.com/token/abc"}]
     out = server._format_sds_documents(docs)
     assert "https://example-custom-domain.com/token/abc" in out
+
+
+def test_format_sds_documents_reference_sheet_is_not_called_sds():
+    """`document_kind == "reference_sheet"`：标题与逐条都不能把公开速查表叫成 SDS。"""
+    ref = {"chemical": "ethanol", "chemical_name": "ETHANOL", "cas": "64-17-5",
+           "supplier": "Public Health Fact Sheets", "revision_date": None, "region": "",
+           "record_id": 1, "sds_document_url": "https://example.invalid/t/ref",
+           "document_kind": "reference_sheet"}
+    only = server._format_sds_documents([ref])
+    assert "Original SDS" not in only
+    assert "not a supplier SDS" in only
+
+    mixed = server._format_sds_documents([_SAMPLE_DOCUMENTS[0], ref])
+    assert "Original SDS" in mixed
+    ref_line = next(l for l in mixed.splitlines() if "ETHANOL" in l)
+    assert "not a supplier SDS" in ref_line
+    sds_line = next(l for l in mixed.splitlines() if "Acetone" in l)
+    assert "not a supplier SDS" not in sds_line
 
 
 # --- check_chemical_compatibility + CI-89 ---
