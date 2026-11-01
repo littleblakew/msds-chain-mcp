@@ -771,6 +771,9 @@ _UNAVAILABLE_FALLBACK = {
 }
 
 
+_REFERENCE_SHEET = "reference_sheet"
+
+
 def _format_sds_documents(documents: list[dict]) -> str:
     """Render a `documents` list as an '📄 Original SDS' section.
 
@@ -780,7 +783,12 @@ def _format_sds_documents(documents: list[dict]) -> str:
     """
     if not documents:
         return ""
-    lines = ["\n\n---\n**📄 Original SDS (click to verify):**"]
+    # `document_kind == "reference_sheet"`：库里这份原件是公开参考速查表（如州卫生部门的
+    # 职业卫生资料），不是供应商 SDS。用户可能拿这里的文件去合规归档，所以标题与逐条都要照实说。
+    all_reference = all(d.get("document_kind") == _REFERENCE_SHEET for d in documents)
+    heading = ("**📄 Original reference document, not a supplier SDS (click to verify):**"
+               if all_reference else "**📄 Original SDS (click to verify):**")
+    lines = [f"\n\n---\n{heading}"]
     for doc in documents:
         chemical = doc.get("chemical_name") or doc.get("chemical") or "?"
         supplier = doc.get("supplier", "")
@@ -791,6 +799,8 @@ def _format_sds_documents(documents: list[dict]) -> str:
         entry = f"- {chemical}"
         if meta:
             entry += f" ({meta})"
+        if doc.get("document_kind") == _REFERENCE_SHEET and not all_reference:
+            entry += " [public reference fact sheet, not a supplier SDS]"
         if url:
             entry += f": {url}"
         else:
@@ -7393,11 +7403,14 @@ async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToo
 
             # CI-277: product/mixture SDS records carry no CAS of their own.
             kind = data.get("record_kind") or "substance"
+            document_kind = data.get("document_kind")
             region_suffix = f" · {region}" if region else ""
+            doc_label = ("Reference document (not a supplier SDS)"
+                         if document_kind == _REFERENCE_SHEET else "SDS Document")
             heading = (
-                f"**SDS Document: {chem_name}** (formulated product — no single CAS)"
+                f"**{doc_label}: {chem_name}** (formulated product — no single CAS)"
                 if kind == "product"
-                else f"**SDS Document: {chem_name}** (CAS: {cas})"
+                else f"**{doc_label}: {chem_name}** (CAS: {cas})"
             )
             lines = [
                 heading,
@@ -7413,6 +7426,12 @@ async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToo
             # ——多数客户端只把 text 喂给模型 ⇒ 用户拿到 HF 的 PDF 链接和出处，
             # 却读不到「这份是水溶液、无水的我们没有」。与本票其余六条同一条理由。
             lines.extend(_form_disclosure_lines(data))
+            if document_kind == _REFERENCE_SHEET:
+                lines.insert(1, (
+                    "- ⚠️ This is a **public reference fact sheet**, not the supplier's SDS. "
+                    "It is not a substitute for the manufacturer's SDS in a hazard-communication "
+                    "file; ask the supplier for theirs, or upload it with `upload_msds_pdf`."
+                ))
             if kind == "product":
                 lines.insert(1, (
                     "- ⚠️ This is a **formulated product**. Its GHS classification "
@@ -7424,6 +7443,7 @@ async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToo
                 structured_content={
                     "available": True,
                     "record_kind": kind,
+                    "document_kind": document_kind,
                     "chemical_name": chem_name,
                     "cas": cas,
                     "supplier": supplier,
