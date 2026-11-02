@@ -165,17 +165,20 @@ _ALLOWED_LINES = {
 
 
 def test_no_renderer_claims_absence_from_the_database():
-    import pathlib
-    src = pathlib.Path(server.__file__).read_text().split("\n")
+    import os
+    from conftest import server_source_files
     hits, scanned = [], 0
-    for n, line in enumerate(src, 1):
-        stripped = line.strip()
-        if stripped.startswith("#"):        # 注释里引用旧文案是允许的（本文件就在这么做）
-            continue
-        scanned += 1
-        low = stripped.lower()
-        if any(p in low for p in _SOURCE_FORBIDDEN) and stripped not in _ALLOWED_LINES:
-            hits.append(f"server.py:{n}: {stripped}")
+    for path in server_source_files():
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read().split("\n")
+        for n, line in enumerate(src, 1):
+            stripped = line.strip()
+            if stripped.startswith("#"):        # 注释里引用旧文案是允许的（本文件就在这么做）
+                continue
+            scanned += 1
+            low = stripped.lower()
+            if any(p in low for p in _SOURCE_FORBIDDEN) and stripped not in _ALLOWED_LINES:
+                hits.append(f"{os.path.basename(path)}:{n}: {stripped}")
     # 🔴 就地自检：扫了 0 行和「仓是干净的」在断言结果上完全同形。
     assert scanned > 3000, f"只扫到 {scanned} 行，这条守卫在空跑"
     assert not hits, (

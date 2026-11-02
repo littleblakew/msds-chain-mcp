@@ -3,7 +3,7 @@
 
 ## 这是什么
 
-MSDS Chain 的 MCP server 公开核心（Python，`server.py` 注册全部工具），同时承载各客户端的分发清单（Claude / Codex 插件、Gemini 扩展、npm shim）。
+MSDS Chain 的 MCP server 公开核心（Python；`server.py` 是入口，工具实现按工具组拆在 `msds_mcp/` 下，导入 `server` 即注册全部工具），同时承载各客户端的分发清单（Claude / Codex 插件、Gemini 扩展、npm shim）。
 Remote：`github.com/littleblakew/msds-chain-mcp`，**公开仓**，MIT。
 分支模型：只有 `main`。push `main` 触发 `deploy.yml`（先跑全量测试再发布容器）；`v*` tag 触发 `release.yml`（发布 npm 与 MCP registry，不可撤销）。
 用法与工具清单见 [README.md](README.md)，不在这里重复。
@@ -18,6 +18,10 @@ scripts/hooks/install.sh                 # 每个 clone 装一次 git hooks；--
 ```
 
 - 版本号只有一个人工入口：仓根 `VERSION`。改完跑 `scripts/release.sh`（把版本与派生数字写进所有清单并跑守卫），再提交、推 `main`，最后 `git tag vX.Y.Z && git push origin vX.Y.Z`；tag 必须打在改 `VERSION` 的那个 commit 上。
+- 代码布局：`msds_mcp/app.py`（配置、`mcp` 实例、`__version__`）→ `params.py` / `render.py` / `calls.py` / `direct.py` 等共享层 → `*_tools.py`（`@mcp.tool` 所在）。`tools/list` 的顺序等于 `server.py` 里各工具模块的 import 顺序，别调换。
+- 🔴 `server.<名字>` 的 `setattr`（`monkeypatch` / `patch`）经 `server.py` 里的 `_ServerModule` 传播到所有持有该名字的 `msds_mcp` 模块；由 `global` 重绑的状态（`_call_log_post_failures`）不复制、只从属主模块读。新增这类状态要登记进 `server._LIVE`，`tests/contract/test_server_module_patching.py` 会查。
+- 🔴 单文件上限 1500 行（`tests/repo_guards/test_file_length_ratchet.py`，基线 `tests/file_length_baseline.txt`）。读源码的守卫要扫 `server.py` 加 `msds_mcp/` 整组：用 `tests/conftest.py` 的 `server_source()`。
+- 注册面快照 `tests/contract/registry_snapshot.json`（`python3 scripts/dump_registry_snapshot.py` 重新生成）：重构不许改它。
 - 工具面基线 `published_tool_surface.json` 用 `python3 scripts/export_tool_surface.py` 重新生成。
 
 ## 怎么验证

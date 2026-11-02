@@ -1,0 +1,1770 @@
+{
+ "cache_hints": {
+  "server/discover": "CacheHint(ttl_ms=300000, scope='private')",
+  "tools/list": "CacheHint(ttl_ms=300000, scope='private')"
+ },
+ "instructions": "MSDS Chain provides chemical safety intelligence backed by traceable, sourced SDS data.\n\nWHICH TOOL:\n- For any general safety question — hazards, PPE, first aid, storage, disposal,\n  \"is X safe\", \"what do I need to handle Y\" — call ask_chemical_safety FIRST.\n  It returns ONE answer grounded in a specific supplier SDS. Do NOT chain\n  search + risk-warnings + PPE for a broad question; that is slower, fragmented,\n  and loses the single sourced citation.\n- Use the granular tools (get_chemical_risk_warnings, get_ppe_recommendation,\n  get_storage_guidance, search_chemical_database) only when the user explicitly\n  wants that one structured field, or to drill down.\n- check_chemical_compatibility for mixing/storing pairs; check_regulatory_compliance\n  for multi-region legal status; get_sds_document for the original signed PDF link.\n\nHOW TO PRESENT (grounding — do not violate):\n- ALWAYS cite the source the tool returns (supplier + revision date). Traceability\n  is the point — an answer the reader can point back to a specific document.\n- Do NOT add hazard, medical, or regulatory claims not in the tool output. If you\n  add general knowledge, label it as general knowledge, not as SDS data.\n- After answering a hazard/PPE/handling question, ALSO call get_sds_document and give\n  the user the signed link to the original supplier SDS PDF — closing the loop from\n  \"traceable citation\" to \"openable source document\" is a core value; do it by default,\n  not only when asked. If no original PDF is on file, say so and offer upload.\n- If the matched SDS is a different grade/concentration than the user's product (e.g.\n  a pure-compound SDS when they use a dilute formulation), state that plainly as a\n  precision point, not as a data gap — then invite them to upload their product's SDS\n  via upload_msds_pdf to get an exact match (which also enriches the shared database).\n  Never phrase it as \"we don't have data\"; frame it as \"here is the authoritative\n  record on file; upload your exact product to refine it.\"\n\nUse these tools when a user mentions chemicals, safety, storage, handling, or\ncompliance in a lab/experimental context.",
+ "name": "MSDS Chain",
+ "prompt_renderings": {
+  "ehs_compliance_review:default": {
+   "_meta": null,
+   "description": "Multi-region regulatory review for a chemical inventory: compliance status, exposure limits, GHS hazards and transport classification. For EHS officers preparing an audit or a shipment.",
+   "messages": [
+    {
+     "content": {
+      "_meta": null,
+      "annotations": null,
+      "text": "You are performing a regulatory compliance review for an EHS officer.\n\nAsk the user which chemicals to review before calling any tool.\nTarget regions: EU,US\n\nSteps:\n1. If the user gave a protocol or document instead of a list, call `validate_protocol_chemicals(protocol_text=...)` first.\n2. `check_regulatory_compliance(chemicals=[...], regions=[...])` — valid region codes are EU, US, CN, JP, KR, CA, AU, SG, TW.\n3. `get_exposure_limits(chemicals=[...], region=...)` for occupational limits.\n4. `get_chemical_risk_warnings(chemicals=[...])` for GHS class, signal word and H-codes.\n5. `get_transport_classification(chemicals=[...])` if anything will be shipped.\n6. Summarise per chemical, per region. Where a region was not requested, say it was not checked — do not present the requested regions as full coverage.\n\nIf the region list came from the default rather than from the user, say so explicitly in the answer.\nNo result from these tools is, on its own, an import/export clearance. An exposure limit answers 'how much exposure is allowed', never 'is this substance permitted'.\n\n\nGrounding rules for every step above:\n- Always cite the source each tool returns (supplier + revision date). Traceability is the product; an uncited answer is worth less than no answer.\n- Never state or imply that a substance is absent from the database. If a lookup returns nothing, say what was not checked this turn and how to check it.\n- Do not add hazard, medical or regulatory claims that the tool output does not contain. General knowledge may be added only if labelled as such.\n",
+      "type": "text"
+     },
+     "role": "user"
+    }
+   ],
+   "resultType": "complete"
+  },
+  "ehs_compliance_review:sample": {
+   "_meta": null,
+   "description": "Multi-region regulatory review for a chemical inventory: compliance status, exposure limits, GHS hazards and transport classification. For EHS officers preparing an audit or a shipment.",
+   "messages": [
+    {
+     "content": {
+      "_meta": null,
+      "annotations": null,
+      "text": "You are performing a regulatory compliance review for an EHS officer.\n\nChemicals: acetone\nTarget regions: EU,US,CN\n\nSteps:\n1. If the user gave a protocol or document instead of a list, call `validate_protocol_chemicals(protocol_text=...)` first.\n2. `check_regulatory_compliance(chemicals=[...], regions=[...])` — valid region codes are EU, US, CN, JP, KR, CA, AU, SG, TW.\n3. `get_exposure_limits(chemicals=[...], region=...)` for occupational limits.\n4. `get_chemical_risk_warnings(chemicals=[...])` for GHS class, signal word and H-codes.\n5. `get_transport_classification(chemicals=[...])` if anything will be shipped.\n6. Summarise per chemical, per region. Where a region was not requested, say it was not checked — do not present the requested regions as full coverage.\n\nIf the region list came from the default rather than from the user, say so explicitly in the answer.\nNo result from these tools is, on its own, an import/export clearance. An exposure limit answers 'how much exposure is allowed', never 'is this substance permitted'.\n\n\nGrounding rules for every step above:\n- Always cite the source each tool returns (supplier + revision date). Traceability is the product; an uncited answer is worth less than no answer.\n- Never state or imply that a substance is absent from the database. If a lookup returns nothing, say what was not checked this turn and how to check it.\n- Do not add hazard, medical or regulatory claims that the tool output does not contain. General knowledge may be added only if labelled as such.\n",
+      "type": "text"
+     },
+     "role": "user"
+    }
+   ],
+   "resultType": "complete"
+  },
+  "incident_response:default": {
+   "_meta": null,
+   "description": "First-response steps for a spill, fire or exposure involving a known chemical, with the original supplier SDS attached.",
+   "messages": [
+    {
+     "content": {
+      "_meta": null,
+      "annotations": null,
+      "text": "You are helping with a chemical incident. Answer the actionable steps FIRST, then the provenance — the person may be standing next to the spill.\n\nAsk which chemical is involved before calling any tool.\nReported scenario: spill\n🔴 `get_emergency_response` accepts EXACTLY three values: \"spill\", \"fire\", \"exposure\". Anything else is rejected — map the incident to the closest one BEFORE calling.\n🔴 PERSON FIRST: if the material reached a person, use \"exposure\" EVEN IF the incident is also a spill and the user said \"spilled\" — \"I spilled it on my hand\" is \"exposure\". Skin contact, splash, inhalation, eye contact and ingestion all map to \"exposure\". A burn ON A PERSON is \"exposure\", not \"fire\"; use \"fire\" only when something is actually combusting.\nOnly \"exposure\" returns the substance-specific first-aid protocol (for example the calcium gluconate protocol for hydrofluoric acid). Picking \"spill\" for a contact incident silently returns cleanup guidance instead of the antidote.\n\nSteps:\n1. `get_emergency_response(chemical=..., scenario=...)` and relay its steps in order, verbatim where they are procedural.\n2. `get_ppe_recommendation(chemicals=[...])` so the responder does not become the second casualty.\n3. `get_sds_document(chemical=...)` and give the link to the original supplier SDS.\n4. State the supplier and revision date of the record the steps came from.\n\nIf the scenario involves a person, tell them to contact emergency services or poison control as well — these steps supplement professional help, never replace it.\n\n\nGrounding rules for every step above:\n- Always cite the source each tool returns (supplier + revision date). Traceability is the product; an uncited answer is worth less than no answer.\n- Never state or imply that a substance is absent from the database. If a lookup returns nothing, say what was not checked this turn and how to check it.\n- Do not add hazard, medical or regulatory claims that the tool output does not contain. General knowledge may be added only if labelled as such.\n",
+      "type": "text"
+     },
+     "role": "user"
+    }
+   ],
+   "resultType": "complete"
+  },
+  "incident_response:sample": {
+   "_meta": null,
+   "description": "First-response steps for a spill, fire or exposure involving a known chemical, with the original supplier SDS attached.",
+   "messages": [
+    {
+     "content": {
+      "_meta": null,
+      "annotations": null,
+      "text": "You are helping with a chemical incident. Answer the actionable steps FIRST, then the provenance — the person may be standing next to the spill.\n\nChemical: acetone\nReported scenario: fire\n🔴 `get_emergency_response` accepts EXACTLY three values: \"spill\", \"fire\", \"exposure\". Anything else is rejected — map the incident to the closest one BEFORE calling.\n🔴 PERSON FIRST: if the material reached a person, use \"exposure\" EVEN IF the incident is also a spill and the user said \"spilled\" — \"I spilled it on my hand\" is \"exposure\". Skin contact, splash, inhalation, eye contact and ingestion all map to \"exposure\". A burn ON A PERSON is \"exposure\", not \"fire\"; use \"fire\" only when something is actually combusting.\nOnly \"exposure\" returns the substance-specific first-aid protocol (for example the calcium gluconate protocol for hydrofluoric acid). Picking \"spill\" for a contact incident silently returns cleanup guidance instead of the antidote.\n\nSteps:\n1. `get_emergency_response(chemical=..., scenario=...)` and relay its steps in order, verbatim where they are procedural.\n2. `get_ppe_recommendation(chemicals=[...])` so the responder does not become the second casualty.\n3. `get_sds_document(chemical=...)` and give the link to the original supplier SDS.\n4. State the supplier and revision date of the record the steps came from.\n\nIf the scenario involves a person, tell them to contact emergency services or poison control as well — these steps supplement professional help, never replace it.\n\n\nGrounding rules for every step above:\n- Always cite the source each tool returns (supplier + revision date). Traceability is the product; an uncited answer is worth less than no answer.\n- Never state or imply that a substance is absent from the database. If a lookup returns nothing, say what was not checked this turn and how to check it.\n- Do not add hazard, medical or regulatory claims that the tool output does not contain. General knowledge may be added only if labelled as such.\n",
+      "type": "text"
+     },
+     "role": "user"
+    }
+   ],
+   "resultType": "complete"
+  },
+  "lab_protocol_audit:default": {
+   "_meta": null,
+   "description": "Walk a lab protocol (or a list of chemicals) through compatibility, PPE and storage, then offer the deeper checks. For researchers writing or reviewing an experimental protocol.",
+   "messages": [
+    {
+     "content": {
+      "_meta": null,
+      "annotations": null,
+      "text": "You are auditing a laboratory protocol for chemical safety.\n\nAsk the user for either the protocol text or the list of chemicals before calling any tool. Do not guess a chemical list.\n\nSteps:\n1. If you were given protocol text, call `validate_protocol_chemicals(protocol_text=...)` to extract and resolve the chemical names. If you were given a list, use it as-is.\n2. Call `batch_safety_check(chemicals=[...])` ONCE for the pairwise picture: it returns the compatibility matrix plus key risk warnings with the source SDS for each. It does NOT return PPE or storage grouping — those are separate calls (`get_ppe_recommendation`, `get_storage_guidance`), so do not present them as already covered.\n3. Present a concise safety brief: incompatible pairs first, then required PPE, then storage. Lead with what would hurt someone.\n4. Then offer, without running them: mixing order for a specific pair (`check_mixing_order(chemical_a=..., chemical_b=..., context=...)`), safer substitutes (`get_chemical_alternatives(chemical=..., use_case=...)`), emergency procedures (`get_emergency_response(chemical=..., scenario=...)` — scenario is exactly one of \"spill\", \"fire\", \"exposure\"; if the material reached a person it is \"exposure\" even when they said \"spilled\"), or a signed PDF audit (`create_audit_session(...)` then `get_audit_report(...)`, which needs an API key).\n\n\nGrounding rules for every step above:\n- Always cite the source each tool returns (supplier + revision date). Traceability is the product; an uncited answer is worth less than no answer.\n- Never state or imply that a substance is absent from the database. If a lookup returns nothing, say what was not checked this turn and how to check it.\n- Do not add hazard, medical or regulatory claims that the tool output does not contain. General knowledge may be added only if labelled as such.\n",
+      "type": "text"
+     },
+     "role": "user"
+    }
+   ],
+   "resultType": "complete"
+  },
+  "lab_protocol_audit:sample": {
+   "_meta": null,
+   "description": "Walk a lab protocol (or a list of chemicals) through compatibility, PPE and storage, then offer the deeper checks. For researchers writing or reviewing an experimental protocol.",
+   "messages": [
+    {
+     "content": {
+      "_meta": null,
+      "annotations": null,
+      "text": "You are auditing a laboratory protocol for chemical safety.\n\nThe protocol text is:\n\"\"\"\nMix A with B\n\"\"\"\nThe chemicals are: acetone, bleach\n\nSteps:\n1. If you were given protocol text, call `validate_protocol_chemicals(protocol_text=...)` to extract and resolve the chemical names. If you were given a list, use it as-is.\n2. Call `batch_safety_check(chemicals=[...])` ONCE for the pairwise picture: it returns the compatibility matrix plus key risk warnings with the source SDS for each. It does NOT return PPE or storage grouping — those are separate calls (`get_ppe_recommendation`, `get_storage_guidance`), so do not present them as already covered.\n3. Present a concise safety brief: incompatible pairs first, then required PPE, then storage. Lead with what would hurt someone.\n4. Then offer, without running them: mixing order for a specific pair (`check_mixing_order(chemical_a=..., chemical_b=..., context=...)`), safer substitutes (`get_chemical_alternatives(chemical=..., use_case=...)`), emergency procedures (`get_emergency_response(chemical=..., scenario=...)` — scenario is exactly one of \"spill\", \"fire\", \"exposure\"; if the material reached a person it is \"exposure\" even when they said \"spilled\"), or a signed PDF audit (`create_audit_session(...)` then `get_audit_report(...)`, which needs an API key).\n\n\nGrounding rules for every step above:\n- Always cite the source each tool returns (supplier + revision date). Traceability is the product; an uncited answer is worth less than no answer.\n- Never state or imply that a substance is absent from the database. If a lookup returns nothing, say what was not checked this turn and how to check it.\n- Do not add hazard, medical or regulatory claims that the tool output does not contain. General knowledge may be added only if labelled as such.\n",
+      "type": "text"
+     },
+     "role": "user"
+    }
+   ],
+   "resultType": "complete"
+  }
+ },
+ "prompts": [
+  {
+   "_meta": null,
+   "arguments": [
+    {
+     "description": null,
+     "name": "chemicals",
+     "required": false,
+     "title": null
+    },
+    {
+     "description": null,
+     "name": "regions",
+     "required": false,
+     "title": null
+    }
+   ],
+   "description": "Multi-region regulatory review for a chemical inventory: compliance status, exposure limits, GHS hazards and transport classification. For EHS officers preparing an audit or a shipment.",
+   "icons": null,
+   "name": "ehs_compliance_review",
+   "title": "EHS regulatory compliance review"
+  },
+  {
+   "_meta": null,
+   "arguments": [
+    {
+     "description": null,
+     "name": "chemical",
+     "required": false,
+     "title": null
+    },
+    {
+     "description": null,
+     "name": "scenario",
+     "required": false,
+     "title": null
+    }
+   ],
+   "description": "First-response steps for a spill, fire or exposure involving a known chemical, with the original supplier SDS attached.",
+   "icons": null,
+   "name": "incident_response",
+   "title": "Chemical incident response"
+  },
+  {
+   "_meta": null,
+   "arguments": [
+    {
+     "description": null,
+     "name": "protocol_text",
+     "required": false,
+     "title": null
+    },
+    {
+     "description": null,
+     "name": "chemicals",
+     "required": false,
+     "title": null
+    }
+   ],
+   "description": "Walk a lab protocol (or a list of chemicals) through compatibility, PPE and storage, then offer the deeper checks. For researchers writing or reviewing an experimental protocol.",
+   "icons": null,
+   "name": "lab_protocol_audit",
+   "title": "Lab protocol safety audit"
+  }
+ ],
+ "resource_bodies": {
+  "ui://msds-chain/compat-card-v3.html": [
+   "ReadResourceContents(content='<!doctype html>\\n<html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\\n<meta name=\"color-scheme\" content=\"light dark\">\\n<style>\\n:root{color-scheme:light dark;--fg:#141413;--muted:#5e5d59;--line:#e6e4dd;--bad:#b42318;--warn:#b54708;--ok:#067647;--bg:transparent}\\n@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--fg:#f5f4ef;--muted:#a8a69f;--line:#3a3935;--bad:#f97066;--warn:#fdb022;--ok:#47cd89}}\\n:root[data-theme=dark]{color-scheme:dark;--fg:#f5f4ef;--muted:#a8a69f;--line:#3a3935;--bad:#f97066;--warn:#fdb022;--ok:#47cd89}\\n:root[data-theme=light]{color-scheme:light}\\nbody{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;color:var(--fg);background:var(--bg)}\\n.card{padding:12px 4px}\\nh2{font-size:13px;font-weight:600;color:var(--muted);margin:10px 0 6px;text-transform:uppercase;letter-spacing:.04em}\\n.pair{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--line)}\\n.v{font-weight:600;white-space:nowrap}.incompatible{color:var(--bad)}.caution{color:var(--warn)}.compatible{color:var(--ok)}\\n.cite,.doc,.more{color:var(--muted);font-size:12.5px}\\n.notice{border-left:3px solid var(--warn);padding:4px 0 4px 10px;margin:6px 0;font-size:13px}\\nbutton{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--fg);cursor:pointer;margin-left:6px}\\n</style></head>\\n<body><div class=\"card\" id=\"root\"></div>\\n<script>\\n(function(){\\n  var KEY = \"msdschain/compat_card\";\\n  var ALLOWED_ORIGIN = \"https://api.msdschain.lagentbot.com\";\\n  var UPGRADE_ORIGIN = \"https://msdschain.lagentbot.com\";\\n  var inHost = window.parent && window.parent !== window;\\n  var nextId = 1, pending = {};\\n  function esc(s){ return String(s == null ? \"\" : s).replace(/[&<>\"]/g, function(c){return {\"&\":\"&amp;\",\"<\":\"&lt;\",\">\":\"&gt;\",\"\\\\\"\":\"&quot;\"}[c];}); }\\n  function rpc(method, params, onResult){\\n    if (!inHost) return;\\n    var id = nextId++; if (onResult) pending[id] = onResult;\\n    window.parent.postMessage({jsonrpc: \"2.0\", id: id, method: method, params: params || {}}, \"*\");\\n  }\\n  function notify(method, params){\\n    if (inHost) window.parent.postMessage({jsonrpc: \"2.0\", method: method, params: params || {}}, \"*\");\\n  }\\n  function safeUrl(u, origin){\\n    if (!origin) return null;\\n    try { var x = new URL(u); return (/^https?:$/.test(x.protocol) && x.origin === origin) ? x.href : null; }\\n    catch (e) { return null; }\\n  }\\n  function openUrl(url){\\n    if (window.openai && window.openai.openExternal) window.openai.openExternal({href: url});\\n    else if (inHost) rpc(\"ui/open-link\", {url: url});\\n    else window.open(url, \"_blank\", \"noopener\");\\n  }\\n  function renderExhausted(p){\\n    var up = safeUrl(p.upgrade_url, UPGRADE_ORIGIN);\\n    var root = document.getElementById(\"root\");\\n    root.innerHTML = \"<h2>Out of credits</h2>\"\\n      + (p.message ? \\'<div class=\"notice\">\\' + esc(p.message) + \"</div>\" : \"\")\\n      + \\'<div class=\"doc\">This check was not run, so there is no MSDS Chain result for it.\\'\\n      + (up ? \\'<button data-up=\"1\">Upgrade</button>\\' : \"\") + \"</div>\";\\n    reportSize();\\n    var b = root.querySelector(\"button[data-up]\");\\n    if (b) b.addEventListener(\"click\", function(){ openUrl(up); });\\n  }\\n  function findPayload(meta){\\n    if (!meta) return null;\\n    var cands = [meta, meta.call_tool_result, meta.mcp_tool_result];\\n    for (var i = 0; i < cands.length; i++){\\n      var c = cands[i]; if (!c) continue;\\n      var m = c._meta || c.meta || c;\\n      if (m && m[KEY]) return m[KEY];\\n    }\\n    return null;\\n  }\\n  // The host\\'s theme wins over the OS preference: an iframe whose colour scheme differs from\\n  // the page around it gets an opaque canvas, so light-on-light text would be unreadable.\\n  function applyTheme(t){\\n    if (t === \"light\" || t === \"dark\") document.documentElement.setAttribute(\"data-theme\", t);\\n  }\\n  function reportSize(){\\n    var r = document.getElementById(\"root\").getBoundingClientRect();\\n    var h = Math.ceil(r.bottom);\\n    notify(\"ui/notifications/size-changed\", {width: Math.ceil(r.right), height: h});\\n    if (window.openai && typeof window.openai.notifyIntrinsicHeight === \"function\") window.openai.notifyIntrinsicHeight(h);\\n  }\\n  function more(n, what){ return n > 0 ? \\'<div class=\"more\">+ \\' + esc(n) + \" more \" + what + \" not shown here; see the full answer.</div>\" : \"\"; }\\n  function render(p){\\n    if (!p) return;\\n    if (p.kind === \"credits_exhausted\") return renderExhausted(p);\\n    var om = p.omitted || {};\\n    var h = \"\";\\n    if (p.pairs && p.pairs.length){\\n      h += \"<h2>Compatibility</h2>\";\\n      p.pairs.forEach(function(x){\\n        h += \\'<div class=\"pair\"><div>\\' + esc(x.a) + \" + \" + esc(x.b)\\n          + (x.source ? \\'<div class=\"cite\">Basis: \\' + esc(x.source) + \"</div>\" : \"\")\\n          + \\'</div><div class=\"v \\' + esc(x.verdict) + \\'\">\\' + esc(x.verdict) + \"</div></div>\";\\n      });\\n      h += more(om.pairs, \"pairs\");\\n    }\\n    if (p.precursor && p.precursor.length){\\n      h += \"<h2>Regulated precursor notice</h2>\";\\n      p.precursor.forEach(function(x){\\n        h += \\'<div class=\"notice\"><strong>\\' + esc(x.chemical) + (x.tier ? \" (\" + esc(x.tier) + \")\" : \"\")\\n          + \"</strong><br>\" + esc(x.statement) + \"</div>\";\\n      });\\n      h += more(om.precursor, \"notices\");\\n    }\\n    if (p.documents && p.documents.length){\\n      h += \"<h2>Source SDS</h2>\";\\n      p.documents.forEach(function(d, i){\\n        h += \\'<div class=\"doc\">\\' + esc(d.chemical) + \": \" + esc(d.supplier || \"unknown supplier\")\\n          + (d.revision_date ? \", rev \" + esc(d.revision_date) : \"\")\\n          + (safeUrl(d.url, ALLOWED_ORIGIN) ? \\'<button data-i=\"\\' + i + \\'\">Open SDS</button>\\' : \"\") + \"</div>\";\\n      });\\n      h += more(om.documents, \"documents\");\\n    }\\n    var root = document.getElementById(\"root\");\\n    root.innerHTML = h;\\n    reportSize();\\n    root.querySelectorAll(\"button[data-i]\").forEach(function(b){\\n      b.addEventListener(\"click\", function(){\\n        var url = safeUrl(p.documents[+b.getAttribute(\"data-i\")].url, ALLOWED_ORIGIN);\\n        if (!url) return;\\n        openUrl(url);\\n      });\\n    });\\n  }\\n  function fromGlobals(){\\n    if (!window.openai) return null;\\n    applyTheme(window.openai.theme);\\n    return findPayload(window.openai.toolResponseMetadata);\\n  }\\n  render(fromGlobals());\\n  window.addEventListener(\"openai:set_globals\", function(){ render(fromGlobals()); });\\n  if (window.ResizeObserver) new ResizeObserver(reportSize).observe(document.getElementById(\"root\"));\\n  window.addEventListener(\"message\", function(e){\\n    if (e.source !== window.parent) return;\\n    var m = e.data; if (!m || m.jsonrpc !== \"2.0\") return;\\n    if (m.id != null && pending[m.id]){ var f = pending[m.id]; delete pending[m.id]; f(m); return; }\\n    if (m.method === \"ui/notifications/tool-result\") render(findPayload(m.params));\\n    if (m.method === \"ui/notifications/host-context-changed\") applyTheme((m.params || {}).theme);\\n  });\\n  // MCP Apps: the host sends tool-result only after the view has initialized.\\n  rpc(\"ui/initialize\", {appInfo: {name: \"msds-chain-compat-card\", version: \"1\"}, appCapabilities: {}},\\n      function(m){\\n        applyTheme(((m.result || {}).hostContext || {}).theme);\\n        notify(\"ui/notifications/initialized\");\\n      });\\n})();\\n</script></body></html>\\n', mime_type='text/html;profile=mcp-app', meta={'ui': {'csp': {'connectDomains': [], 'resourceDomains': []}}, 'openai/widgetCSP': {'connect_domains': [], 'resource_domains': [], 'redirect_domains': ['https://api.msdschain.lagentbot.com', 'https://msdschain.lagentbot.com']}, 'openai/widgetDescription': 'Compatibility verdicts with the source SDS for each chemical.'})"
+  ]
+ },
+ "resources": [
+  {
+   "_meta": {
+    "openai/widgetCSP": {
+     "connect_domains": [],
+     "redirect_domains": [
+      "https://api.msdschain.lagentbot.com",
+      "https://msdschain.lagentbot.com"
+     ],
+     "resource_domains": []
+    },
+    "openai/widgetDescription": "Compatibility verdicts with the source SDS for each chemical.",
+    "ui": {
+     "csp": {
+      "connectDomains": [],
+      "resourceDomains": []
+     }
+    }
+   },
+   "annotations": null,
+   "description": "Inline card for check_chemical_compatibility: verdicts, precursor notices, source SDS.",
+   "icons": null,
+   "mimeType": "text/html;profile=mcp-app",
+   "name": "compat_card",
+   "size": null,
+   "title": "Compatibility card",
+   "uri": "ui://msds-chain/compat-card-v3.html"
+  }
+ ],
+ "tools": [
+  {
+   "_meta": {
+    "openai/outputTemplate": "ui://msds-chain/compat-card-v3.html",
+    "ui": {
+     "resourceUri": "ui://msds-chain/compat-card-v3.html"
+    }
+   },
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Check Chemical Compatibility"
+   },
+   "description": "\n    Check pairwise compatibility between a list of chemicals.\n\n    Returns, for every pair, a verdict (compatible / caution / incompatible)\n    with the reason and the rule it came from.\n\n    Scope: this answers whether two chemicals may be brought together, and\n    nothing more. To find out which cabinet each one belongs in, at what\n    temperature, what it must be kept away from, or whether it forms peroxides\n    on standing, call get_storage_guidance as well. A set of pairwise verdicts\n    does not by itself lay out where the chemicals go.\n\n    Use this before an experiment to verify it is safe to use the listed\n    chemicals together in the same lab setting.\n\n    Args:\n        chemicals: List of chemical names or CAS numbers, e.g.\n                   [\"acetone\", \"methanol\", \"ethanol\"] or [\"67-64-1\", \"67-56-1\"]\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemicals": {
+      "description": "List of chemical names or CAS numbers, e.g. [\"acetone\", \"sulfuric acid\"] or [\"67-64-1\", \"67-56-1\"]. Names and CAS numbers can be mixed.",
+      "items": {
+       "type": "string"
+      },
+      "title": "Chemicals",
+      "type": "array"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\", \"zh-TW\", \"ja\", \"de\", \"id\", \"ko\", \"ru\", \"fr\", \"es\". Anything else, or omitted, is answered in English. Parts we have not translated yet are returned in English with an explicit note saying so.",
+      "title": "Lang"
+     },
+     "suppliers": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional. {chemical: supplier} when the user names whose SDS they hold, e.g. {\"acetone\": \"Sigma-Aldrich\"}. Keys must match `chemicals` exactly. We disclose whether the answer came from that supplier; it does not filter which SDS is used.",
+      "title": "Suppliers"
+     }
+    },
+    "required": [
+     "chemicals"
+    ],
+    "title": "check_chemical_compatibilityArguments",
+    "type": "object"
+   },
+   "name": "check_chemical_compatibility",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Get Chemical Risk Warnings"
+   },
+   "description": "\n    Get hazard and risk warnings for one or more chemicals.\n\n    Returns GHS hazard classification, signal words (Danger/Warning), H-codes,\n    flash point, toxicity, and recommended PPE.\n\n    DRILL-DOWN tool: use this only when the user explicitly wants the raw structured\n    hazard fields. For a broad \"what are the hazards / is X dangerous / what PPE\"\n    question, prefer `ask_chemical_safety` — it returns one sourced answer instead of\n    forcing you to chain several tools.\n\n    Args:\n        chemicals: List of chemical names or CAS numbers, e.g.\n                   [\"acetone\", \"67-56-1\"]\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemicals": {
+      "description": "List of chemical names or CAS numbers, e.g. [\"acetone\", \"sulfuric acid\"] or [\"67-64-1\", \"67-56-1\"]. Names and CAS numbers can be mixed.",
+      "items": {
+       "type": "string"
+      },
+      "title": "Chemicals",
+      "type": "array"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\", \"zh-TW\", \"ja\", \"de\", \"id\", \"ko\", \"ru\", \"fr\", \"es\". Anything else, or omitted, is answered in English. Parts we have not translated yet are returned in English with an explicit note saying so.",
+      "title": "Lang"
+     },
+     "suppliers": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional. {chemical: supplier} when the user names whose SDS they hold, e.g. {\"acetone\": \"Sigma-Aldrich\"}. Keys must match `chemicals` exactly. We disclose whether the answer came from that supplier; it does not filter which SDS is used.",
+      "title": "Suppliers"
+     }
+    },
+    "required": [
+     "chemicals"
+    ],
+    "title": "get_chemical_risk_warningsArguments",
+    "type": "object"
+   },
+   "name": "get_chemical_risk_warnings",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Check Regulatory Compliance"
+   },
+   "description": "\n    Check multi-region regulatory status for chemicals. Answers TWO separate questions\n    per region — do not collapse them (CI-493):\n\n    1. `status` — is it on a RESTRICTION list (EU SVHC / REACH Annex XVII, US Prop 65,\n       China Catalogue of Hazardous Chemicals, JP CSCL, SG EPMA, Korea Restricted /\n       Prohibited Substances, Taiwan MOENV Listed Toxic and Concerned Chemical Substances,\n       Taiwan OSHA Priority Management and Controlled Chemicals)?\n         `restricted`     on at least one restriction list. A REACH Annex XVII flag names\n                          the entry numbers, e.g. \"REACH Annex XVII (Entry 5; Entry 72)\";\n                          each entry restricts specific uses, concentrations or articles,\n                          so pass the entry on rather than calling the substance banned.\n         `detected`       only indirect evidence: a CMR hazard code, an occupational\n                          exposure limit, an SDS Section 15 mention, or (EU) a hit on\n                          CLP Annex VI, Seveso III or the Water Framework Directive\n                          priority list. Those hits are still named in `flags`, each\n                          marked \"not a restriction\" — relay that marking, do not\n                          upgrade it. (EU) A diisocyanate matched by name to REACH\n                          Annex XVII Entry 74 is also `detected`: relay its training\n                          condition, do not upgrade it to `restricted`. (US) A metal\n                          compound matched by name to a Prop 65 category entry such\n                          as \"Lead and lead compounds\" is also `detected`: relay that\n                          it is a match by name, do not upgrade it to `restricted`.\n                          🔴 NOT a clearance and NOT a violation.\n         `not_restricted` we DID check that region's restriction lists and it is not on\n                          them. `details` names which lists were checked. Lists we do not\n                          hold were not checked, so this is not a clearance either.\n         `unverified`     no check was performed — we hold no restriction list for that\n                          region (CA, AU), or the source could not be read.\n                          KR has one restriction list (Restricted / Prohibited\n                          Substances); hazardous designated substances such as\n                          benzene are NOT on it, so KR `not_restricted` is not a\n                          clearance.\n                          TW has four restriction lists (MOENV Listed Toxic and\n                          Concerned Chemical Substances, OSHA Priority Management and\n                          Controlled Chemicals), so TW `not_restricted` means \"not on\n                          those four lists\", nothing more. The Taiwan OSHA Permissible\n                          Exposure Standards are not a restriction list.\n                          🔴 Never report this as \"not regulated\".\n    2. `inventory` — is it on that region's EXISTING-SUBSTANCE inventory (TSCA / IECSC /\n       KECL / DSL / AIIC / REACH registered)? Here the polarity is REVERSED:\n         `on_inventory: true`  registered there — about registration, not restriction\n         `on_inventory: false` 🔴 the direction that needs attention: a substance absent\n                               from the inventory typically needs new-substance\n                               notification before import\n         `on_inventory: null`  we hold no inventory for that region. For TW (TCSI) a\n                               `lookup` link to the official Taiwan OSHA CSNN query page\n                               is returned instead: pass the link on and say we do NOT\n                               determine existing / new substance status there\n\n    Use this when preparing export documentation, compliance audits, or when working with\n    chemicals that may be restricted in certain jurisdictions.\n    🔴 No result from this tool is ever, on its own, an import/export clearance. In\n    particular an exposure limit (OSHA PEL) answers \"how much exposure is allowed\", not\n    \"is this substance permitted\" — report it as evidence, never as compliance.\n\n    Args:\n        chemicals: List of chemical names or CAS numbers\n        regions:   Optional list of region codes to check, e.g. [\"EU\", \"US\", \"CN\"]\n                   Defaults to EU + US if not specified.\n                   Valid codes: EU, US, CN, JP, KR, CA, AU, TW\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemicals": {
+      "description": "List of chemical names or CAS numbers, e.g. [\"acetone\", \"sulfuric acid\"] or [\"67-64-1\", \"67-56-1\"]. Names and CAS numbers can be mixed.",
+      "items": {
+       "type": "string"
+      },
+      "title": "Chemicals",
+      "type": "array"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\", \"zh-TW\", \"ja\", \"de\", \"id\", \"ko\", \"ru\", \"fr\", \"es\". Anything else, or omitted, is answered in English. Parts we have not translated yet are returned in English with an explicit note saying so.",
+      "title": "Lang"
+     },
+     "regions": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Region codes to check. Valid codes: \"EU\", \"US\", \"CN\", \"JP\", \"KR\", \"CA\", \"AU\", \"SG\", \"TW\". Omit to check EU + US (the default pair) — the response says explicitly which regions were used.",
+      "title": "Regions"
+     }
+    },
+    "required": [
+     "chemicals"
+    ],
+    "title": "check_regulatory_complianceArguments",
+    "type": "object"
+   },
+   "name": "check_regulatory_compliance",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Ask Chemical Safety Question"
+   },
+   "description": "\n    PREFERRED first tool for any general chemical-safety question — hazards, PPE,\n    first aid, spill/exposure response, storage, disposal, \"is X safe\", \"what do I\n    need to handle Y\", GHS interpretation, MSDS lookup.\n\n    Returns ONE answer grounded in a specific supplier SDS, with the source\n    (supplier + revision date) cited and any general knowledge clearly separated\n    from what the SDS actually says.\n\n    Use this FIRST for broad questions instead of chaining search_chemical_database\n    + get_chemical_risk_warnings + get_ppe_recommendation — those are slower, produce\n    a fragmented answer, and lose the single sourced citation. Reach for the granular\n    tools only when the user explicitly wants just that one structured field.\n\n    When presenting the answer, cite the returned source and do not add hazard,\n    medical, or regulatory claims that are not in the tool output.\n\n    A question may name more chemicals than one turn checks. When the result carries a\n    non-empty `unchecked` list, you MUST say so before any conclusion and MUST NOT state\n    or imply whether data exists for those — this turn did not look them up. Tell the\n    user to ask about them separately.\n\n    Args:\n        question: Any chemical safety question, e.g.\n                  \"What are the main hazards and PPE for TMAH?\"\n                  \"How should I store acetone and methanol in the same cabinet?\"\n                  \"A worker got hydrofluoric acid on their skin — first aid?\"\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\". Anything else, or omitted, is answered in English.",
+      "title": "Lang"
+     },
+     "question": {
+      "description": "A chemical safety question in natural language, e.g. \"What are the main hazards and PPE for TMAH?\", \"How should I store acetone and methanol in the same cabinet?\", \"A worker got hydrofluoric acid on their skin — first aid?\"",
+      "title": "Question",
+      "type": "string"
+     }
+    },
+    "required": [
+     "question"
+    ],
+    "title": "ask_chemical_safetyArguments",
+    "type": "object"
+   },
+   "name": "ask_chemical_safety",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Get PPE Recommendation"
+   },
+   "description": "\n    Get PPE (Personal Protective Equipment) recommendations for chemicals.\n\n    Returns specific glove types, eye protection, respiratory protection, and\n    body protection requirements based on MSDS Section 8 data and GHS hazard codes.\n\n    DRILL-DOWN tool: use this only when the user explicitly wants a standalone PPE\n    list. A broad \"what are the hazards and what PPE\" question is answered in one\n    sourced call by `ask_chemical_safety` — prefer that over chaining tools.\n\n    Args:\n        chemicals: List of chemical names or CAS numbers, e.g.\n                   [\"acetone\", \"hydrochloric acid\"] or [\"67-64-1\"]\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemicals": {
+      "description": "List of chemical names or CAS numbers, e.g. [\"acetone\", \"sulfuric acid\"] or [\"67-64-1\", \"67-56-1\"]. Names and CAS numbers can be mixed.",
+      "items": {
+       "type": "string"
+      },
+      "title": "Chemicals",
+      "type": "array"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\", \"zh-TW\", \"ja\", \"de\", \"id\", \"ko\", \"ru\", \"fr\", \"es\". Anything else, or omitted, is answered in English. Parts we have not translated yet are returned in English with an explicit note saying so.",
+      "title": "Lang"
+     },
+     "suppliers": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional. {chemical: supplier} when the user names whose SDS they hold, e.g. {\"acetone\": \"Sigma-Aldrich\"}. Keys must match `chemicals` exactly. We disclose whether the answer came from that supplier; it does not filter which SDS is used.",
+      "title": "Suppliers"
+     }
+    },
+    "required": [
+     "chemicals"
+    ],
+    "title": "get_ppe_recommendationArguments",
+    "type": "object"
+   },
+   "name": "get_ppe_recommendation",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Get Storage Guidance"
+   },
+   "description": "\n    Get storage and isolation guidance for chemicals.\n\n    Returns storage class (flammable/oxidizer/corrosive/toxic/general),\n    recommended cabinet type and color code, temperature requirements,\n    incompatible materials for isolation, and specific storage instructions\n    derived from SDS Section 7.\n\n    Args:\n        chemicals: List of chemical names or CAS numbers, e.g.\n                   [\"acetone\", \"sulfuric acid\"] or [\"67-64-1\"]\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemicals": {
+      "description": "List of chemical names or CAS numbers, e.g. [\"acetone\", \"sulfuric acid\"] or [\"67-64-1\", \"67-56-1\"]. Names and CAS numbers can be mixed.",
+      "items": {
+       "type": "string"
+      },
+      "title": "Chemicals",
+      "type": "array"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\", \"zh-TW\", \"ja\", \"de\", \"id\", \"ko\", \"ru\", \"fr\", \"es\". Anything else, or omitted, is answered in English. Parts we have not translated yet are returned in English with an explicit note saying so.",
+      "title": "Lang"
+     },
+     "suppliers": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional. {chemical: supplier} when the user names whose SDS they hold, e.g. {\"acetone\": \"Sigma-Aldrich\"}. Keys must match `chemicals` exactly. We disclose whether the answer came from that supplier; it does not filter which SDS is used.",
+      "title": "Suppliers"
+     }
+    },
+    "required": [
+     "chemicals"
+    ],
+    "title": "get_storage_guidanceArguments",
+    "type": "object"
+   },
+   "name": "get_storage_guidance",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Get Emergency Response"
+   },
+   "description": "\n    Get emergency response guidance for a chemical incident.\n\n    Returns immediate actions, SDS-specific instructions from Section 4/5/6,\n    and H-code-based guidance for three scenario types.\n\n    Args:\n        chemical: Chemical name or CAS number, e.g. \"hydrochloric acid\"\n        scenario: Type of emergency — \"spill\" (leak/release), \"fire\", or\n                  \"exposure\" (skin/eye/inhalation first aid). Defaults to \"spill\".\n                  🔴 Person first: material that reached a person is \"exposure\" even\n                  when the user says \"spilled\" — only \"exposure\" returns the\n                  substance-specific antidote protocol (CI-579).\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemical": {
+      "description": "Chemical name or CAS number, e.g. \"acetone\" or \"67-64-1\".",
+      "title": "Chemical",
+      "type": "string"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\", \"zh-TW\", \"ja\", \"de\", \"id\", \"ko\", \"ru\", \"fr\", \"es\". Anything else, or omitted, is answered in English. Parts we have not translated yet are returned in English with an explicit note saying so.",
+      "title": "Lang"
+     },
+     "scenario": {
+      "default": "spill",
+      "description": "Type of emergency: \"spill\" (leak/release), \"fire\", or \"exposure\" (skin/eye/inhalation first aid). These three are the only accepted values — the backend rejects anything else, so map the incident to the closest one (e.g. skin contact / splash / inhalation → \"exposure\"). 🔴 PERSON FIRST: if the material reached a person, use \"exposure\" EVEN IF the incident is also a spill and the user said \"spilled\" — e.g. \"I spilled it on my hand\" is \"exposure\", not \"spill\". Only \"exposure\" returns the substance-specific first-aid protocol (e.g. the calcium gluconate protocol for hydrofluoric acid); picking \"spill\" for a contact incident silently returns cleanup guidance instead of the antidote. 🔴 CI-1020 — A BURN ON A PERSON IS \"exposure\", NOT \"fire\": \"I got burned by HF\", \"it is burning my hand\", \"chemical burn on my arm\" are all \"exposure\". Use \"fire\" only when something is actually combusting.",
+      "enum": [
+       "spill",
+       "fire",
+       "exposure"
+      ],
+      "title": "Scenario",
+      "type": "string"
+     }
+    },
+    "required": [
+     "chemical"
+    ],
+    "title": "get_emergency_responseArguments",
+    "type": "object"
+   },
+   "name": "get_emergency_response",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Get Exposure Limits"
+   },
+   "description": "Get occupational exposure limits (OEL/TLV/PEL/MAC) for chemicals.\n\n    Returns TWA, STEL, and Ceiling values from multiple standards:\n    - OSHA PEL (US)\n    - ACGIH TLV (International)\n    - EU SCOEL IOELV\n    - Japan 産衛研\n    - China GBZ\n\n    When no curated or regulatory value is on file, the answer may instead QUOTE\n    Section 8.1 of the supplier's SDS (supplier and revision named). Those quotes are\n    the supplier's words, not values we extracted: present them as quotes and do not\n    restate a number from them as a limit we hold.\n\n    Args:\n        chemicals: List of chemical names or CAS numbers\n        region: Optional filter — \"US\", \"EU\", \"JP\", \"CN\", or \"INT\"\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemicals": {
+      "description": "List of chemical names or CAS numbers, e.g. [\"acetone\", \"sulfuric acid\"] or [\"67-64-1\", \"67-56-1\"]. Names and CAS numbers can be mixed.",
+      "items": {
+       "type": "string"
+      },
+      "title": "Chemicals",
+      "type": "array"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "region": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional filter for which standards to return: \"US\" (OSHA PEL), \"EU\" (IOELV), \"JP\", \"CN\" (GBZ 2.1), or \"INT\" (ACGIH TLV). Omit to return every standard on file.",
+      "title": "Region"
+     }
+    },
+    "required": [
+     "chemicals"
+    ],
+    "title": "get_exposure_limitsArguments",
+    "type": "object"
+   },
+   "name": "get_exposure_limits",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Get Transport Classification"
+   },
+   "description": "Get UN transport classification for chemicals (dangerous goods shipping).\n    Returns UN number, proper shipping name, hazard class, packing group,\n    and transport mode details (ADR road, IATA air, IMDG sea).\n    Without a curated entry, the answer may come from the supplier's SDS Section 14,\n    quoted with supplier and revision. If that text names several UN numbers the\n    answer is \"not determined\" and lists every candidate: do not pick one.\n    Args:\n        chemicals: List of chemical names or CAS numbers\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemicals": {
+      "description": "List of chemical names or CAS numbers, e.g. [\"acetone\", \"sulfuric acid\"] or [\"67-64-1\", \"67-56-1\"]. Names and CAS numbers can be mixed.",
+      "items": {
+       "type": "string"
+      },
+      "title": "Chemicals",
+      "type": "array"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "suppliers": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional. {chemical: supplier} when the user names whose SDS they hold, e.g. {\"acetone\": \"Sigma-Aldrich\"}. Keys must match `chemicals` exactly. We disclose whether the answer came from that supplier; it does not filter which SDS is used.",
+      "title": "Suppliers"
+     }
+    },
+    "required": [
+     "chemicals"
+    ],
+    "title": "get_transport_classificationArguments",
+    "type": "object"
+   },
+   "name": "get_transport_classification",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Create Audit Session"
+   },
+   "description": "\n    Run a full MSDS safety audit for a list of chemicals and return a session id.\n\n    Creates a persistent audit session on MSDS Chain, runs pairwise compatibility\n    and risk analysis across all chemicals, and returns a session_id that can later\n    be passed to `get_audit_report` to fetch the signed PDF report URL.\n\n    Use this when the user wants an archivable, signed record of a safety review\n    (e.g. for SOPs, compliance audits, or to share with a PI / safety officer),\n    rather than a one-off Q&A.\n\n    Args:\n        experiment_name: Short human-readable label for the audit, e.g.\n                         \"Grignard prep — 2026-04-16\" or \"Solvent screening #3\".\n        chemicals:       List of chemical names or CAS numbers to include in the\n                         audit, e.g. [\"acetone\", \"methanol\", \"67-64-1\"].\n\n    Returns:\n        Session id + compatibility summary (compatible/caution/incompatible pair\n        counts + top warnings). An API key must be configured (MSDS_API_KEY) so\n        the session is bound to your account and the report is retrievable.\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemicals": {
+      "description": "List of chemical names or CAS numbers, e.g. [\"acetone\", \"sulfuric acid\"] or [\"67-64-1\", \"67-56-1\"]. Names and CAS numbers can be mixed.",
+      "items": {
+       "type": "string"
+      },
+      "title": "Chemicals",
+      "type": "array"
+     },
+     "experiment_name": {
+      "description": "Short human-readable label for the audit, shown on the report, e.g. \"Grignard prep — 2026-04-16\" or \"Solvent screening #3\".",
+      "title": "Experiment Name",
+      "type": "string"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     }
+    },
+    "required": [
+     "experiment_name",
+     "chemicals"
+    ],
+    "title": "create_audit_sessionArguments",
+    "type": "object"
+   },
+   "name": "create_audit_session",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Get Audit Report"
+   },
+   "description": "\n    Get a short-lived signed URL to download an archivable PDF safety report.\n\n    Two ways to call it:\n    - **No arguments** — builds the report from the chemicals this user has analysed\n      over the last 7 days (compatibility / risk / regulatory / protocol checks).\n      Use this whenever the user asks for \"a report\", \"something for the file\",\n      \"a document for my PI / safety officer\" and you do not already hold a\n      session id. You do NOT need to ask them to list the chemicals again.\n    - **With a session_id** — the classic path, for a session you just created\n      with `create_audit_session`.\n\n    The PDF contains the chemicals, compatibility matrix, risk warnings and session\n    metadata, and is signed, so it can be filed as a compliance record.\n\n    Args:\n        session_id: Optional. The session id returned by `create_audit_session`,\n                    e.g. \"DEMO-A1B2C3D4\". Omit to report on recent analyses.\n\n    Returns:\n        A signed URL valid for ~5 minutes. The session must be owned by the\n        API key's user (MSDS_API_KEY).\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Report language: pass the language THIS conversation is in. Supported: \"en\", \"zh\", \"zh-TW\", \"ja\", \"de\", \"id\", \"ko\", \"ru\", \"fr\", \"es\" (the PDF labels are professionally translated for all of them). Anything else, or omitted, gives English.",
+      "title": "Lang"
+     },
+     "session_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "The session id returned by `create_audit_session`, e.g. \"DEMO-A1B2C3D4\". OMIT IT to report on what this user has already analysed in the last 7 days — no session needed, nothing to restate.",
+      "title": "Session Id"
+     }
+    },
+    "title": "get_audit_reportArguments",
+    "type": "object"
+   },
+   "name": "get_audit_report",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Search Chemical Database"
+   },
+   "description": "\n    Search the MSDS Chain database for a specific chemical.\n\n    Returns a ranked list of CANDIDATE records for confirmation, each with CAS\n    number, chemical name, NFPA ratings (flammability, health, reactivity), GHS\n    classification, and whether full MSDS data is available. A candidate row is\n    not a decided identity: near-matches are expected here by design, and the\n    response says why a query resolved the way it did.\n\n    Use this to browse what the database holds and to pick the right record.\n    Do NOT read the top row as \"the CAS number for this name\". For a decided\n    identity, and for any hazard, compatibility, storage or compliance verdict,\n    call ask_chemical_safety or the corresponding judgement tool, which apply\n    the identity checks this listing surface deliberately does not.\n\n    Args:\n        query: Chemical name, synonym, or CAS number, e.g.\n               \"methanol\", \"wood alcohol\", \"67-56-1\"\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "query": {
+      "description": "A single chemical name, synonym, or CAS number, e.g. \"methanol\", \"wood alcohol\", \"67-56-1\". Not a natural-language question — use ask_chemical_safety for those.",
+      "title": "Query",
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "title": "search_chemical_databaseArguments",
+    "type": "object"
+   },
+   "name": "search_chemical_database",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": true,
+    "readOnlyHint": true,
+    "title": "Search MSDS Online (PubChem)"
+   },
+   "description": "\n    Look up GHS hazard data for a chemical NOT in the MSDS Chain database, via PubChem.\n\n    Use this ONLY as a fallback when search_chemical_database returns no result. The\n    data is PubChem's AGGREGATED GHS classification, clearly labelled source=\"pubchem\"\n    — it is NOT a signed supplier SDS. Present it to the user as PubChem-sourced and\n    unverified; prefer uploading a real SDS (upload_msds_pdf) when accuracy matters.\n\n    Args:\n        chemical_name: Chemical name, e.g. \"acetonitrile\"\n        cas_number:    CAS number, e.g. \"75-05-8\" (used first if provided)\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "cas_number": {
+      "default": "",
+      "description": "CAS number, e.g. \"75-05-8\". Used in preference to chemical_name when both are given, because it identifies the substance exactly.",
+      "title": "Cas Number",
+      "type": "string"
+     },
+     "chemical_name": {
+      "default": "",
+      "description": "Chemical name to look up on PubChem, e.g. \"acetonitrile\". Supply this or cas_number (or both).",
+      "title": "Chemical Name",
+      "type": "string"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     }
+    },
+    "title": "search_msds_onlineArguments",
+    "type": "object"
+   },
+   "name": "search_msds_online",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Get SDS Section"
+   },
+   "description": "\n    Retrieve a specific SDS (Safety Data Sheet) section for a chemical.\n\n    The 16 standard GHS-SDS sections are:\n      1. Identification\n      2. Hazard(s) identification\n      3. Composition / ingredients\n      4. First-aid measures\n      5. Fire-fighting measures\n      6. Accidental release measures\n      7. Handling and storage\n      8. Exposure controls / PPE\n      9. Physical and chemical properties\n      10. Stability and reactivity\n      11. Toxicological information\n      12. Ecological information\n      13. Disposal considerations\n      14. Transport information\n      15. Regulatory information\n      16. Other information\n\n    Use this when you need detailed data from a specific section rather than\n    a general safety overview.\n\n    Args:\n        chemical: Chemical name or CAS number\n        section:  SDS section number (1-16)\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemical": {
+      "description": "Chemical name or CAS number, e.g. \"acetone\" or \"67-64-1\".",
+      "title": "Chemical",
+      "type": "string"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\", \"zh-TW\", \"ja\", \"de\", \"id\", \"ko\", \"ru\", \"fr\", \"es\". Anything else, or omitted, is answered in English. Parts we have not translated yet are returned in English with an explicit note saying so.",
+      "title": "Lang"
+     },
+     "section": {
+      "description": "GHS-SDS section number, 1-16. Common ones: 2 hazards, 4 first aid, 5 fire-fighting, 6 accidental release, 7 handling & storage, 8 exposure controls & PPE, 9 physical properties, 13 disposal, 14 transport.",
+      "maximum": 16,
+      "minimum": 1,
+      "title": "Section",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "chemical",
+     "section"
+    ],
+    "title": "get_sds_sectionArguments",
+    "type": "object"
+   },
+   "name": "get_sds_section",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Get Chemical Alternatives"
+   },
+   "description": "\n    Suggest safer alternatives for a chemical, considering its intended use.\n\n    Returns 2-4 alternative chemicals with: name, CAS number, why it's safer\n    (lower toxicity, higher flash point, non-CMR, etc.), any trade-offs\n    (cost, availability, performance), and relevant regulatory context\n    (e.g., REACH SVHC substitution requirement).\n\n    Use this when a chemical is flagged as high-risk, restricted, or when the\n    user is exploring greener chemistry options.\n\n    Args:\n        chemical: Chemical name or CAS number to find alternatives for\n        use_case: Optional context about how the chemical is being used, e.g.\n                  \"degreasing solvent\", \"extraction solvent for organic synthesis\",\n                  \"cleaning agent for labware\"\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemical": {
+      "description": "Chemical name or CAS number, e.g. \"acetone\" or \"67-64-1\".",
+      "title": "Chemical",
+      "type": "string"
+     },
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\", \"zh-TW\", \"ja\", \"de\", \"id\", \"ko\", \"ru\", \"fr\", \"es\". Anything else, or omitted, is answered in English. Parts we have not translated yet are returned in English with an explicit note saying so.",
+      "title": "Lang"
+     },
+     "use_case": {
+      "default": "",
+      "description": "Optional context for how the chemical is used, which changes what counts as a viable substitute, e.g. \"degreasing solvent\", \"extraction solvent for organic synthesis\", \"cleaning agent for labware\".",
+      "title": "Use Case",
+      "type": "string"
+     }
+    },
+    "required": [
+     "chemical"
+    ],
+    "title": "get_chemical_alternativesArguments",
+    "type": "object"
+   },
+   "name": "get_chemical_alternatives",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Validate Protocol Chemicals"
+   },
+   "description": "\n    Extract and validate chemical names from a protocol or experiment description.\n\n    Parses free-text or code (e.g., Opentrons Python protocol, lab notebook entry,\n    SOP paragraph) to identify all mentioned chemicals, then checks each against\n    the MSDS Chain database.\n\n    Returns a structured list with: chemical name as mentioned, canonical name,\n    CAS number (if found), and whether full safety data is available.\n\n    Use this as the FIRST step before calling batch_safety_check or\n    check_chemical_compatibility — it saves the user from manually listing chemicals.\n\n    A protocol routinely names more chemicals than one turn checks. The result carries an\n    `unchecked` list of the ones this turn did NOT look up. When it is non-empty you MUST\n    report those chemicals as \"not checked\" before any conclusion, and you MUST NOT say\n    or imply that we lack data or a record for them — nothing was looked up. Tell the\n    user to re-send them separately or in smaller batches.\n\n    Args:\n        protocol_text: Any text containing chemical names — can be a Python script,\n                       a natural language protocol description, or a reagent list.\n                       Maximum ~4000 characters.\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\". Anything else, or omitted, is answered in English.",
+      "title": "Lang"
+     },
+     "protocol_text": {
+      "description": "Any text containing chemical names — a lab protocol, a reagent list, or code such as an Opentrons Python protocol. Chemical names are extracted from it automatically. Maximum ~4000 characters.",
+      "title": "Protocol Text",
+      "type": "string"
+     }
+    },
+    "required": [
+     "protocol_text"
+    ],
+    "title": "validate_protocol_chemicalsArguments",
+    "type": "object"
+   },
+   "name": "validate_protocol_chemicals",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Check Mixing Order"
+   },
+   "description": "\n    Determine the safe order for mixing/adding two chemicals.\n\n    Returns the recommended addition sequence, the dangerous sequence to avoid,\n    reasoning (exothermic potential, gas evolution, splashing risk), and any\n    required precautions (cooling, dilution rate, inert atmosphere).\n\n    Classic examples: \"acid into water, never water into acid\";\n    \"add oxidizer to substrate slowly, not the reverse\".\n\n    Use this when reviewing liquid transfer steps in an Opentrons protocol or\n    any manual procedure involving sequential addition of reagents.\n\n    Args:\n        chemical_a: First chemical name or CAS number\n        chemical_b: Second chemical name or CAS number\n        context:    Optional context about the procedure, e.g.\n                    \"diluting for titration\" or \"quenching a reaction\"\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemical_a": {
+      "description": "First chemical name or CAS number. Order of chemical_a/chemical_b is irrelevant — the tool returns which one to add to which.",
+      "title": "Chemical A",
+      "type": "string"
+     },
+     "chemical_b": {
+      "description": "Second chemical name or CAS number.",
+      "title": "Chemical B",
+      "type": "string"
+     },
+     "context": {
+      "default": "",
+      "description": "Optional context about the procedure, e.g. \"diluting for titration\" or \"quenching a reaction\".",
+      "title": "Context",
+      "type": "string"
+     },
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\". Anything else, or omitted, is answered in English.",
+      "title": "Lang"
+     }
+    },
+    "required": [
+     "chemical_a",
+     "chemical_b"
+    ],
+    "title": "check_mixing_orderArguments",
+    "type": "object"
+   },
+   "name": "check_mixing_order",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Get Waste Disposal Guidance"
+   },
+   "description": "\n    Get waste classification and disposal guidance for chemicals.\n\n    Returns waste category (halogenated/non-halogenated/acidic/alkaline/\n    heavy metal/oxidizing/reactive), disposal method, container requirements,\n    and incompatible waste streams that must NOT be mixed.\n\n    Based on SDS Section 13 (Disposal Considerations) data.\n\n    Use this after an experiment to determine proper waste segregation and\n    disposal procedures for the chemicals used.\n\n    Args:\n        chemicals: List of chemical names or CAS numbers, e.g.\n                   [\"dichloromethane\", \"acetone\", \"sulfuric acid\"]\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemicals": {
+      "description": "List of chemical names or CAS numbers, e.g. [\"acetone\", \"sulfuric acid\"] or [\"67-64-1\", \"67-56-1\"]. Names and CAS numbers can be mixed.",
+      "items": {
+       "type": "string"
+      },
+      "title": "Chemicals",
+      "type": "array"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "suppliers": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional. {chemical: supplier} when the user names whose SDS they hold, e.g. {\"acetone\": \"Sigma-Aldrich\"}. Keys must match `chemicals` exactly. We disclose whether the answer came from that supplier; it does not filter which SDS is used.",
+      "title": "Suppliers"
+     }
+    },
+    "required": [
+     "chemicals"
+    ],
+    "title": "get_waste_disposalArguments",
+    "type": "object"
+   },
+   "name": "get_waste_disposal",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Compare SDS Versions"
+   },
+   "description": "\n    Compare a chemical's two most recent SDS versions and report whether its\n    hazard data changed (and whether the change is relevant to safety verdicts).\n\n    Identifies H-code additions/removals between the latest two on-record SDS\n    revisions, and flags whether the change could affect a prior compatibility\n    or risk conclusion.\n\n    Use when a user asks if a chemical's safety data has been updated, or to\n    check whether a past safety conclusion might be affected by an SDS revision.\n\n    Args:\n        chemical: Chemical name or CAS number, e.g. \"hydrogen peroxide\" or \"7722-84-1\".\n        supplier: Optional SDS supplier/manufacturer to disambiguate (e.g. \"Sigma-Aldrich\").\n        region:   Optional region code to narrow the lookup (e.g. \"US\", \"EU\", \"JP\", \"CN\").\n        version_old / version_new: DEPRECATED and ignored — an arbitrary version pair\n            cannot be compared. Supplying them adds an explicit note to the reply saying\n            the request was not honoured; they never change what is compared.\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemical": {
+      "description": "Chemical name or CAS number, e.g. \"acetone\" or \"67-64-1\".",
+      "title": "Chemical",
+      "type": "string"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "region": {
+      "default": "",
+      "description": "Optional region code to narrow the lookup, e.g. \"US\", \"EU\", \"JP\", \"CN\".",
+      "title": "Region",
+      "type": "string"
+     },
+     "supplier": {
+      "default": "",
+      "description": "Optional SDS supplier/manufacturer, to disambiguate when several suppliers' sheets exist for the same chemical, e.g. \"Sigma-Aldrich\".",
+      "title": "Supplier",
+      "type": "string"
+     },
+     "version_new": {
+      "default": null,
+      "description": "DEPRECATED and ignored. See version_old.",
+      "title": "Version New"
+     },
+     "version_old": {
+      "default": null,
+      "description": "DEPRECATED and ignored. This tool always compares the two most recent revisions on record; it cannot compare an arbitrary pair. Accepted only so that clients holding an older tool snapshot are told their request was not honoured, instead of silently receiving a different comparison.",
+      "title": "Version Old"
+     }
+    },
+    "required": [
+     "chemical"
+    ],
+    "title": "compare_sds_versionsArguments",
+    "type": "object"
+   },
+   "name": "compare_sds_versions",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": true,
+    "readOnlyHint": false,
+    "title": "Upload & Parse MSDS PDF"
+   },
+   "description": "\n    Upload an MSDS/SDS PDF file to MSDS Chain and get AI-parsed safety data.\n\n    Parses the PDF with an LLM to extract: chemical name, CAS number,\n    GHS hazard classification, NFPA ratings, flash point, LD50, H-codes,\n    PPE requirements, storage conditions, incompatibilities, and safety rules.\n\n    If no session_id is provided, a new audit session is automatically created\n    and its ID is returned so you can call `get_audit_report` later.\n\n    Requires MSDS_API_KEY — the parsed data is stored under your account.\n\n    Args:\n        pdf_source:      One of, tried in this order:\n                         1. A publicly reachable HTTPS URL of the PDF (fetched\n                            server-side).\n                         2. **Inline file bytes, base64-encoded** — only when\n                            you can put the ENTIRE encoded string into this one\n                            call. base64 is ~4/3 the file size (a typical 150 KB\n                            SDS is ~200,000 characters) and cannot be split\n                            across calls, so a PDF attached to a chat in a\n                            remote client usually does not fit; prefer a public\n                            link (1) or the web uploader. Pass either a data URI\n                            (`data:application/pdf;base64,<...>`) or a bare\n                            base64 string of the raw PDF bytes. Max 10 MB\n                            decoded.\n                         3. A local file path (e.g. \"/tmp/acetone_sds.pdf\") —\n                            works ONLY for a self-hosted stdio server running\n                            on the same machine as the file. Do NOT pass a path\n                            from the user's machine or a client-side sandbox to\n                            the hosted server; it will not exist there. If you\n                            cannot get a URL or the raw bytes, send the user to\n                            the web uploader instead.\n\n                         Rule of thumb: a public HTTPS link is the most reliable\n                         route; inline base64 only for files small enough to pass\n                         whole; never a local path that only exists on the user's\n                         machine, not the server's.\n        session_id:      Existing session ID to attach this upload to. If omitted,\n                         a new session is created automatically.\n        experiment_name: Label for the auto-created session (ignored if\n                         session_id is provided). Defaults to \"MCP Upload\".\n        filename:        Optional display filename, used when pdf_source is\n                         inline base64 content (which has no filename of its\n                         own). Defaults to \"upload.pdf\" if omitted.\n\n    Returns:\n        Parsed chemical info (name, CAS, risk level, key fields) and session_id.\n        If parsing partially failed, missing fields are listed so you can follow\n        up with `ask_chemical_safety` for the gaps.\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "experiment_name": {
+      "default": "MCP Upload",
+      "description": "Label for the auto-created session. Ignored when session_id is given.",
+      "title": "Experiment Name",
+      "type": "string"
+     },
+     "filename": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Display filename, used when pdf_source is inline base64 (which carries no filename of its own). Defaults to \"upload.pdf\".",
+      "title": "Filename"
+     },
+     "pdf_source": {
+      "description": "The PDF itself, in one of three forms, tried in this order: (1) a publicly reachable HTTPS URL, fetched server-side; (2) inline base64 of the raw PDF bytes — either a data URI (`data:application/pdf;base64,<...>`) or a bare base64 string, max 10 MB decoded — only if you can emit the WHOLE encoded string in this one call (base64 is ~4/3 the file size, so a typical 150 KB SDS is ~200,000 characters; if you cannot hold it all, ask the user for a public link or send them to the web uploader instead); (3) a local file path, which works ONLY for a self-hosted stdio server on the same machine as the file. Never pass a path from the user's machine or your own sandbox to the hosted server — it does not exist there.",
+      "title": "Pdf Source",
+      "type": "string"
+     },
+     "session_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Existing audit session id to attach this upload to. Omit to create a new session automatically.",
+      "title": "Session Id"
+     }
+    },
+    "required": [
+     "pdf_source"
+    ],
+    "title": "upload_msds_pdfArguments",
+    "type": "object"
+   },
+   "name": "upload_msds_pdf",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Batch Safety Check"
+   },
+   "description": "\n    Run a comprehensive safety check on a list of chemicals in one call.\n\n    Returns a combined report with:\n    - Pairwise compatibility matrix (compatible/caution/incompatible)\n    - Key risk warnings per chemical, with the source SDS for each\n\n    It does NOT return PPE or storage grouping — for those call\n    `get_ppe_recommendation` / `get_storage_guidance`. (This list previously\n    advertised both; the description is what you read when choosing a tool, so\n    naming an output that never arrives invites answering from nothing.)\n\n    Good first call when reviewing the chemical list of an experiment protocol: it\n    covers the pairwise interactions in one round-trip.\n\n    Side effect: when called with a signed-in account, the result is also saved\n    as an audit session in that account and its session_id is returned, so\n    `get_audit_report` can fetch it later. Anonymous calls save nothing.\n\n    Args:\n        chemicals: List of chemical names or CAS numbers (2-20 items), e.g.\n                   [\"acetone\", \"sulfuric acid\", \"sodium hydroxide\", \"methanol\"]\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemicals": {
+      "description": "List of chemical names or CAS numbers to check together, e.g. [\"acetone\", \"sulfuric acid\", \"sodium hydroxide\", \"methanol\"]. Intended for 2-20 items; this runs pairwise compatibility and per-chemical risk warnings in one call (no PPE), so cost and latency grow with the list length.",
+      "items": {
+       "type": "string"
+      },
+      "title": "Chemicals",
+      "type": "array"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\", \"zh-TW\", \"ja\", \"de\", \"id\", \"ko\", \"ru\", \"fr\", \"es\". Anything else, or omitted, is answered in English. Parts we have not translated yet are returned in English with an explicit note saying so.",
+      "title": "Lang"
+     },
+     "suppliers": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional. {chemical: supplier} when the user names whose SDS they hold, e.g. {\"acetone\": \"Sigma-Aldrich\"}. Keys must match `chemicals` exactly. We disclose whether the answer came from that supplier; it does not filter which SDS is used.",
+      "title": "Suppliers"
+     }
+    },
+    "required": [
+     "chemicals"
+    ],
+    "title": "batch_safety_checkArguments",
+    "type": "object"
+   },
+   "name": "batch_safety_check",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Check Regulatory Lists"
+   },
+   "description": "\n    Check which international regulatory lists a chemical appears on.\n\n    Searches regulatory lists across 9 jurisdictions plus 3 international conventions:\n    - US: EPA TSCA Inventory, OSHA PEL, California Prop 65\n    - EU: SVHC Candidate List, REACH Annex XVII, REACH Annex XIV, REACH registered\n      substances, CLP Annex VI, Seveso III, Water Framework Directive priority substances\n    - APAC: China Catalogue of Hazardous Chemicals, China IECSC, Japan CSCL,\n      Korea KECL, Korea Restricted / Prohibited Substances, Australia AIIC, Singapore EPMA,\n      Taiwan MOENV Listed Toxic Chemical Substances, Taiwan MOENV Concerned Chemical\n      Substances, Taiwan OSHA Priority Management Chemicals, Taiwan OSHA Controlled\n      Chemicals, Taiwan OSHA Permissible Exposure Standards\n    - Americas: Canada DSL\n    - Conventions: Rotterdam PIC, Stockholm POPs, Montreal Protocol\n    - Dual-use / export control: CWC Schedules 1/2/3, Australia Group precursors\n    It also reports presence in the EPA CompTox Dashboard, which is an identifier\n    resource rather than a regulatory list.\n\n    Coverage limits, so the answer is not over-read:\n    - Taiwan: the four restriction lists above plus the OSHA Permissible Exposure\n      Standards, which record membership only (no limit values, not a restriction).\n      There is no Taiwan inventory (TCSI), so absence says nothing about whether a\n      substance is registered there. The result carries a link to the official\n      Taiwan OSHA CSNN query page instead: pass it on, and say we do not determine\n      existing / new substance status there.\n    - Korea: the Restricted / Prohibited Substances list holds restriction and\n      prohibition designations only. Hazardous designated substances (e.g. benzene)\n      are NOT on it, so absence from it is not a clearance.\n    - There is NO IARC coverage. Do not infer it from this tool.\n    - The lists are a curated snapshot, not a live regulatory feed. A chemical missing\n      from a list means \"not found in our copy of that list\", never \"not regulated\".\n\n    Returns a summary of all matching lists, helping you understand\n    a chemical's global regulatory footprint at a glance.\n\n    Args:\n        chemical: Chemical name or CAS number\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemical": {
+      "description": "Chemical name or CAS number, e.g. \"acetone\" or \"67-64-1\".",
+      "title": "Chemical",
+      "type": "string"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\", \"zh-TW\", \"ja\", \"de\", \"id\", \"ko\", \"ru\", \"fr\", \"es\". Anything else, or omitted, is answered in English. Parts we have not translated yet are returned in English with an explicit note saying so.",
+      "title": "Lang"
+     }
+    },
+    "required": [
+     "chemical"
+    ],
+    "title": "check_regulatory_listsArguments",
+    "type": "object"
+   },
+   "name": "check_regulatory_lists",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Draft SDS Sections"
+   },
+   "description": "\n    Draft Section 8 (exposure controls / PPE) and Section 15 (regulatory information)\n    of an SDS for the user's OWN mixture, from its ingredient list. No LLM: every line\n    carries its source.\n\n    - Section 8 is assembled per ingredient from a curated supplier SDS for which we\n      hold the original PDF; each block cites supplier + revision date.\n    - Section 15 comes from the government regulatory lists we hold for `region`,\n      NOT from supplier SDSs.\n\n    How to present (do not violate):\n    - Show the `notice` first, verbatim: this is a DRAFT, not a compliant SDS; the SDS\n      issuer must verify every line.\n    - If Section 15 `lists_checked` is null, the lists could NOT be read: say nothing\n      was checked. Never report that as \"not on any list\".\n    - List every `not_drafted`, `unresolved` and `lookup_failed` ingredient to the\n      user; that is what they must supply (upload_msds_pdf, or a CAS number).\n    - Show `truncation_note` / `exposure_limits_note` next to the Section 8 block they\n      belong to, not only in a summary: users copy one block at a time.\n    - Section 2 (mixture classification) is not drafted by this tool.\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "$defs": {
+     "SdsIngredient": {
+      "properties": {
+       "chemical": {
+        "description": "Ingredient name or CAS number, e.g. \"acetone\" or \"67-64-1\".",
+        "title": "Chemical",
+        "type": "string"
+       },
+       "concentration": {
+        "anyOf": [
+         {
+          "type": "string"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "default": null,
+        "description": "Optional, as the user wrote it (e.g. \"60%\", \"1-5 % w/w\"). Echoed next to the drafted line; never parsed or checked.",
+        "title": "Concentration"
+       }
+      },
+      "required": [
+       "chemical"
+      ],
+      "title": "SdsIngredient",
+      "type": "object"
+     }
+    },
+    "properties": {
+     "ingredients": {
+      "description": "The formulation's ingredients, 1-30 items.",
+      "items": {
+       "$ref": "#/$defs/SdsIngredient"
+      },
+      "title": "Ingredients",
+      "type": "array"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\", \"zh-TW\", \"ja\", \"de\", \"id\", \"ko\", \"ru\", \"fr\", \"es\". Anything else, or omitted, is answered in English. Parts we have not translated yet are returned in English with an explicit note saying so.",
+      "title": "Lang"
+     },
+     "region": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Jurisdiction for Section 15, e.g. \"EU\", \"US\", \"TW\", \"KR\". Required whenever Section 15 is drafted (the default). Ask the user; there is no neutral default.",
+      "title": "Region"
+     },
+     "sections": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Which sections to draft: a subset of [8, 15]. Omit for both.",
+      "title": "Sections"
+     }
+    },
+    "required": [
+     "ingredients"
+    ],
+    "title": "draft_sds_sectionsArguments",
+    "type": "object"
+   },
+   "name": "draft_sds_sections",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Validate SDS"
+   },
+   "description": "\n    Check an SDS the user uploaded for quality problems: contradictions between its\n    own sections (e.g. Section 2 hazards vs Section 3 composition vs Section 14\n    transport), gaps, age, and US OSHA HazCom format rules. No LLM: rule-based, and\n    every finding quotes the lines of the SDS it is based on.\n\n    Use it after `upload_msds_pdf`, when the user wants to know whether a supplier's\n    SDS (or their own) is consistent and up to date. It checks only SDSs uploaded by\n    this user, not records from our library. Jurisdiction: US OSHA HazCom only.\n\n    How to present (do not violate):\n    - Show the `notice` first, verbatim. \"No issues\" means these checks found\n      nothing; it is NOT a statement that the SDS is compliant. Never say \"compliant\".\n    - Give every issue with its section(s) and its quoted original text, so the user\n      can find it in their document.\n    - Say which checks were skipped (`checks_skipped`): those could not read their\n      input from this SDS, so they did not look.\n    - It does not rewrite or correct the SDS; it only points at the problems.\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\", \"zh-TW\", \"ja\", \"de\", \"id\", \"ko\", \"ru\", \"fr\", \"es\". Anything else, or omitted, is answered in English. Parts we have not translated yet are returned in English with an explicit note saying so.",
+      "title": "Lang"
+     },
+     "msds_id": {
+      "anyOf": [
+       {
+        "maximum": 2147483647,
+        "minimum": 1,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "The uploaded SDS to check: the `msds_id` printed next to it by `upload_msds_pdf`. OMIT IT to check every SDS uploaded in the session.",
+      "title": "Msds Id"
+     },
+     "session_id": {
+      "description": "The session the SDS was uploaded into: the `session_id` that `upload_msds_pdf` returned.",
+      "title": "Session Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "session_id"
+    ],
+    "title": "validate_sdsArguments",
+    "type": "object"
+   },
+   "name": "validate_sds",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Get SDS Document"
+   },
+   "description": "\n    Return a signed download URL for the original SDS/MSDS PDF of a chemical.\n\n    The URL is valid for approximately 5 minutes and can be opened in a browser\n    or downloaded with `curl -O`. The response also includes the document's\n    source (supplier, region, revision date) so the provenance is clear.\n\n    If no original PDF is on file, or the chemical is not in the database at\n    all, the tool says so and suggests uploading an SDS PDF via `upload_msds_pdf`.\n\n    Args:\n        chemical: Chemical name or CAS number, e.g. \"acetone\" or \"67-64-1\"\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "chemical": {
+      "description": "Chemical name or CAS number, e.g. \"acetone\" or \"67-64-1\".",
+      "title": "Chemical",
+      "type": "string"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     }
+    },
+    "required": [
+     "chemical"
+    ],
+    "title": "get_sds_documentArguments",
+    "type": "object"
+   },
+   "name": "get_sds_document",
+   "outputSchema": null,
+   "title": null
+  }
+ ]
+}

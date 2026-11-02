@@ -1,0 +1,4 @@
+# 文件行数棘轮基线：超过 1500 行的 .py 文件，行数只准持平或下降。
+# 格式：<行数>  <相对仓根的路径>。收紧用 `python3 tests/repo_guards/test_file_length_ratchet.py --tighten`（只改小、只删行）；
+# 确需改大就在 PR 里改并在行尾写 `# 理由`。别加新行（新文件不准超线）。
+  1933  tests/tools/test_server_tools.py

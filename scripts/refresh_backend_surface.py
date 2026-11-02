@@ -44,7 +44,12 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-SERVER_PY = REPO / "server.py"
+
+def server_source_text(repo: Path) -> str:
+    """`server.py` 加 `msds_mcp/` 下的实现文件：端点调用点分布在整个包里。"""
+    files = [repo / "server.py", *sorted((repo / "msds_mcp").glob("*.py"))]
+    return "\n".join(f.read_text(encoding="utf-8") for f in files)
+
 VENDORED = REPO / "backend_surface.vendored.json"
 
 # 后端仓通常就在隔壁（两个仓都在 products/ 下）。找不到时由 --backend 指定。
@@ -187,7 +192,7 @@ def main() -> int:
         return 2
 
     backend_doc = json.loads(backend_path.read_text(encoding="utf-8"))
-    calls = server_calls(SERVER_PY.read_text(encoding="utf-8"))
+    calls = server_calls(server_source_text(REPO))
     doc = build(backend_doc, calls)
     assert_safe_to_write(doc)
 

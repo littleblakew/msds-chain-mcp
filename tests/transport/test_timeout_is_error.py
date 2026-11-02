@@ -21,6 +21,7 @@
 （20 个化学品 / 45.2 秒 / `is_error=False`），不是随手挑的。
 """
 import asyncio
+import os
 
 import httpx
 import pytest
@@ -170,7 +171,8 @@ def _wrapped_tools():
     """
     import inspect
     import re
-    src = inspect.getsource(server)
+    from conftest import server_source
+    src = server_source()
     out = []
     for name, params in re.findall(r"@_graceful_timeout\n(?:@\w+\n)*async def (\w+)\(([^)]*)\)", src):
         out.append((name, "chemicals" in params))
@@ -242,13 +244,16 @@ def test_no_bare_runtimeerror_reaches_the_caller():
     import ast
     import inspect as _inspect
 
-    tree = ast.parse(_inspect.getsource(server))
+    from conftest import server_source_files
     offenders = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
-            fn = node.exc.func
-            if isinstance(fn, ast.Name) and fn.id == "RuntimeError":
-                offenders.append(node.lineno)
+    for path in server_source_files():
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
+                fn = node.exc.func
+                if isinstance(fn, ast.Name) and fn.id == "RuntimeError":
+                    offenders.append(f"{os.path.basename(path)}:{node.lineno}")
     assert not offenders, (
-        f"server.py:{offenders} 抛了裸 RuntimeError —— 在 mcp>=2.2 上这些文案到不了调用方，"
+        f"{offenders} 抛了裸 RuntimeError —— 在 mcp>=2.2 上这些文案到不了调用方，"
         f"改用 ToolReason（它同时是 ToolError 与 RuntimeError）")
