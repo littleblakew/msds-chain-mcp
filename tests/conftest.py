@@ -5,6 +5,24 @@ import sys
 # from the repo root regardless of where pytest is invoked.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+
+def server_source_files():
+    """`server.py` 加上 `msds_mcp/` 下的全部实现文件：读源码的守卫要扫的是这一整组，
+    不是入口一个文件（入口只剩注册与再导出）。"""
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    files = [os.path.join(root, "server.py")]
+    pkg = os.path.join(root, "msds_mcp")
+    files += sorted(os.path.join(pkg, f) for f in os.listdir(pkg) if f.endswith(".py"))
+    return files
+
+
+def server_source() -> str:
+    out = []
+    for f in server_source_files():
+        with open(f, encoding="utf-8") as fh:
+            out.append(fh.read())
+    return "\n".join(out)
+
 # ---------------------------------------------------------------------------
 # 🔴 测试跑起来**默认打的是 Prod**，必须在 import server 之前掐掉
 # ---------------------------------------------------------------------------

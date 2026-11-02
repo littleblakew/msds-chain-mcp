@@ -44,8 +44,8 @@ fi
 echo "▶ Target version: $VERSION"
 
 # --- 1. Stamp every surface (targeted, byte-minimal replacements) -----------
-# server.py: the __version__ literal that becomes serverInfo.version at runtime.
-perl -0pi -e 's/^__version__ = "[^"]*"/__version__ = "'"$VERSION"'"/m' server.py
+# msds_mcp/app.py: the __version__ literal that becomes serverInfo.version at runtime.
+perl -0pi -e 's/^__version__ = "[^"]*"/__version__ = "'"$VERSION"'"/m' msds_mcp/app.py
 
 # JSON manifests: every "version" key in each file is the release version.
 # (verified: no manifest carries an unrelated "version" field to protect.)
@@ -75,7 +75,7 @@ echo "▶ Stamping derived metadata (tool count + endpoint + transport)..."
 python scripts/stamp_derived.py
 echo "✅ Derived metadata stamped"
 
-# --- 2. Verify: guard test proves server.py == VERSION and serverInfo carries it
+# --- 2. Verify: guard test proves msds_mcp/app.py == VERSION and serverInfo carries it
 echo "▶ Running version guard test..."
 python -m pytest tests/contract/test_version.py -q
 

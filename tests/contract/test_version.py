@@ -7,7 +7,7 @@ now the ONLY number a human edits; scripts/release.sh stamps it everywhere.
 
 These tests fail CI if the wiring ever breaks, so the drift cannot silently
 come back:
-  - server.py's __version__ matches the VERSION file, and
+  - msds_mcp/app.py's __version__ matches the VERSION file, and
   - that version is what actually surfaces as serverInfo.version in the MCP
     initialize handshake (what clients display), and
   - the JSON manifests are all stamped to the same number.
@@ -33,9 +33,14 @@ def _version_file() -> str:
 
 
 def test_server_version_matches_version_file():
-    assert server.__version__ == _version_file(), (
-        "server.py __version__ drifted from VERSION — run scripts/release.sh"
+    # The literal release.sh stamps lives in msds_mcp/app.py; `server.__version__` is only a re-export.
+    with open(os.path.join(ROOT, "msds_mcp", "app.py"), encoding="utf-8") as f:
+        m = re.search(r'^__version__ = "([^"]*)"', f.read(), re.M)
+    assert m, "no __version__ literal in msds_mcp/app.py — release.sh would stamp nothing"
+    assert m.group(1) == _version_file(), (
+        "msds_mcp/app.py __version__ drifted from VERSION — run scripts/release.sh"
     )
+    assert server.__version__ == _version_file()
 
 
 def test_serverinfo_reports_our_version():

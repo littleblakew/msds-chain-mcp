@@ -266,8 +266,8 @@ def test_lang_forwarding_has_exactly_one_spelling():
     import pathlib
     import re
 
-    src = (pathlib.Path(__file__).resolve().parents[2] / "server.py").read_text(
-        encoding="utf-8")
+    from conftest import server_source
+    src = server_source()
     shapes = {m.group(1).strip()
               for m in re.finditer(r'"lang":\s*([^,\n}]+)', src)}
 

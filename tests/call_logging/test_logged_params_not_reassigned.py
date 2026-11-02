@@ -50,7 +50,7 @@ _MUTATORS = {"append", "extend", "insert", "pop", "remove", "clear",
 
 # 豁免：**覆盖是有意的、且记下覆盖后的值才是对的**。加条目必须写清为什么。
 _ALLOWED = {
-    ("server.py", "get_audit_report", "session_id"):
+    ("msds_mcp/audit_tools.py", "get_audit_report", "session_id"):
         "零参调用会现建一个会话，`session_id = built[\"session_id\"]` 之后记的就是"
         "真正出报告的那个 id；两条路径靠同一行日志里的 `built_from_recent` 区分。",
 }
@@ -218,8 +218,10 @@ def test_scan_actually_visited_server_py():
     这正是本文件 docstring 声称要防的那种「跑了但什么都没跑到」。
     """
     _, scanned = _scan()
-    assert scanned.get("server.py", 0) >= 90, (
-        f"server.py 只扫到 {scanned.get('server.py', 0)} 个带参函数（应 ~99）——扫描没覆盖生产文件")
+    pkg = sum(n for rel, n in scanned.items() if rel.startswith("msds_mcp/"))
+    assert pkg >= 90, (
+        f"msds_mcp/ 只扫到 {pkg} 个带参函数（应 ~99）——扫描没覆盖生产文件")
+    assert scanned.get("server.py", 0) >= 1, "server.py 没被扫到"
     assert scanned.get("server_remote.py", 0) >= 1, "server_remote.py 没被扫到"
 
 

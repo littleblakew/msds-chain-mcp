@@ -5,6 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+COPY msds_mcp ./msds_mcp/
 COPY server.py server_remote.py request_identity.py identity_middleware.py ui_compat_card.py edge.py hosted_instructions.txt ./
 
 ENV MSDS_MCP_HOST=0.0.0.0

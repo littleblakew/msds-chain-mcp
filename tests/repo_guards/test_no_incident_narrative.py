@@ -52,7 +52,8 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 # **一道只扫一部分目录的闸，在它没扫的那部分上与「那里很干净」完全同形。**
 # 加新目录时连同下面 `test_the_guard_can_actually_see_something` 的计数一起看。
 _TARGETS = sorted(
-    p for p in (list(_ROOT.glob("*.py")) + list((_ROOT / "tests").rglob("*.py"))
+    p for p in (list(_ROOT.glob("*.py")) + list((_ROOT / "msds_mcp").glob("*.py"))
+                + list((_ROOT / "tests").rglob("*.py"))
                 + list((_ROOT / "scripts").rglob("*.py")))
     if p.name not in {"conftest.py"} and p.name != pathlib.Path(__file__).name
     and ".venv" not in p.parts)

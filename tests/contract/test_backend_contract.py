@@ -48,7 +48,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from refresh_backend_surface import server_calls  # noqa: E402
+from refresh_backend_surface import server_calls, server_source_text  # noqa: E402
 
 VENDORED_PATH = REPO / "backend_surface.vendored.json"
 
@@ -63,7 +63,7 @@ def vendored() -> dict:
 
 @pytest.fixture(scope="module")
 def calls() -> dict:
-    return server_calls((REPO / "server.py").read_text(encoding="utf-8"))
+    return server_calls(server_source_text(REPO))
 
 
 @pytest.fixture(scope="module")
