@@ -38,10 +38,12 @@ def test_patch_through_server_reaches_every_holder(monkeypatch):
 
 def test_live_counter_is_not_copied(monkeypatch):
     from msds_mcp import calls
-    monkeypatch.setattr(server, "_call_log_post_failures", 7)
-    assert calls._call_log_post_failures == 7 and server._call_log_post_failures == 7
-    calls._call_log_post_failures = 9
-    assert server._call_log_post_failures == 9
+    # patch 打在属主 `calls` 上：pytest 9.2 的 monkeypatch 对 `server` 静态取不到旧值，
+    # 撤销时会对 facade 走 delattr。经 `server` 的读写两个方向下面各测一次。
+    monkeypatch.setattr(calls, "_call_log_post_failures", 7)
+    assert server._call_log_post_failures == 7
+    server._call_log_post_failures = 9
+    assert calls._call_log_post_failures == 9
     assert "_call_log_post_failures" not in vars(server)
 
 
