@@ -28,7 +28,7 @@ def _cred(monkeypatch):
 
 
 def _pair(a, b, level, reason="r"):
-    return {"chemical_a": a, "chemical_b": b, "cas_a": None, "cas_b": None, "level": level,
+    return {"chem1": a, "chem2": b, "cas_a": None, "cas_b": None, "level": level,
             "reason": reason, "traceability": "rule_based", "citation": "CAMEO:test"}
 
 
@@ -68,7 +68,8 @@ def test_transition_hazard_is_rendered_with_pair_reason_and_source(monkeypatch):
     res, sent = _run_route(monkeypatch, payload)
     text = res.content[0].text
     assert "HAZARD FOUND" in text.split("\n")[1]
-    assert "acetone" in text and "sodium hydroxide" in text
+    # 名字取自后端配对行的 `chem1` / `chem2`（batch-safety 同形）；读错键会退回 CAS（这里是 None）⇒ "?"。
+    assert "**acetone** + **sodium hydroxide**: INCOMPATIBLE" in text
     assert "INCOMPATIBLE" in text and "Aldol condensation, exotherm" in text
     assert "CAMEO:test" in text
     assert "worst case" in text and "Scope: pairwise" in text

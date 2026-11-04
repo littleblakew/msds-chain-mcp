@@ -62,13 +62,14 @@ def _status_label(status: str | None) -> str:
 
 
 def _pair_line(pair: dict, index: dict) -> list[str]:
-    a = pair.get("chemical_a") or pair.get("cas_a") or "?"
-    b = pair.get("chemical_b") or pair.get("cas_b") or "?"
+    # 后端配对行的名字键是 `chem1` / `chem2`（与 batch-safety 同一形状）。
+    a = pair.get("chem1") or pair.get("cas_a") or "?"
+    b = pair.get("chem2") or pair.get("cas_b") or "?"
     level = pair.get("level") or "unknown"
     label = _LEVEL_LABEL.get(level, str(level).upper())
     basis = _pair_basis_label(pair.get("traceability"))
     clause, extra = _precursor_pair_note(
-        index, (pair.get("chemical_a"), pair.get("cas_a")), (pair.get("chemical_b"), pair.get("cas_b")))
+        index, (pair.get("chem1"), pair.get("cas_a")), (pair.get("chem2"), pair.get("cas_b")))
     line = f"- **{a}** + **{b}**: {label}: {pair.get('reason') or 'N/A'}  [{basis}]{clause}"
     source = pair.get("citation") or pair.get("source")
     if source:
