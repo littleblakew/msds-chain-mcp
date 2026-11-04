@@ -10,6 +10,7 @@ from msds_mcp.blocks import (_precursor_disclosure_block, _precursor_index, _pre
 from msds_mcp.calls import (_expose, _graceful_timeout, _intent_params, _log_intent, _reported,
                             _strip_usage, _with_usage)
 from msds_mcp.direct import _direct_route_review, _direct_thermal_hazard
+from msds_mcp.disclosures import _form_disclosure_lines, _insufficient_lines
 from msds_mcp.params import Chemical, Intent, Lang, _require_api_key, _text_result
 from msds_mcp.render import _pair_basis_label
 
@@ -91,6 +92,44 @@ def _pairs_block(pairs: list[dict], index: dict) -> list[str]:
     return lines
 
 
+def _handling_block(handling: dict | None) -> list[str]:
+    """Per-chemical PPE and waste, rendered with the same honesty rules as the single tools.
+
+    A missing PPE level means the record had no hazard data, never "low hazard"; a waste item
+    without a basis shows the insufficient-data lines, never the fallback bucket as a finding.
+    """
+    if not handling:
+        return []
+    out = ["## Handling by chemical"]
+    ppe = handling.get("ppe") or {}
+    if ppe.get("failed"):
+        out.append("- PPE lookup failed for this call; use `get_ppe_recommendation`.")
+    for item in ppe.get("results") or []:
+        name = f"**{item.get('chemical_name', '?')}**"
+        if item.get("insufficient_hazard_data") or item.get("minimum_ppe_level") is None:
+            out.append(f"- {name} PPE: CANNOT BE DETERMINED (no hazard data on this record; "
+                       "this is not a low-hazard finding).")
+        else:
+            items = "; ".join(f"{k}: {', '.join(map(str, v)) if isinstance(v, list) else v}"
+                              for k, v in (item.get("ppe") or {}).items())
+            out.append(f"- {name} PPE level {item['minimum_ppe_level']}" + (f" ({items})" if items else ""))
+        out.extend(f"  {line}" for line in _form_disclosure_lines(item))
+        if item.get("hazard_classification_conflict_note"):
+            out.append(f"  {item['hazard_classification_conflict_note']}")
+    waste = handling.get("waste") or {}
+    if waste.get("failed"):
+        out.append("- Waste lookup failed for this call; use `get_waste_disposal`.")
+    for item in waste.get("results") or []:
+        name = f"**{item.get('chemical_name', '?')}**"
+        if item.get("insufficient_hazard_data"):
+            out.append(f"- {name} waste:")
+            out.extend(f"  {line}" for line in _insufficient_lines(item, "Waste classification"))
+        else:
+            out.append(f"- {name} waste: {item.get('waste_classification', 'N/A')}")
+    out.append("")
+    return out
+
+
 def _format_route_review(data: dict, steps: list[dict]) -> str:
     index = _precursor_index(data)
     out = ["# Synthesis Route Review"]
@@ -130,6 +169,8 @@ def _format_route_review(data: dict, steps: list[dict]) -> str:
         out.extend(_pairs_block(tr.get("pairs") or [], index))
         out.append("")
 
+    out.extend(_handling_block(data.get("handling")))
+
     if data.get("assumptions"):
         out.append("## Assumptions")
         out.extend(f"- {a}" for a in data["assumptions"])
@@ -148,6 +189,9 @@ async def review_synthesis_route(
     steps: Annotated[list[RouteStep], Field(
         description='The route as an ordered list of steps (1-10), each with the chemicals '
                     'present in it (1-12) and optionally which earlier chemicals carry over.')],
+    include_handling: Annotated[bool, Field(
+        description='Also return PPE and waste disposal for each resolved chemical. Slower '
+                    '(one SDS lookup per chemical); leave false when only compatibility is needed.')] = False,
     lang: Lang = None, intent: Intent = None,
 ) -> str:
     """
@@ -161,7 +205,8 @@ async def review_synthesis_route(
 
     Covers: pairwise incompatibility of chemicals within each step; pairwise incompatibility
     between what is carried over from the previous step and the chemicals of the next step;
-    controlled-precursor flags on the named chemicals; names we could not resolve.
+    controlled-precursor flags on the named chemicals; names we could not resolve. With
+    `include_handling`, also PPE and waste disposal per chemical (not aggregated per step).
 
     Does NOT cover: reaction heat, runaway or thermal stability (call `assess_thermal_hazard`
     for that), reaction yield or selectivity, equipment, quantities, or concentrations. The
@@ -195,7 +240,7 @@ async def review_synthesis_route(
                 return (f"Step {i} must list between 1 and {_MAX_STEP_CHEMICALS} chemicals "
                         "(blank names are not accepted).")
 
-        data = await _direct_route_review(payload, lang=lang)
+        data = await _direct_route_review(payload, lang=lang, include_handling=include_handling)
         structured = _expose(data)
         return _with_usage(CallToolResult(
             content=[TextContent(type="text", text=_format_route_review(data, payload))],

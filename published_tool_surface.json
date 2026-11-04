@@ -244,6 +244,7 @@
         "steps"
       ],
       "optional": [
+        "include_handling",
         "intent",
         "lang"
       ]

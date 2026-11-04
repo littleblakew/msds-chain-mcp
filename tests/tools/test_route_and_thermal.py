@@ -52,8 +52,8 @@ def _route(overall, step_pairs, tr_pairs, tr_status):
 def _run_route(monkeypatch, payload, steps=_STEPS, **kw):
     sent = {}
 
-    async def fake(s, lang=None):
-        sent["steps"], sent["lang"] = s, lang
+    async def fake(s, lang=None, include_handling=False):
+        sent["steps"], sent["lang"], sent["include_handling"] = s, lang, include_handling
         return payload
 
     monkeypatch.setattr(server, "_direct_route_review", fake)
@@ -176,3 +176,32 @@ def test_thermal_full_render(monkeypatch):
     for needle in ("Nitro compound", "-39.3%", "Yoshida", "(source: user)", "TD24 (C)",
                    "Stoessel criticality class: 3", "Critical", "Scope text.", "specialist"):
         assert needle in text, needle
+
+
+
+def test_handling_block_keeps_the_single_tool_honesty_rules(monkeypatch):
+    payload = _route("no_known_incompatibility_among_checked", [], [], "no_known_incompatibility_among_checked")
+    payload["handling"] = {
+        "ppe": {"results": [
+            {"chemical_name": "acetone", "minimum_ppe_level": "standard",
+             "ppe": {"gloves": ["butyl rubber"], "eye": "goggles"}},
+            {"chemical_name": "mystery salt", "minimum_ppe_level": None, "insufficient_hazard_data": True},
+        ]},
+        "waste": {"failed": True},
+    }
+    res, sent = _run_route(monkeypatch, payload, include_handling=True)
+    text = res.content[0].text
+    assert sent["include_handling"] is True
+    assert "**acetone** PPE level standard (gloves: butyl rubber; eye: goggles)" in text
+    # CI-243：没有危害数据不是低危
+    assert "**mystery salt** PPE: CANNOT BE DETERMINED" in text and "not a low-hazard finding" in text
+    assert "Waste lookup failed" in text
+    # 「no hazard data」是诚实的那句（记录里没有数据），不算断言安全。
+    assert not re.search(r"\bsafe\b|no hazard(?! data)|all clear", text, re.I), text
+
+
+def test_handling_off_by_default_sends_nothing(monkeypatch):
+    payload = _route("no_known_incompatibility_among_checked", [], [], "no_known_incompatibility_among_checked")
+    res, sent = _run_route(monkeypatch, payload)
+    assert sent["include_handling"] is False
+    assert "Handling by chemical" not in res.content[0].text

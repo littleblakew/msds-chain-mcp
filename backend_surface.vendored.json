@@ -551,6 +551,10 @@
     },
     {
       "body_params": {
+        "include_handling": {
+          "required": false,
+          "type": "boolean"
+        },
         "lang": {
           "required": false,
           "type": "string"
@@ -1115,8 +1119,8 @@
   ],
   "source": {
     "api_v2_endpoint_count": 23,
-    "api_v2_sha256": "0987c3c969405b5360ab7a3b11d860364a85f0142548e721dd372035854ebff0",
-    "backend_commit": "de759fda6868879e17149eae33168b3eaa9aea86",
+    "api_v2_sha256": "3e43e4143360e621efb8b8011966e2102b91894f0911bccf8dcca97212b2db79",
+    "backend_commit": "1bb1f43f834cbcf18205253e8e8504db64ecae10",
     "kept": 22,
     "refreshed_at": "2026-11-04"
   }

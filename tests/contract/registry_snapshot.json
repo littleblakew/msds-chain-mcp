@@ -1775,7 +1775,7 @@
     "readOnlyHint": true,
     "title": "Review Synthesis Route"
    },
-   "description": "\n    Screen a multi-step synthesis route for chemical incompatibilities.\n\n    Convert the route the user describes into `steps`: list every reagent, solvent, catalyst and\n    workup agent in each step. When the user says something was removed, quenched, washed out or\n    evaporated, set `carryover` on the next step to what is still present; use [] for a fully\n    worked-up step. If `carryover` is omitted, everything from the previous step is assumed to\n    remain, which is the worst case and is stated in the result.\n\n    Covers: pairwise incompatibility of chemicals within each step; pairwise incompatibility\n    between what is carried over from the previous step and the chemicals of the next step;\n    controlled-precursor flags on the named chemicals; names we could not resolve.\n\n    Does NOT cover: reaction heat, runaway or thermal stability (call `assess_thermal_hazard`\n    for that), reaction yield or selectivity, equipment, quantities, or concentrations. The\n    overall status never says a route is safe: the best result is \"no known incompatibility among\n    the pairs checked\", which only describes the pairs we could evaluate.\n\n    Limits: up to 10 steps, up to 12 chemicals per step, up to 24 distinct chemicals and 66\n    pairs per route. Billed as a paid safety conclusion, like `batch_safety_check`.\n\n    Args:\n        steps: Ordered route steps, each {label?, chemicals[], carryover?}\n    ",
+   "description": "\n    Screen a multi-step synthesis route for chemical incompatibilities.\n\n    Convert the route the user describes into `steps`: list every reagent, solvent, catalyst and\n    workup agent in each step. When the user says something was removed, quenched, washed out or\n    evaporated, set `carryover` on the next step to what is still present; use [] for a fully\n    worked-up step. If `carryover` is omitted, everything from the previous step is assumed to\n    remain, which is the worst case and is stated in the result.\n\n    Covers: pairwise incompatibility of chemicals within each step; pairwise incompatibility\n    between what is carried over from the previous step and the chemicals of the next step;\n    controlled-precursor flags on the named chemicals; names we could not resolve. With\n    `include_handling`, also PPE and waste disposal per chemical (not aggregated per step).\n\n    Does NOT cover: reaction heat, runaway or thermal stability (call `assess_thermal_hazard`\n    for that), reaction yield or selectivity, equipment, quantities, or concentrations. The\n    overall status never says a route is safe: the best result is \"no known incompatibility among\n    the pairs checked\", which only describes the pairs we could evaluate.\n\n    Limits: up to 10 steps, up to 12 chemicals per step, up to 24 distinct chemicals and 66\n    pairs per route. Billed as a paid safety conclusion, like `batch_safety_check`.\n\n    Args:\n        steps: Ordered route steps, each {label?, chemicals[], carryover?}\n    ",
    "execution": null,
    "icons": null,
    "inputSchema": {
@@ -1829,6 +1829,12 @@
      }
     },
     "properties": {
+     "include_handling": {
+      "default": false,
+      "description": "Also return PPE and waste disposal for each resolved chemical. Slower (one SDS lookup per chemical); leave false when only compatibility is needed.",
+      "title": "Include Handling",
+      "type": "boolean"
+     },
      "intent": {
       "anyOf": [
        {

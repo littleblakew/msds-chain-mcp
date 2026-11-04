@@ -50,12 +50,16 @@ async def _direct_batch(chemicals: list[str], lang: str | None = None,
         return _billed_json(res)
 
 
-async def _direct_route_review(steps: list[dict], lang: str | None = None) -> dict:
+async def _direct_route_review(steps: list[dict], lang: str | None = None,
+                               include_handling: bool = False) -> dict:
     """POST /api/v2/route-review: per-step and step-to-step incompatibility screen."""
+    body: dict = {"steps": steps, "lang": _normalize_catalog_lang(lang or LANG)}
+    if include_handling:
+        body["include_handling"] = True
     async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
         res = await client.post(
             f"{API_URL}/api/v2/route-review",
-            json={"steps": steps, "lang": _normalize_catalog_lang(lang or LANG)},
+            json=body,
             headers=_headers(),
         )
         return _billed_json(res)
