@@ -550,6 +550,52 @@
       }
     },
     {
+      "body_params": {
+        "lang": {
+          "required": false,
+          "type": "string"
+        },
+        "steps": {
+          "required": true,
+          "type": "array"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/route-review",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-MCP-Call-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    },
+    {
       "body_params": {},
       "method": "GET",
       "path": "/api/v2/sds-document-url",
@@ -719,6 +765,104 @@
       },
       "method": "POST",
       "path": "/api/v2/storage-guidance",
+      "query_params": {
+        "X-API-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Idempotency-Key": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-MCP-Call-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Msds-Session-Id": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "X-Partner-Customer": {
+          "in": "header",
+          "required": false,
+          "type": null
+        },
+        "authorization": {
+          "in": "header",
+          "required": false,
+          "type": null
+        }
+      }
+    },
+    {
+      "body_params": {
+        "accumulation_fraction": {
+          "required": false,
+          "type": "number"
+        },
+        "adiabatic_rise_k": {
+          "required": false,
+          "type": "number"
+        },
+        "chemical": {
+          "required": false,
+          "type": "string"
+        },
+        "cp_kj_kg_k": {
+          "required": false,
+          "type": "number"
+        },
+        "decomposition_energy_j_g": {
+          "required": false,
+          "type": "number"
+        },
+        "dsc_onset_c": {
+          "required": false,
+          "type": "number"
+        },
+        "ea_kj_mol": {
+          "required": false,
+          "type": "number"
+        },
+        "lang": {
+          "required": false,
+          "type": "string"
+        },
+        "mtt_c": {
+          "required": false,
+          "type": "number"
+        },
+        "process_temp_c": {
+          "required": false,
+          "type": "number"
+        },
+        "q_ref_w_kg": {
+          "required": false,
+          "type": "number"
+        },
+        "reaction_enthalpy_kj_kg": {
+          "required": false,
+          "type": "number"
+        },
+        "smiles": {
+          "required": false,
+          "type": "string"
+        },
+        "t_ref_c": {
+          "required": false,
+          "type": "number"
+        },
+        "td24_c": {
+          "required": false,
+          "type": "number"
+        }
+      },
+      "method": "POST",
+      "path": "/api/v2/thermal-hazard",
       "query_params": {
         "X-API-Key": {
           "in": "header",
@@ -970,10 +1114,10 @@
     }
   ],
   "source": {
-    "api_v2_endpoint_count": 21,
-    "api_v2_sha256": "2278fed40c3e4902da9d2e93e27de89195d3c7d2d3bea1758835cc0c7ed911b6",
-    "backend_commit": "ecc5565f405cabdb0be9b5cc0e5aa7b5080b4423",
-    "kept": 20,
-    "refreshed_at": "2026-10-27"
+    "api_v2_endpoint_count": 23,
+    "api_v2_sha256": "0987c3c969405b5360ab7a3b11d860364a85f0142548e721dd372035854ebff0",
+    "backend_commit": "de759fda6868879e17149eae33168b3eaa9aea86",
+    "kept": 22,
+    "refreshed_at": "2026-11-04"
   }
 }

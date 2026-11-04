@@ -2,7 +2,7 @@
 
 Chemical safety intelligence for AI-assisted experiment design. Powered by **ChainSDS** — verified, current, and growing.
 
-This is a remote MCP (Model Context Protocol) server providing **25 tools** for chemical safety reasoning — compatibility checks, hazard analysis, PPE recommendations, storage guidance, waste disposal, mixing order safety, exposure limits, transport classification, regulatory compliance (23 lists, 8 jurisdictions), regulatory watch-list cross-reference, SDS version diff, PDF upload, signed SDS document download, chemical substitution, first aid, GHS labels, signed audit reports, and online PubChem GHS fallback for chemicals not yet in the database.
+This is a remote MCP (Model Context Protocol) server providing **27 tools** for chemical safety reasoning — compatibility checks, hazard analysis, PPE recommendations, storage guidance, waste disposal, mixing order safety, exposure limits, transport classification, regulatory compliance (23 lists, 8 jurisdictions), regulatory watch-list cross-reference, SDS version diff, PDF upload, signed SDS document download, chemical substitution, first aid, GHS labels, signed audit reports, and online PubChem GHS fallback for chemicals not yet in the database.
 
 ## Quick Start
 
@@ -31,7 +31,7 @@ Then run `/mcp` and authenticate (browser sign-in). The legacy SSE endpoint
 
 Get a free API key at [msdschain.lagentbot.com](https://msdschain.lagentbot.com) to unlock all tools.
 
-## Tools (25)
+## Tools (27)
 
 | Tool | Description |
 |------|-------------|
@@ -48,6 +48,8 @@ Get a free API key at [msdschain.lagentbot.com](https://msdschain.lagentbot.com)
 | `get_transport_classification` | UN number, hazard class, packing group |
 | `check_regulatory_compliance` | Multi-region compliance status, list-backed for EU, US, CN, JP, CA, AU, SG |
 | `check_regulatory_lists` | Cross-reference a chemical against 23 regulatory watch lists across major jurisdictions |
+| `review_synthesis_route` | Screen a multi-step synthesis route for incompatibilities within and between steps |
+| `assess_thermal_hazard` | Thermal hazard screening flags and Stoessel class from user-supplied process values |
 | `get_chemical_alternatives` | Safer substitutes for restricted chemicals |
 | `get_sds_section` | Query specific SDS sections (1-16) |
 | `get_sds_document` | Signed download URL (~5 min) for the original SDS/MSDS PDF |

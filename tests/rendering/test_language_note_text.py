@@ -72,7 +72,7 @@ _PAYLOAD = {
 # 覆盖每个工具的全部必填参数。漏一个的后果不是「那个工具没测到」，是更糟的一种：
 # SDK 在参数校验阶段返回 `is_error`（不抛）⇒ 那个工具被计进覆盖面并理所当然地「通过」。
 _ARGS = {
-    "chemicals": ["acetone", "bleach"], "chemical": "acetone", "session_id": "S1",
+    "chemicals": ["acetone", "bleach"], "chemical": "acetone", "session_id": "S1", "steps": [{"chemicals": ["acetone", "bleach"]}],
     "question": "hazards?", "protocol": "mix a and b", "section": 4,
     "url": "https://example.invalid/y.pdf", "file_path": "/tmp/x.pdf",
     "region": "EU", "days": 7, "scenario": "spill",

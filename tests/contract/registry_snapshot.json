@@ -1765,6 +1765,347 @@
    "name": "get_sds_document",
    "outputSchema": null,
    "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Review Synthesis Route"
+   },
+   "description": "\n    Screen a multi-step synthesis route for chemical incompatibilities.\n\n    Convert the route the user describes into `steps`: list every reagent, solvent, catalyst and\n    workup agent in each step. When the user says something was removed, quenched, washed out or\n    evaporated, set `carryover` on the next step to what is still present; use [] for a fully\n    worked-up step. If `carryover` is omitted, everything from the previous step is assumed to\n    remain, which is the worst case and is stated in the result.\n\n    Covers: pairwise incompatibility of chemicals within each step; pairwise incompatibility\n    between what is carried over from the previous step and the chemicals of the next step;\n    controlled-precursor flags on the named chemicals; names we could not resolve.\n\n    Does NOT cover: reaction heat, runaway or thermal stability (call `assess_thermal_hazard`\n    for that), reaction yield or selectivity, equipment, quantities, or concentrations. The\n    overall status never says a route is safe: the best result is \"no known incompatibility among\n    the pairs checked\", which only describes the pairs we could evaluate.\n\n    Limits: up to 10 steps, up to 12 chemicals per step, up to 24 distinct chemicals and 66\n    pairs per route. Billed as a paid safety conclusion, like `batch_safety_check`.\n\n    Args:\n        steps: Ordered route steps, each {label?, chemicals[], carryover?}\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "$defs": {
+     "RouteStep": {
+      "properties": {
+       "carryover": {
+        "anyOf": [
+         {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "default": null,
+        "description": "Names from earlier steps that are still present in THIS step. Omit when unknown (everything present in the previous step is then assumed to remain, the worst case). Use [] when the previous step was fully worked up or quenched.",
+        "title": "Carryover"
+       },
+       "chemicals": {
+        "description": "Reagents, solvents, catalysts and workup agents present in this step, by name or CAS (1-12 items).",
+        "items": {
+         "type": "string"
+        },
+        "title": "Chemicals",
+        "type": "array"
+       },
+       "label": {
+        "anyOf": [
+         {
+          "maxLength": 200,
+          "type": "string"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "default": null,
+        "description": "Optional short name, e.g. \"Step 1: amide coupling\".",
+        "title": "Label"
+       }
+      },
+      "required": [
+       "chemicals"
+      ],
+      "title": "RouteStep",
+      "type": "object"
+     }
+    },
+    "properties": {
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\", \"zh-TW\", \"ja\", \"de\", \"id\", \"ko\", \"ru\", \"fr\", \"es\". Anything else, or omitted, is answered in English. Parts we have not translated yet are returned in English with an explicit note saying so.",
+      "title": "Lang"
+     },
+     "steps": {
+      "description": "The route as an ordered list of steps (1-10), each with the chemicals present in it (1-12) and optionally which earlier chemicals carry over.",
+      "items": {
+       "$ref": "#/$defs/RouteStep"
+      },
+      "title": "Steps",
+      "type": "array"
+     }
+    },
+    "required": [
+     "steps"
+    ],
+    "title": "review_synthesis_routeArguments",
+    "type": "object"
+   },
+   "name": "review_synthesis_route",
+   "outputSchema": null,
+   "title": null
+  },
+  {
+   "_meta": null,
+   "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": null,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Assess Thermal Hazard"
+   },
+   "description": "\n    Screen a substance or process for thermal hazard flags.\n\n    Does three things with what you give it: (1) a structural screening for energetic functional\n    groups plus oxygen balance, from the name, CAS or SMILES; (2) Yoshida correlations when the\n    inputs allow; (3) a Stoessel criticality class when the measured process values you supply\n    are sufficient. All inputs are optional.\n\n    Screening only raises flags. Finding no listed group is NOT a safety conclusion. The Stoessel\n    class is computed only from measured values you supply; nothing is estimated or looked up, and\n    missing inputs are listed. Pass the user's own DSC/calorimetry numbers, never guessed ones.\n\n    Does NOT cover: incompatibility between chemicals (use `review_synthesis_route` or\n    `check_chemical_compatibility`), dust explosion, or a substitute for calorimetry and review\n    by a process safety specialist.\n\n    Free lookup, no credits.\n\n    Args:\n        chemical: Name or CAS (optional)\n        smiles: Structure (optional)\n        Remaining numeric parameters are measured or planned process values, all optional.\n    ",
+   "execution": null,
+   "icons": null,
+   "inputSchema": {
+    "properties": {
+     "accumulation_fraction": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Fraction of reagent that can accumulate, 0 to 1.",
+      "title": "Accumulation Fraction"
+     },
+     "adiabatic_rise_k": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Adiabatic temperature rise of the desired reaction, K.",
+      "title": "Adiabatic Rise K"
+     },
+     "chemical": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Chemical name or CAS number.",
+      "title": "Chemical"
+     },
+     "cp_kj_kg_k": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Specific heat of the reaction mass, kJ/kg/K.",
+      "title": "Cp Kj Kg K"
+     },
+     "decomposition_energy_j_g": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Measured decomposition energy, J/g.",
+      "title": "Decomposition Energy J G"
+     },
+     "dsc_onset_c": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Measured DSC onset temperature, C.",
+      "title": "Dsc Onset C"
+     },
+     "ea_kj_mol": {
+      "anyOf": [
+       {
+        "minimum": 20,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Activation energy, kJ/mol (at least 20).",
+      "title": "Ea Kj Mol"
+     },
+     "intent": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional, recorded only — it does NOT change the answer. Never put instructions here, and never leave a real argument out in favour of it. One sentence in the end user's own words of what they are trying to find out. Over-long text is truncated, not rejected.",
+      "title": "Intent"
+     },
+     "lang": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Answer language — pass the language THIS conversation is in, not the user's country. Supported: \"en\", \"zh\", \"zh-TW\", \"ja\", \"de\", \"id\", \"ko\", \"ru\", \"fr\", \"es\". Anything else, or omitted, is answered in English. Parts we have not translated yet are returned in English with an explicit note saying so.",
+      "title": "Lang"
+     },
+     "mtt_c": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Maximum temperature for technical reasons (for example solvent boiling point), C.",
+      "title": "Mtt C"
+     },
+     "process_temp_c": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Planned process temperature, C.",
+      "title": "Process Temp C"
+     },
+     "q_ref_w_kg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Measured heat release rate at the reference temperature, W/kg.",
+      "title": "Q Ref W Kg"
+     },
+     "reaction_enthalpy_kj_kg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Desired-reaction enthalpy, kJ/kg.",
+      "title": "Reaction Enthalpy Kj Kg"
+     },
+     "smiles": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "SMILES of the structure; used instead of a database structure when given.",
+      "title": "Smiles"
+     },
+     "t_ref_c": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Reference temperature for q_ref_w_kg, C.",
+      "title": "T Ref C"
+     },
+     "td24_c": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Temperature at which time to maximum rate is 24 h, C.",
+      "title": "Td24 C"
+     }
+    },
+    "title": "assess_thermal_hazardArguments",
+    "type": "object"
+   },
+   "name": "assess_thermal_hazard",
+   "outputSchema": null,
+   "title": null
   }
  ]
 }

@@ -30,6 +30,8 @@ SUPPORTED = {
     "validate_protocol_chemicals": {"protocol_text": "add acetone"},
     "check_mixing_order": {"chemical_a": "a", "chemical_b": "b"},
     "check_regulatory_lists": {"chemical": "a"},
+    "review_synthesis_route": {"steps": [{"chemicals": ["a", "b"]}]},
+    "assess_thermal_hazard": {"chemical": "a"},
     # 🔴 下面两条是从 UNSUPPORTED **搬上来**的——搬的依据是**重跑对比**，
     # 不是「后端说改好了」：
     #   get_ppe_recommendation：CI-361 第二步切片一让 P 码描述跟 lang 走（此前那 11 条

@@ -309,7 +309,7 @@ _DIRECT_TIMEOUT_EXPECTATIONS = {
     "_direct_online_search": (("acetone",), False),
     "_direct_sds_section": (("acetone", 2), False),
     "_direct_compare_sds": (("acetone",), False),
-    "_direct_sds_document": (("acetone",), False),
+    "_direct_sds_document": (("acetone",), False), "_direct_route_review": (([{"chemicals": ["acetone", "ethanol"]}],), True), "_direct_thermal_hazard": (({"chemical": "acetone"},), False),
 }
 
 
@@ -458,7 +458,7 @@ EXPECTED_TOOLS = frozenset({
     "check_regulatory_lists",
     "search_msds_online",
     "draft_sds_sections",
-    "validate_sds",
+    "validate_sds", "review_synthesis_route", "assess_thermal_hazard",
 })
 
 
@@ -474,7 +474,7 @@ def test_direct_tools_still_registered(monkeypatch):
         f"tool surface drifted: missing={EXPECTED_TOOLS - names}, "
         f"unexpected={names - EXPECTED_TOOLS}"
     )
-    assert len(EXPECTED_TOOLS) == 25
+    assert len(EXPECTED_TOOLS) == 27
 
 
 # ---------------------------------------------------------------------------

@@ -27,7 +27,7 @@ import ui_compat_card
 from request_identity import set_caller_credential
 
 from msds_mcp import app, blocks, calls, direct, disclosures, params, regulatory_lists, render, sds_authoring
-from msds_mcp import safety_tools, audit_tools, lookup_tools, document_tools, check_tools  # noqa: E402 — listed order
+from msds_mcp import safety_tools, audit_tools, lookup_tools, document_tools, check_tools, route_tools  # noqa: E402 — listed order
 
 from msds_mcp.app import API_KEY, __version__, _CARD_LINK_ORIGIN, _UPGRADE_ORIGIN, mcp  # noqa: F401
 
@@ -35,7 +35,7 @@ from msds_mcp.app import API_KEY, __version__, _CARD_LINK_ORIGIN, _UPGRADE_ORIGI
 # the order the tools are listed to clients. Helper-only modules are imported by their users.
 _MODULES = (
     app, params, render, calls, direct, regulatory_lists, sds_authoring, disclosures, blocks,
-    safety_tools, audit_tools, lookup_tools, document_tools, check_tools,
+    safety_tools, audit_tools, lookup_tools, document_tools, check_tools, route_tools,
 )
 
 # Rebound at runtime by the function that owns it (`global`), so a copy here would go stale:

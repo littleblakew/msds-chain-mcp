@@ -46,6 +46,17 @@ CASES: dict[str, dict] = {
         "expect_mentions": ['benzene'],
         "note": "23 份监管清单的交叉比对",
     },
+    "review_synthesis_route": {
+        "args": {"steps": [{"label": "Step 1", "chemicals": ["acetone", "sulfuric acid"]},
+                           {"label": "Step 2", "chemicals": ["sodium hydroxide"], "carryover": ["acetone"]}]},
+        "expect_mentions": ['acetone', 'sulfuric acid'],
+        "note": "路线审查：步内一对 + 步间残留一对；确定性、无 LLM",
+    },
+    "assess_thermal_hazard": {
+        "args": {"chemical": "nitromethane"},
+        "expect_mentions": ['nitromethane'],
+        "note": "热危害筛查的结构路径；免费查询层",
+    },
     "draft_sds_sections": {
         "args": {"ingredients": [{"chemical": "acetone", "concentration": "60%"},
                                  {"chemical": "benzene", "concentration": "1%"}],

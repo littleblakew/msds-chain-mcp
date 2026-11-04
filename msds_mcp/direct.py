@@ -50,6 +50,28 @@ async def _direct_batch(chemicals: list[str], lang: str | None = None,
         return _billed_json(res)
 
 
+async def _direct_route_review(steps: list[dict], lang: str | None = None) -> dict:
+    """POST /api/v2/route-review: per-step and step-to-step incompatibility screen."""
+    async with httpx.AsyncClient(timeout=TIMEOUT_MULTI) as client:
+        res = await client.post(
+            f"{API_URL}/api/v2/route-review",
+            json={"steps": steps, "lang": _normalize_catalog_lang(lang or LANG)},
+            headers=_headers(),
+        )
+        return _billed_json(res)
+
+
+async def _direct_thermal_hazard(inputs: dict, lang: str | None = None) -> dict:
+    """POST /api/v2/thermal-hazard: structural screening plus caller-supplied process values."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        res = await client.post(
+            f"{API_URL}/api/v2/thermal-hazard",
+            json={**inputs, "lang": _normalize_catalog_lang(lang or LANG)},
+            headers=_headers(),
+        )
+        return _billed_json(res)
+
+
 async def _direct_ppe(chemicals: list[str], lang: str | None = None,
                        suppliers: dict[str, str] | None = None) -> dict:
     """POST /api/v2/ppe-recommendation — direct, no LLM."""

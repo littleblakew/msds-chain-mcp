@@ -238,6 +238,36 @@
       "optional": [
         "intent"
       ]
+    },
+    "review_synthesis_route": {
+      "required": [
+        "steps"
+      ],
+      "optional": [
+        "intent",
+        "lang"
+      ]
+    },
+    "assess_thermal_hazard": {
+      "required": [],
+      "optional": [
+        "accumulation_fraction",
+        "adiabatic_rise_k",
+        "chemical",
+        "cp_kj_kg_k",
+        "decomposition_energy_j_g",
+        "dsc_onset_c",
+        "ea_kj_mol",
+        "intent",
+        "lang",
+        "mtt_c",
+        "process_temp_c",
+        "q_ref_w_kg",
+        "reaction_enthalpy_kj_kg",
+        "smiles",
+        "t_ref_c",
+        "td24_c"
+      ]
     }
   },
   "listing_surface": {

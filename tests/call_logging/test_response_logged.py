@@ -138,6 +138,8 @@ _MINIMAL_ARGS = {
     "upload_msds_pdf": {"pdf_source": "https://example.com/x.pdf"},
     "batch_safety_check": {"chemicals": ["a", "b"]},
     "check_regulatory_lists": {"chemical": "a"},
+    "review_synthesis_route": {"steps": [{"chemicals": ["a", "b"]}]},
+    "assess_thermal_hazard": {"chemical": "a"},
     "draft_sds_sections": {"ingredients": [{"chemical": "a"}], "region": "EU"},
     "validate_sds": {"session_id": "S", "msds_id": 1},
     "get_sds_document": {"chemical": "a"},

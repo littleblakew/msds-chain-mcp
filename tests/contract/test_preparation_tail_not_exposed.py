@@ -58,7 +58,7 @@ _PAYLOAD = {
 # PR #53 的 review 抓到的就是这个：5 个工具（create_audit_session / search_chemical_database /
 # validate_protocol_chemicals / check_mixing_order / upload_msds_pdf）一次 HTTP 都没发过。
 _ARGS = {
-    "chemicals": ["acetone", "bleach"], "chemical": "acetone", "session_id": "S1",
+    "chemicals": ["acetone", "bleach"], "chemical": "acetone", "session_id": "S1", "steps": [{"chemicals": ["acetone", "bleach"]}],
     "question": "hazards?", "protocol": "mix a and b", "section": 4,
     "url": "https://example.invalid/y.pdf", "file_path": "/tmp/x.pdf",
     "region": "EU", "days": 7, "scenario": "spill",
