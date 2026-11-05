@@ -82,12 +82,14 @@ def test_source_line_is_readable_not_an_internal_key(monkeypatch):
     rule = {**_pair("sodium azide", "dichloromethane", "incompatible", "forms diazidomethane"),
             "citation": "lit:ehs-azide-polyhalomethane", "source": "pair_rule",
             "source_detail": "Institutional EHS guidance on azide compounds"}
-    unknown = {**_pair("THF", "sodium azide", "unverified", "insufficient data"),
-               "citation": None, "source": "unverified_insufficient_data"}
+    unknown = {**_pair("THF", "sodium azide", "unverified", "insufficient data to verify"),
+               "citation": None, "source": "unverified_insufficient_data",
+               "source_detail": "insufficient data to verify"}
     payload = _route("hazard_found", [rule, unknown], [], "incomplete")
     text = _run_route(monkeypatch, payload)[0].content[0].text
     assert "Source: Institutional EHS guidance on azide compounds" in text
     assert not re.search(r"lit:|pair_rule|unverified_insufficient_data", text)
+    assert text.count("insufficient data to verify") == 1
 
 
 def test_clean_route_never_says_safe(monkeypatch):

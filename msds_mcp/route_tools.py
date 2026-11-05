@@ -91,7 +91,8 @@ def _readable_source(pair: dict) -> str:
     """
     detail = (pair.get("source_detail") or "").strip()
     if detail:
-        return detail
+        # For an unverified pair the detail is the reason sentence itself; don't print it twice.
+        return "" if detail == (pair.get("reason") or "").strip() else detail
     for key in ("citation", "source"):
         val = pair.get(key)
         if isinstance(val, str) and val.strip() and not _CODE_RE.fullmatch(val.strip()):
