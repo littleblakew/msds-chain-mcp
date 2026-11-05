@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import BaseModel, Field
 from typing import Annotated
@@ -72,10 +73,30 @@ def _pair_line(pair: dict, index: dict) -> list[str]:
     clause, extra = _precursor_pair_note(
         index, (pair.get("chem1"), pair.get("cas_a")), (pair.get("chem2"), pair.get("cas_b")))
     line = f"- **{a}** + **{b}**: {label}: {pair.get('reason') or 'N/A'}  [{basis}]{clause}"
-    source = pair.get("citation") or pair.get("source")
+    source = _readable_source(pair)
     if source:
         line += f"\n  Source: {source}"
     return [line, *extra]
+
+
+_CODE_RE = re.compile(r"[a-z0-9_:.\-]+")
+
+
+def _readable_source(pair: dict) -> str:
+    """The human-readable source line, or "" when there is none.
+
+    Rule-based pairs carry their reference in `source_detail`; `citation` / `source` can be
+    internal keys (`lit:...`, `unverified_insufficient_data`) that mean nothing to a reader.
+    The verdict level is already on the line, so a bare key adds nothing.
+    """
+    detail = (pair.get("source_detail") or "").strip()
+    if detail:
+        return detail
+    for key in ("citation", "source"):
+        val = pair.get(key)
+        if isinstance(val, str) and val.strip() and not _CODE_RE.fullmatch(val.strip()):
+            return val.strip()
+    return ""
 
 
 def _pairs_block(pairs: list[dict], index: dict) -> list[str]:

@@ -78,6 +78,18 @@ def test_transition_hazard_is_rendered_with_pair_reason_and_source(monkeypatch):
     assert "carryover" not in sent["steps"][0] and sent["lang"] is None
 
 
+def test_source_line_is_readable_not_an_internal_key(monkeypatch):
+    rule = {**_pair("sodium azide", "dichloromethane", "incompatible", "forms diazidomethane"),
+            "citation": "lit:ehs-azide-polyhalomethane", "source": "pair_rule",
+            "source_detail": "Institutional EHS guidance on azide compounds"}
+    unknown = {**_pair("THF", "sodium azide", "unverified", "insufficient data"),
+               "citation": None, "source": "unverified_insufficient_data"}
+    payload = _route("hazard_found", [rule, unknown], [], "incomplete")
+    text = _run_route(monkeypatch, payload)[0].content[0].text
+    assert "Source: Institutional EHS guidance on azide compounds" in text
+    assert not re.search(r"lit:|pair_rule|unverified_insufficient_data", text)
+
+
 def test_clean_route_never_says_safe(monkeypatch):
     payload = _route("no_known_incompatibility_among_checked",
                      [_pair("a", "b", "no_known_incompatibility")], [], "no_known_incompatibility_among_checked")
