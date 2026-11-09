@@ -116,8 +116,8 @@ def test_disclosure_says_the_answer_still_stands():
 
 
 def test_truncated_batch_does_not_claim_everything_was_analysed():
-    """🔴 后端**在 12 个的截断闸门之前**算披露（有意为之：被丢掉的那个用户确实提交过），
-    而本工具收 20 个 ⇒ 被披露的化学品可能正是没进分析的那个。
+    """🔴 后端**在截断闸门之前**算披露（有意为之：被丢掉的那个用户确实提交过）⇒ 一旦
+    后端闸门低于本工具的入口上限，被披露的化学品可能正是没进分析的那个。
 
     抬头若笼统说「下面都分析过了」，模型就会把一个根本没参与计算的物质当成已评估——比不
     披露更糟。有 `truncated` 时必须明说。
@@ -125,7 +125,7 @@ def test_truncated_batch_does_not_claim_everything_was_analysed():
     payload = dict(BATCH)
     payload["truncated"] = True
     out = _run(server.batch_safety_check, "_direct_batch", payload,
-               ["hydrochloric acid"] + [f"chem{i}" for i in range(1, 13)])
+               ["hydrochloric acid"] + [f"chem{i}" for i in range(1, 12)])
     assert "not every submitted chemical was analysed" in out, out
 
 

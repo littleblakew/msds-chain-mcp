@@ -1,4 +1,7 @@
-"""CI-570：`batch_safety_check` 收 20 个、后端只算前 12 个，被丢掉的那些必须说出来。
+"""CI-570：后端只算了提交清单的一部分时，被丢掉的那些必须说出来。
+
+入口上限现在与后端分析上限同值（下面 `test_over_the_cap_*` 钉着），所以这条路径只在
+后端把上限调低后才走得到；夹具模拟的就是这个情形。
 
 与 CI-277 同形：**没有结论被读成没有危害**。所以判据不是「有没有提一句截断」，而是
 「**下面的一切、包括没有警告这件事，都不涉及这几个**」这层意思有没有到达用户，
@@ -29,9 +32,9 @@ import pytest
 import server as _s
 from request_identity import set_caller_credential
 
-# 13 个输入、后端只回前 12 个 —— 与 Prod 的 MAX_BATCH_CHEMICALS=12 一致。
-SUBMITTED = [f"chem{i}" for i in range(1, 14)]
-ANALYSED = SUBMITTED[:12]
+# 入口上限内的 12 个输入、后端只回前 11 个 —— 模拟后端上限低于入口上限。
+SUBMITTED = [f"chem{i}" for i in range(1, 13)]
+ANALYSED = SUBMITTED[:11]
 
 
 def _payload(**extra) -> dict:
@@ -78,8 +81,8 @@ def _dropped_section(out: str) -> str:
     """只取「被丢掉的那一节」。
 
     🔴 **别对整段输出做 `in` 断言**（review 抓到的）：抬头那行
-    `**Chemicals (13):** chem1, …, chem13` 会把**每一个提交的名字**都念一遍
-    ⇒ `assert "chem13" in out` 恒真，把 `_batch_not_analysed` 改成返回 `[]` 它也绿。
+    `**Chemicals (12):** chem1, …, chem12` 会把**每一个提交的名字**都念一遍
+    ⇒ `assert "chem12" in out` 恒真，把 `_batch_not_analysed` 改成返回 `[]` 它也绿。
     判据要打在真正决胜的那一段上。
     """
     assert "were NOT analysed" in out, f"根本没渲染截断块：\n{out}"
@@ -91,9 +94,9 @@ def test_it_names_the_dropped_chemicals(monkeypatch):
     """点名，否则用户无从知道是哪几个。"""
     out = _text(_run(_payload(), SUBMITTED, monkeypatch))
     section = _dropped_section(out)
-    assert "chem13" in section, section
+    assert "chem12" in section, section
     # 阴性对照：进了分析的那些不该被列成「没分析」
-    assert "chem12" not in section, section
+    assert "chem11" not in section, section
 
 
 def test_structured_face_also_says_it(monkeypatch):
@@ -101,9 +104,50 @@ def test_structured_face_also_says_it(monkeypatch):
     result = _run(_payload(), SUBMITTED, monkeypatch)
     sc = getattr(result, "structured_content", None) or {}
     assert sc.get("truncated") is True, sc.keys()
-    assert sc.get("not_analysed") == ["chem13"], sc.get("not_analysed")
-    # 🔴 这一条是为什么必须有 not_analysed：`chemicals` 回的是提交的全部 13 个
-    assert len(sc.get("chemicals") or []) == 13, "抬头字段仍是提交清单（本身没错，但会让人以为都算过）"
+    assert sc.get("not_analysed") == ["chem12"], sc.get("not_analysed")
+    # 🔴 这一条是为什么必须有 not_analysed：`chemicals` 回的是提交的全部 12 个
+    assert len(sc.get("chemicals") or []) == 12, "抬头字段仍是提交清单（本身没错，但会让人以为都算过）"
+
+
+def test_over_the_cap_is_refused_before_any_backend_call(monkeypatch):
+    """超过上限直接拒收：既不打后端，也不建会话副产物。"""
+    calls = []
+
+    async def fake(*a, **kw):
+        calls.append(a)
+        return _payload()
+    monkeypatch.setattr(_s, "_direct_batch", fake)
+    monkeypatch.setattr(_s, "_session_from_batch", fake)
+    monkeypatch.setattr(_s, "_log_call", lambda *a, **kw: asyncio.sleep(0))
+    over = [f"chem{i}" for i in range(_s._MAX_BATCH_CHEMICALS + 1)]
+    set_caller_credential("sk-msds-test")
+    try:
+        out = _text(asyncio.run(_s.batch_safety_check(chemicals=over)))
+    finally:
+        set_caller_credential(None)
+    assert calls == [], "超上限仍打了后端"
+    assert "split into smaller groups" in out, out
+    # 🔴 分组后跨组的物质对没人查，不说的话调用方会把几次分组的结果读成全覆盖
+    assert "pairs split across groups stay unchecked" in out, out
+
+
+def test_at_the_cap_is_accepted(monkeypatch):
+    """阴性对照：恰好等于上限的不许被拒（挡住把 `>` 写成 `>=`）。"""
+    payload = _payload()
+    payload.pop("truncated")
+    at_cap = [f"chem{i}" for i in range(_s._MAX_BATCH_CHEMICALS)]
+    out = _text(_run(payload, at_cap, monkeypatch))
+    assert "split into smaller groups" not in out, out
+    assert "# Batch Safety Report" in out, out
+
+
+def test_description_states_the_enforced_cap():
+    """描述里的上限是字面量，与实际拒收的值分开写，这条防两者再次分叉。"""
+    expected = f"2-{_s._MAX_BATCH_CHEMICALS} items"
+    assert expected in _s.batch_safety_check.__doc__
+    tool = next(t for t in asyncio.run(_s.mcp.list_tools()) if t.name == "batch_safety_check")
+    schema = getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None)
+    assert expected in schema["properties"]["chemicals"]["description"]
 
 
 def test_untruncated_batch_says_nothing(monkeypatch):
