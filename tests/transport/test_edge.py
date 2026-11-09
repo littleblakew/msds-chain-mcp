@@ -12,6 +12,9 @@ Mutations (each turns at least one test red):
   · remove the OPTIONS exemption                              → test_cors_preflight_is_not_gated
   · log `cred` instead of `credential_fingerprint(cred)`      → test_log_line_carries_no_credential
   · record the funnel before checking the JSON-RPC result     → test_jsonrpc_error_is_not_a_first_call
+  · dedup the funnel on the credential again                  → test_refreshed_key_is_not_a_new_first_call
+  · drop the user agent from `_funnel_identity`               → test_second_client_app_gets_its_own_entry
+  · stop passing `uid` at the `record_funnel` call site       → test_refreshed_key_is_not_a_new_first_call
 """
 import asyncio
 import json
@@ -236,6 +239,52 @@ def test_first_tool_call_records_funnel_once(backend):
     assert _funnel_steps(backend) == ["tools_listed", "first_call"]
     first = [c for c in backend.calls if c[1].endswith("/mcp/funnel-event")][-1][3]
     assert first["api_key"] == KEY and first["detail"] == "get_storage_guidance"
+
+
+OTHER_KEY = "sk-msds-" + "r" * 32
+
+
+def _calls_from(backend, *callers):
+    """One `tools/call` per `(key, user agent)` through a single edge."""
+    async def go():
+        async with _client(_Inner()) as c:
+            for key, ua in callers:
+                await c.post("/mcp", content=_rpc("tools/call", "get_storage_guidance"),
+                             headers={"X-API-Key": key, "User-Agent": ua})
+            await asyncio.sleep(0)
+    _run(go())
+    return _funnel_steps(backend)
+
+
+def test_refreshed_key_is_not_a_new_first_call(backend):
+    """An OAuth refresh hands the same user a new secret; the funnel must not restart."""
+    steps = _calls_from(backend, (KEY, "claude-user"), (OTHER_KEY, "claude-user"))
+    assert steps == ["tools_listed", "first_call"]
+
+
+def test_second_client_app_gets_its_own_entry(backend):
+    """One person connecting Claude and ChatGPT is two entries, as per-client stats expect."""
+    steps = _calls_from(backend, (KEY, "claude-user"), (KEY, "openai-mcp"))
+    assert steps == ["tools_listed", "first_call"] * 2
+
+
+def test_different_users_on_one_client_app_are_separate(backend):
+    async def go():
+        async with _client(_Inner()) as c:
+            for key, uid in ((KEY, 7), (OTHER_KEY, 8)):
+                backend.whoami = (200, {"user_id": uid})
+                await c.post("/mcp", content=_rpc("tools/call", "x"),
+                             headers={"X-API-Key": key, "User-Agent": "claude-user"})
+            await asyncio.sleep(0)
+    _run(go())
+    assert _funnel_steps(backend) == ["tools_listed", "first_call"] * 2
+
+
+def test_unresolved_user_falls_back_to_the_credential(backend):
+    """Backend outage: no uid, and two callers must not collapse into one entry."""
+    backend.whoami = (500, {})
+    steps = _calls_from(backend, (KEY, "claude-user"), (OTHER_KEY, "claude-user"))
+    assert steps == ["tools_listed", "first_call"] * 2
 
 
 def test_jsonrpc_error_is_not_a_first_call(backend):

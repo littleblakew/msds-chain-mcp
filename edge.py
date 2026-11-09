@@ -290,9 +290,24 @@ def _post_funnel(step: str, cred: str, detail: str, seen_key: tuple[str, str]) -
     task.add_done_callback(_pending.discard)
 
 
-def record_funnel(payload, cred: str | None) -> None:
-    """First `tools/list`, `tools/call`, `prompts/*` per credential (in-process dedup;
-    a restart re-records once, acceptable for an onboarding funnel). A first
+def _funnel_identity(cred: str, uid: int | None, user_agent: str | None) -> str:
+    """Who a funnel step is deduplicated for: one user in one client app.
+
+    🔴 Not the credential: an OAuth refresh rotates the key secret every hour, so keying
+    on it records the same user's "first" call again after each refresh. This process has
+    no OAuth client id, so the user agent stands in for it, which keeps one person's
+    Claude and ChatGPT connections as two funnel entries. Without a resolved user (the
+    backend was unreachable) the credential is all there is to go on.
+    """
+    if uid is None:
+        return credential_fingerprint(cred)
+    return f"{uid}|{_field(user_agent)}"
+
+
+def record_funnel(payload, cred: str | None, uid: int | None = None,
+                  user_agent: str | None = None) -> None:
+    """First `tools/list`, `tools/call`, `prompts/*` per user and client app (in-process
+    dedup; a restart re-records once, acceptable for an onboarding funnel). A first
     `tools/call` with no `tools/list` before it back-fills `tools_listed`: SSE-leg
     clients list tools over the stream, which never reaches this POST path."""
     if not cred or not isinstance(payload, dict):
@@ -300,18 +315,18 @@ def record_funnel(payload, cred: str | None) -> None:
     step = _FUNNEL_STEPS.get(payload.get("method"))
     if not step:
         return
-    fp = credential_fingerprint(cred)
+    who = _funnel_identity(cred, uid, user_agent)
     steps = ["tools_listed", step] if step == "first_call" else [step]
     params = payload.get("params")
     for s in steps:
-        if (fp, s) in _funnel_seen:
+        if (who, s) in _funnel_seen:
             continue
-        _funnel_seen[(fp, s)] = None
+        _funnel_seen[(who, s)] = None
         while len(_funnel_seen) > _FUNNEL_SEEN_MAX:
             _funnel_seen.popitem(last=False)
         detail = (str(params.get("name", ""))[:200]
                   if s in _STEPS_WITH_NAME_DETAIL and isinstance(params, dict) else "")
-        _post_funnel(s, cred, detail, (fp, s))
+        _post_funnel(s, cred, detail, (who, s))
 
 
 def jsonrpc_succeeded(body: bytes, content_type: str) -> bool:
@@ -452,7 +467,7 @@ class EdgeMiddleware:
         # Record only after a forward that reached tool execution: a 5xx during a deploy,
         # or a 200 wrapping a JSON-RPC error, is not a first call.
         if method == "POST" and status and status < 300 and jsonrpc_succeeded(bytes(captured), ctype):
-            record_funnel(payload, cred)
+            record_funnel(payload, cred, uid, headers.get("user-agent"))
 
     async def _to_backend(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Pass an OAuth request through unchanged. The browser and the MCP client see
