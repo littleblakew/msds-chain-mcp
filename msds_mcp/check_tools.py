@@ -18,6 +18,10 @@ from msds_mcp.render import (_REFERENCE_SHEET, _doc_link_lookup, _format_sds_doc
 from msds_mcp.sds_authoring import _SDS_QUALITY_STRINGS, _format_sds_draft, _format_sds_quality
 
 
+# 与后端 batch-safety 的分析上限同值：超过它后端只算前 N 个，所以在这里拒收，别先收下再截断。
+# 工具描述里的「2-12」是字面量，改这个值要一起改（test_batch_truncation 钉着）。
+_MAX_BATCH_CHEMICALS = 12
+
 
 @mcp.tool(annotations=ToolAnnotations(title="Batch Safety Check", read_only_hint=False, destructive_hint=False, open_world_hint=False), structured_output=False)
 @_graceful_timeout
@@ -26,7 +30,7 @@ async def batch_safety_check(
     chemicals: Annotated[list[str], Field(
     description='List of chemical names or CAS numbers to check together, e.g. '
                 '["acetone", "sulfuric acid", "sodium hydroxide", "methanol"]. '
-                'Intended for 2-20 items; this runs pairwise compatibility and per-chemical risk '
+                'Accepts 2-12 items; this runs pairwise compatibility and per-chemical risk '
                 'warnings in one call (no PPE), so cost and latency grow with the list length.',
     )],
     lang: Lang = None, suppliers: Suppliers = None, intent: Intent = None,
@@ -51,7 +55,7 @@ async def batch_safety_check(
     `get_audit_report` can fetch it later. Anonymous calls save nothing.
 
     Args:
-        chemicals: List of chemical names or CAS numbers (2-20 items), e.g.
+        chemicals: List of chemical names or CAS numbers (2-12 items), e.g.
                    ["acetone", "sulfuric acid", "sodium hydroxide", "methanol"]
     """
     error_msg = None
@@ -59,8 +63,14 @@ async def batch_safety_check(
     try:
         if len(chemicals) < 2:
             return "Please provide at least 2 chemicals for a batch safety check."
-        if len(chemicals) > 20:
-            return "Maximum 20 chemicals per batch check. Please split into smaller groups."
+        if len(chemicals) > _MAX_BATCH_CHEMICALS:
+            return (
+                f"Maximum {_MAX_BATCH_CHEMICALS} chemicals per batch check; received "
+                f"{len(chemicals)} and checked none of them. Please split into smaller groups. "
+                "Each call only checks pairs within its own group, so pairs split across "
+                "groups stay unchecked until you overlap the groups or run "
+                "check_chemical_compatibility on those pairs."
+            )
 
         # CI-1135：批量分析与会话容器**并发**跑 —— 两者互不依赖，串起来会把这个工具的
         # 延迟预算翻倍（各自最多吃 `TIMEOUT_MULTI`）。会话是副产物：它失败只丢副产物。
@@ -92,8 +102,8 @@ async def batch_safety_check(
         sections.append("# Batch Safety Report")
         chem_list = ", ".join(chemicals)
         sections.append(f"**Chemicals ({len(chemicals)}):** {chem_list}\n")
-        # 🔴 紧跟抬头：抬头刚说「Chemicals (20)」，截断这件事必须挨着它说，
-        # 埋在报告中段等于没说。
+        # 🔴 紧跟抬头：抬头刚说「Chemicals (N)」，截断这件事必须挨着它说，
+        # 埋在报告中段等于没说。入口上限与后端同值时这块不会触发，留着防后端把上限调低。
         sections.extend(_batch_truncation_block(data, chemicals))
 
         if data.get("unresolved"):

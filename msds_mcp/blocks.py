@@ -504,10 +504,11 @@ def _precursor_disclosure_block(data: dict) -> list[str]:
     do NOT re-phrase it here or a second, unversioned copy starts drifting.
 
     🔴 Batch truncation is why the header cannot promise "all of this was analysed":
-    the backend computes the disclosure BEFORE the 12-chemical size gate (deliberate
-    — a dropped chemical was still submitted and still audited), while this tool
-    accepts up to 20. So a disclosed chemical can be one that never entered the
-    analysis. When `truncated` is set we say so instead of implying coverage.
+    the backend computes the disclosure BEFORE its size gate (deliberate — a dropped
+    chemical was still submitted and still audited). This tool's own limit matches
+    that gate today, but the two are separate values, so a disclosed chemical can
+    still be one that never entered the analysis if the gate is lowered. When
+    `truncated` is set we say so instead of implying coverage.
     """
     entries = data.get("precursor_disclosure") or []
     if not entries:
