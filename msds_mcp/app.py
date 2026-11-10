@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import inspect
 import logging
 import os
+import re
 import textwrap
 import ui_compat_card
 from mcp.server import MCPServer
@@ -130,10 +132,40 @@ __version__ = "1.5.13"
 # 不是数秒级变更），而 agent 每轮重列的开销实打实省掉。SDK 客户端侧上限是 24h。
 _LIST_CACHE = CacheHint(ttl_ms=300_000, scope="private")
 
+# ---------------------------------------------------------------------------
+# 下发给客户端的工具描述（CI-1559）
+# ---------------------------------------------------------------------------
+# Microsoft 365 Copilot 只读工具描述的前 1,024 个字符，后面的直接丢掉（微软文档
+# 「Troubleshoot MCP apps in Microsoft 365 Copilot」原文：Text beyond 1,024 characters is
+# ignored；没说按什么单位数，守卫按 UTF-16 码元量，取较严的那种）。SDK 原样下发
+# docstring：每行带缩进，末尾还有一段 `Args:`，而每个参数在 inputSchema 里已经有自己的
+# `Field(description=…)`（`tests/contract/test_param_descriptions.py` 钉住这一点）。
+# ⇒ 下发前去缩进、去掉 `Args:` 段；`Returns:` 保留（里面有调用后该怎么做的说明）。
+# 去完仍超长的工具，把用途、触发条件和红线写在单独一行 `Reference:` 之前的引导段里，
+# 细节放在它后面；`tests/contract/test_tool_description_budget.py` 检查引导段的长度。
+DESCRIPTION_BUDGET = 1024
+# `Args:` 段到下一个顶格的段标题（`Returns:` / `Raises:` …）为止，后面的段原样保留。
+_ARGS_SECTION = re.compile(r"\n+Args:\n.*?(?=\n+[A-Z][A-Za-z ]*:\n|\Z)", re.S)
+
+
+def client_description(doc: str | None) -> str:
+    return _ARGS_SECTION.sub("", inspect.cleandoc(doc or "")).rstrip()
+
+
+class _Server(MCPServer):
+    def tool(self, name=None, title=None, description=None, **kwargs):
+        if callable(name):  # 裸 `@mcp.tool`：照 SDK 的做法当场报错，别静默吞掉这个工具
+            return MCPServer.tool(self, name)
+
+        def register(fn):
+            text = description if description is not None else client_description(fn.__doc__)
+            return MCPServer.tool(self, name, title, text, **kwargs)(fn)
+        return register
+
 # mcp 2.x: `host`/`port`/`transport_security` are no longer ctor args — they moved to
 # streamable_http_app()/sse_app() (see server_remote.py). host/port were already dead
 # weight here: server_remote.py feeds them straight to uvicorn.
-mcp = MCPServer(
+mcp = _Server(
     "MSDS Chain",
     version=__version__,
     # 只列我们真正提供的两个：resources/prompts 一个都没注册（`CACHEABLE_METHODS` 里其余

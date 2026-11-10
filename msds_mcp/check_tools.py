@@ -239,7 +239,20 @@ async def batch_safety_check(
 @_reported
 async def check_regulatory_lists(chemical: Chemical, lang: Lang = None, intent: Intent = None) -> str:
     """
-    Check which international regulatory lists a chemical appears on.
+    Check which international regulatory lists a chemical appears on: inventories,
+    restriction lists, exposure limits, international conventions and export controls
+    across 9 jurisdictions. Use it when the user asks where a single chemical is listed
+    or regulated; for a per-region restricted / not-restricted answer on several
+    chemicals use `check_regulatory_compliance`.
+
+    🔴 The lists are a curated snapshot, not a live regulatory feed. A chemical missing
+    from a list means "not found in our copy of that list", never "not regulated".
+    There is NO IARC coverage. Taiwan has no inventory (TCSI) here: absence says nothing
+    about registration there; pass on the CSNN query link the result carries. The Korea
+    restriction list excludes hazardous designated substances (e.g. benzene), so absence
+    from it is not a clearance.
+
+    Reference:
 
     Searches regulatory lists across 9 jurisdictions plus 3 international conventions:
     - US: EPA TSCA Inventory, OSHA PEL, California Prop 65
@@ -348,23 +361,22 @@ async def draft_sds_sections(
     """
     Draft Section 8 (exposure controls / PPE) and Section 15 (regulatory information)
     of an SDS for the user's OWN mixture, from its ingredient list. No LLM: every line
-    carries its source.
+    carries its source. Section 2 (mixture classification) is not drafted.
 
-    - Section 8 is assembled per ingredient from a curated supplier SDS for which we
-      hold the original PDF; each block cites supplier + revision date.
-    - Section 15 comes from the government regulatory lists we hold for `region`,
-      NOT from supplier SDSs.
+    - Section 8: per ingredient, from a curated supplier SDS whose original PDF we
+      hold; each block cites supplier + revision date.
+    - Section 15: from the government regulatory lists we hold for `region`, NOT
+      from supplier SDSs.
 
     How to present (do not violate):
     - Show the `notice` first, verbatim: this is a DRAFT, not a compliant SDS; the SDS
       issuer must verify every line.
     - If Section 15 `lists_checked` is null, the lists could NOT be read: say nothing
-      was checked. Never report that as "not on any list".
-    - List every `not_drafted`, `unresolved` and `lookup_failed` ingredient to the
-      user; that is what they must supply (upload_msds_pdf, or a CAS number).
+      was checked, never "not on any list".
+    - List every `not_drafted`, `unresolved` and `lookup_failed` ingredient; that is
+      what the user must supply (upload_msds_pdf, or a CAS number).
     - Show `truncation_note` / `exposure_limits_note` next to the Section 8 block they
-      belong to, not only in a summary: users copy one block at a time.
-    - Section 2 (mixture classification) is not drafted by this tool.
+      belong to: users copy one block at a time.
     """
     error_msg = None
     success = True
@@ -428,8 +440,8 @@ async def validate_sds(
     How to present (do not violate):
     - Show the `notice` first, verbatim. "No issues" means these checks found
       nothing; it is NOT a statement that the SDS is compliant. Never say "compliant".
-    - Give every issue with its section(s) and its quoted original text, so the user
-      can find it in their document.
+    - Give every issue with its section(s) and quoted original text, so the user can
+      find it.
     - Say which checks were skipped (`checks_skipped`): those could not read their
       input from this SDS, so they did not look.
     - It does not rewrite or correct the SDS; it only points at the problems.

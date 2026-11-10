@@ -225,15 +225,17 @@ async def review_synthesis_route(
     worked-up step. If `carryover` is omitted, everything from the previous step is assumed to
     remain, which is the worst case and is stated in the result.
 
-    Covers: pairwise incompatibility of chemicals within each step; pairwise incompatibility
-    between what is carried over from the previous step and the chemicals of the next step;
-    controlled-precursor flags on the named chemicals; names we could not resolve. With
-    `include_handling`, also PPE and waste disposal per chemical (not aggregated per step).
-
     Does NOT cover: reaction heat, runaway or thermal stability (call `assess_thermal_hazard`
     for that), reaction yield or selectivity, equipment, quantities, or concentrations. The
     overall status never says a route is safe: the best result is "no known incompatibility among
     the pairs checked", which only describes the pairs we could evaluate.
+
+    Reference:
+
+    Covers: pairwise incompatibility of chemicals within each step; pairwise incompatibility
+    between what is carried over from the previous step and the chemicals of the next step;
+    controlled-precursor flags on the named chemicals; names we could not resolve. With
+    `include_handling`, also PPE and waste disposal per chemical (not aggregated per step).
 
     Limits: up to 10 steps, up to 12 chemicals per step, up to 24 distinct chemicals and 66
     pairs per route. Billed as a paid safety conclusion, like `batch_safety_check`.

@@ -280,7 +280,21 @@ async def check_regulatory_compliance(
 ) -> str:
     """
     Check multi-region regulatory status for chemicals. Answers TWO separate questions
-    per region — do not collapse them (CI-493):
+    per region — do not collapse them: `status` (is it on a RESTRICTION list?)
+    and `inventory` (is it on the EXISTING-SUBSTANCE inventory? reversed polarity:
+    `on_inventory: false` is the direction that needs attention).
+
+    Use this when preparing export documentation, compliance audits, or when working with
+    chemicals that may be restricted in certain jurisdictions.
+    🔴 No result from this tool is ever, on its own, an import/export clearance. An
+    exposure limit (OSHA PEL) answers "how much exposure is allowed", not
+    "is this substance permitted" — report it as evidence, never as compliance.
+    `status` values: `restricted` = on a restriction list; `detected` = indirect evidence
+    only; `not_restricted` = not on the lists we hold; `unverified` = not checked.
+    🔴 None of them is a clearance, and `detected` is not a violation either. Never report
+    `unverified` as "not regulated", and relay a "not a restriction" marking as written.
+
+    Reference:
 
     1. `status` — is it on a RESTRICTION list (EU SVHC / REACH Annex XVII, US Prop 65,
        China Catalogue of Hazardous Chemicals, JP CSCL, SG EPMA, Korea Restricted /
@@ -327,12 +341,6 @@ async def check_regulatory_compliance(
                                `lookup` link to the official Taiwan OSHA CSNN query page
                                is returned instead: pass the link on and say we do NOT
                                determine existing / new substance status there
-
-    Use this when preparing export documentation, compliance audits, or when working with
-    chemicals that may be restricted in certain jurisdictions.
-    🔴 No result from this tool is ever, on its own, an import/export clearance. In
-    particular an exposure limit (OSHA PEL) answers "how much exposure is allowed", not
-    "is this substance permitted" — report it as evidence, never as compliance.
 
     Args:
         chemicals: List of chemical names or CAS numbers
@@ -420,10 +428,6 @@ async def ask_chemical_safety(
     first aid, spill/exposure response, storage, disposal, "is X safe", "what do I
     need to handle Y", GHS interpretation, MSDS lookup.
 
-    Returns ONE answer grounded in a specific supplier SDS, with the source
-    (supplier + revision date) cited and any general knowledge clearly separated
-    from what the SDS actually says.
-
     Use this FIRST for broad questions instead of chaining search_chemical_database
     + get_chemical_risk_warnings + get_ppe_recommendation — those are slower, produce
     a fragmented answer, and lose the single sourced citation. Reach for the granular
@@ -436,6 +440,12 @@ async def ask_chemical_safety(
     non-empty `unchecked` list, you MUST say so before any conclusion and MUST NOT state
     or imply whether data exists for those — this turn did not look them up. Tell the
     user to ask about them separately.
+
+    Reference:
+
+    Returns ONE answer grounded in a specific supplier SDS, with the source
+    (supplier + revision date) cited and any general knowledge clearly separated
+    from what the SDS actually says.
 
     Args:
         question: Any chemical safety question, e.g.
