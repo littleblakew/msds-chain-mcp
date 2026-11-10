@@ -280,18 +280,19 @@ async def check_regulatory_compliance(
 ) -> str:
     """
     Check multi-region regulatory status for chemicals. Answers TWO separate questions
-    per region — do not collapse them (CI-493): `status` (is it on a RESTRICTION list?)
+    per region — do not collapse them: `status` (is it on a RESTRICTION list?)
     and `inventory` (is it on the EXISTING-SUBSTANCE inventory? reversed polarity:
     `on_inventory: false` is the direction that needs attention).
 
     Use this when preparing export documentation, compliance audits, or when working with
     chemicals that may be restricted in certain jurisdictions.
-    🔴 No result from this tool is ever, on its own, an import/export clearance. In
-    particular an exposure limit (OSHA PEL) answers "how much exposure is allowed", not
+    🔴 No result from this tool is ever, on its own, an import/export clearance. An
+    exposure limit (OSHA PEL) answers "how much exposure is allowed", not
     "is this substance permitted" — report it as evidence, never as compliance.
-    🔴 `detected`, `not_restricted` and `unverified` are not clearances either; never
-    report `unverified` as "not regulated", and relay a "not a restriction" marking
-    as written instead of upgrading it to `restricted`.
+    `status` values: `restricted` = on a restriction list; `detected` = indirect evidence
+    only; `not_restricted` = not on the lists we hold; `unverified` = not checked.
+    🔴 None of them is a clearance, and `detected` is not a violation either. Never report
+    `unverified` as "not regulated", and relay a "not a restriction" marking as written.
 
     Reference:
 

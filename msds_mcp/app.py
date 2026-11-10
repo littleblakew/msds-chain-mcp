@@ -135,14 +135,17 @@ _LIST_CACHE = CacheHint(ttl_ms=300_000, scope="private")
 # ---------------------------------------------------------------------------
 # 下发给客户端的工具描述（CI-1559）
 # ---------------------------------------------------------------------------
-# Microsoft 365 Copilot 只读工具描述的前 1,024 个字符，后面的直接丢掉。SDK 原样下发
+# Microsoft 365 Copilot 只读工具描述的前 1,024 个字符，后面的直接丢掉（微软文档
+# 「Troubleshoot MCP apps in Microsoft 365 Copilot」原文：Text beyond 1,024 characters is
+# ignored；没说按什么单位数，守卫按 UTF-16 码元量，取较严的那种）。SDK 原样下发
 # docstring：每行带缩进，末尾还有一段 `Args:`，而每个参数在 inputSchema 里已经有自己的
 # `Field(description=…)`（`tests/contract/test_param_descriptions.py` 钉住这一点）。
 # ⇒ 下发前去缩进、去掉 `Args:` 段；`Returns:` 保留（里面有调用后该怎么做的说明）。
 # 去完仍超长的工具，把用途、触发条件和红线写在单独一行 `Reference:` 之前的引导段里，
 # 细节放在它后面；`tests/contract/test_tool_description_budget.py` 检查引导段的长度。
 DESCRIPTION_BUDGET = 1024
-_ARGS_SECTION = re.compile(r"\n+Args:\n.*?(?=\n+Returns:\n|\Z)", re.S)
+# `Args:` 段到下一个顶格的段标题（`Returns:` / `Raises:` …）为止，后面的段原样保留。
+_ARGS_SECTION = re.compile(r"\n+Args:\n.*?(?=\n+[A-Z][A-Za-z ]*:\n|\Z)", re.S)
 
 
 def client_description(doc: str | None) -> str:
@@ -151,6 +154,9 @@ def client_description(doc: str | None) -> str:
 
 class _Server(MCPServer):
     def tool(self, name=None, title=None, description=None, **kwargs):
+        if callable(name):  # 裸 `@mcp.tool`：照 SDK 的做法当场报错，别静默吞掉这个工具
+            return MCPServer.tool(self, name)
+
         def register(fn):
             text = description if description is not None else client_description(fn.__doc__)
             return MCPServer.tool(self, name, title, text, **kwargs)(fn)
