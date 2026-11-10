@@ -239,7 +239,18 @@ async def batch_safety_check(
 @_reported
 async def check_regulatory_lists(chemical: Chemical, lang: Lang = None, intent: Intent = None) -> str:
     """
-    Check which international regulatory lists a chemical appears on.
+    Check which international regulatory lists a chemical appears on: inventories,
+    restriction lists, exposure limits, international conventions and export controls
+    across 9 jurisdictions. Use it when the user asks where a single chemical is listed
+    or regulated; for a per-region restricted / not-restricted answer on several
+    chemicals use `check_regulatory_compliance`.
+
+    🔴 The lists are a curated snapshot, not a live regulatory feed. A chemical missing
+    from a list means "not found in our copy of that list", never "not regulated".
+    There is NO IARC coverage. Read the coverage limits below before saying a chemical
+    is absent from Taiwan or Korea lists.
+
+    Reference:
 
     Searches regulatory lists across 9 jurisdictions plus 3 international conventions:
     - US: EPA TSCA Inventory, OSHA PEL, California Prop 65
@@ -362,6 +373,10 @@ async def draft_sds_sections(
       was checked. Never report that as "not on any list".
     - List every `not_drafted`, `unresolved` and `lookup_failed` ingredient to the
       user; that is what they must supply (upload_msds_pdf, or a CAS number).
+
+    Reference:
+
+    Also when presenting:
     - Show `truncation_note` / `exposure_limits_note` next to the Section 8 block they
       belong to, not only in a summary: users copy one block at a time.
     - Section 2 (mixture classification) is not drafted by this tool.
@@ -432,7 +447,10 @@ async def validate_sds(
       can find it in their document.
     - Say which checks were skipped (`checks_skipped`): those could not read their
       input from this SDS, so they did not look.
-    - It does not rewrite or correct the SDS; it only points at the problems.
+
+    Reference:
+
+    It does not rewrite or correct the SDS; it only points at the problems.
     """
     error_msg = None
     success = True
