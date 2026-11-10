@@ -1,6 +1,6 @@
 """CI-488：没有下载链接时，必须说清楚为什么——不能只是「少了个链接」。
 
-后端（`build_sds_documents`）现在会在每日额度用尽时**保留条目、去掉 URL**，并给出
+后端（`build_sds_documents`）在调用方无权下载原件时**保留条目、去掉 URL**，并给出
 `document_unavailable_reason`（机器判）和 `_note`（人读）。这一层如果不接，渲染出来
 的就是「📄 Original SDS」标题下一行没有链接也没有解释的条目 —— 人和模型都会读成
 「这份文件不存在」，正是那两个字段要避免的歧义。
@@ -23,22 +23,30 @@ def test_url_present_is_rendered_as_before():
     assert "https://x/msds/token/t" in out
 
 
-def test_quota_block_is_explained_not_silently_linkless():
+def test_private_upload_is_explained_not_silently_linkless():
     out = _format_sds_documents([_doc(
         sds_document_url=None,
-        document_unavailable_reason="daily_pdf_quota_reached",
-        document_unavailable_note="今日 SDS PDF 下载额度已用尽；这份文件我们有，只是现在取不了。",
+        document_unavailable_reason="not_downloadable_by_you",
+        document_unavailable_note="这份 SDS 是其他用户上传的私有文件，只有上传者本人能下载原件。",
     )])
     assert "Acetone" in out, "条目本身不该消失"
-    assert "额度" in out, f"没有解释为什么没有链接，读起来就是「这份文件不存在」：{out!r}"
+    assert "上传者" in out, f"没有解释为什么没有链接，读起来就是「这份文件不存在」：{out!r}"
 
 
 def test_falls_back_to_a_reason_string_when_the_backend_sends_no_note():
-    """老后端 / 将来新增 reason：note 缺失时按 reason 兜底，仍要给出一句解释。"""
+    """note 缺失时按 reason 兜底，仍要给出一句解释。"""
     out = _format_sds_documents([_doc(
-        sds_document_url=None, document_unavailable_reason="insufficient_credits",
+        sds_document_url=None, document_unavailable_reason="not_downloadable_by_you",
     )])
-    assert "credit" in out.lower(), out
+    assert "uploader" in out.lower(), out
+
+
+def test_retired_quota_reason_gets_no_explanation():
+    """发链接不再受额度限制：旧的额度 reason 不该再被翻译成「额度用尽」。"""
+    out = _format_sds_documents([_doc(
+        sds_document_url=None, document_unavailable_reason="daily_pdf_quota_reached",
+    )])
+    assert "quota" not in out.lower(), out
 
 
 def test_unknown_reason_does_not_get_a_made_up_explanation():
