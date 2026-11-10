@@ -471,9 +471,11 @@ async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToo
     """
     Return a signed download URL for the original SDS/MSDS PDF of a chemical.
 
-    The URL is valid for approximately 5 minutes and can be opened in a browser
-    or downloaded with `curl -O`. The response also includes the document's
-    source (supplier, region, revision date) so the provenance is clear.
+    The URL is valid for approximately 5 minutes and opens once. Clicking it in a
+    browser opens the PDF; a plain GET from a script returns a confirmation page,
+    so scripts must POST to the same URL. Opening it may cost credits: the
+    response states the price before the user clicks. The response also includes
+    the document's source (supplier, region, revision date) so the provenance is clear.
 
     If no original PDF is on file, or the chemical is not in the database at
     all, the tool says so and suggests uploading an SDS PDF via `upload_msds_pdf`.
@@ -521,8 +523,19 @@ async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToo
                 f"- **Signed URL** (valid ~5 min):",
                 f"  {full_url}",
                 "",
-                "Open in a browser or `curl -O` to download the PDF.",
+                "Click it in a browser to open the PDF. A plain GET from a script or agent "
+                "returns a confirmation page; POST to the same URL to get the file "
+                "(`curl -X POST -o sds.pdf <url>`). The link opens once.",
             ]
+            # 打开链接才扣费、发链接不扣：价格必须在用户点之前说出来，而多数客户端只把
+            # text 喂给模型 ⇒ 光放进 structuredContent 等于没说。0 ＝不收费；老后端没有这个键。
+            open_cost = data.get("open_cost_credits")
+            if isinstance(open_cost, (int, float)) and open_cost > 0:
+                unit = "credit" if open_cost == 1 else "credits"
+                lines.append(
+                    f"Opening this link charges {open_cost:g} {unit}; opening the same "
+                    "document again on the same day (UTC) is free."
+                )
             # 🔴 CI-572 review 抓到的第七条面：后端在 `/sds-document-url` 上**早就**
             # 产出这两个键，而这里只把它们塞进 structuredContent、文本里一个字没有
             # ——多数客户端只把 text 喂给模型 ⇒ 用户拿到 HF 的 PDF 链接和出处，
@@ -572,6 +585,7 @@ async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToo
                     "preparation_disclosure": data.get("preparation_disclosure"),
                     "pdf_url": full_url,
                     "expires_in_seconds": 300,
+                    "open_cost_credits": open_cost,
                 },
             )
         else:

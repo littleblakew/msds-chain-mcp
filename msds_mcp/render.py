@@ -311,12 +311,11 @@ def _attribution_override_directive(overridden) -> str:
     return _ATTRIBUTION_OVERRIDE_DIRECTIVE if overridden is True else ""
 
 
-# 后端没给 note 时的兜底文案（老后端、或将来新增的 reason）。键是机器可判的
-# `document_unavailable_reason`；未知 reason 落到空串 ⇒ 只少一句解释，不会瞎猜原因。
+# 后端没给 note 时的兜底文案。键是机器可判的 `document_unavailable_reason`，只收
+# 后端仍会发的值；未知 reason 落到空串 ⇒ 只少一句解释，不会瞎猜原因。
+# 额度与余额不在这里：发链接不扣费，余额不足在用户打开链接时由确认页说明。
 _UNAVAILABLE_FALLBACK = {
-    "daily_pdf_quota_reached": "we hold this SDS, but your daily download quota is used up",
-    "insufficient_credits": "we hold this SDS, but your credit balance is insufficient to fetch it",
-    "quota_check_failed": "we hold this SDS, but the download check is temporarily unavailable",
+    "not_downloadable_by_you": "this SDS is a private upload; only the uploader can download the original",
 }
 
 

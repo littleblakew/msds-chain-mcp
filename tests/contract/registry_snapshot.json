@@ -1732,7 +1732,7 @@
     "readOnlyHint": true,
     "title": "Get SDS Document"
    },
-   "description": "\n    Return a signed download URL for the original SDS/MSDS PDF of a chemical.\n\n    The URL is valid for approximately 5 minutes and can be opened in a browser\n    or downloaded with `curl -O`. The response also includes the document's\n    source (supplier, region, revision date) so the provenance is clear.\n\n    If no original PDF is on file, or the chemical is not in the database at\n    all, the tool says so and suggests uploading an SDS PDF via `upload_msds_pdf`.\n\n    Args:\n        chemical: Chemical name or CAS number, e.g. \"acetone\" or \"67-64-1\"\n    ",
+   "description": "\n    Return a signed download URL for the original SDS/MSDS PDF of a chemical.\n\n    The URL is valid for approximately 5 minutes and opens once. Clicking it in a\n    browser opens the PDF; a plain GET from a script returns a confirmation page,\n    so scripts must POST to the same URL. Opening it may cost credits: the\n    response states the price before the user clicks. The response also includes\n    the document's source (supplier, region, revision date) so the provenance is clear.\n\n    If no original PDF is on file, or the chemical is not in the database at\n    all, the tool says so and suggests uploading an SDS PDF via `upload_msds_pdf`.\n\n    Args:\n        chemical: Chemical name or CAS number, e.g. \"acetone\" or \"67-64-1\"\n    ",
    "execution": null,
    "icons": null,
    "inputSchema": {
