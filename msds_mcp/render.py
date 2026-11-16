@@ -406,7 +406,10 @@ def _doc_link_lookup(documents: list[dict]) -> dict[str, str]:
     return lut
 
 
-_LLM_ESCALATED_TAG = "[Basis: model reasoning, not an SDS statement]"
+# The model reads the SDS sections it was given, so its reason may quote them; what it does not
+# have is an SDS statement of the verdict. The label has to say both, or a reason that quotes the
+# sheet reads as contradicting it.
+_LLM_ESCALATED_TAG = "[Basis: model reasoning over the SDS sections; the verdict is not an SDS statement]"
 _UNKNOWN_BASIS_TAG = "[Basis: unverified origin, not an SDS statement]"
 
 
@@ -421,7 +424,7 @@ def _pair_basis_label(traceability: str | None) -> str:
     if traceability == "sds_backed":
         return "Source (SDS)"
     if traceability == "llm_escalated":
-        return "Basis (model reasoning, not an SDS statement)"
+        return "Basis (model reasoning over the SDS sections; the verdict is not an SDS statement)"
     return "Basis (unverified origin, not an SDS statement)"
 
 

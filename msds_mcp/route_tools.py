@@ -109,6 +109,11 @@ def _pairs_block(pairs: list[dict], index: dict) -> list[str]:
             clean += 1
             continue
         lines.extend(_pair_line(p, index))
+        # Within-step pairs are often the reaction the step is meant to run; the backend says so
+        # in `same_step_note` without lowering the level, and the note has to reach the reader.
+        note = p.get("same_step_note")
+        if isinstance(note, str) and note.strip():
+            lines.append(f"  - {note.strip()}")
     if clean:
         lines.append(f"- {clean} pair(s) with no known incompatibility in our data.")
     return lines

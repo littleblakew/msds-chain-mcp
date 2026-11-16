@@ -29,7 +29,7 @@ def _pair(traceability):
 @pytest.mark.parametrize("value,expected", [
     ("rule_based", "Basis (rule)"),
     ("sds_backed", "Source (SDS)"),
-    ("llm_escalated", "Basis (model reasoning, not an SDS statement)"),
+    ("llm_escalated", "Basis (model reasoning over the SDS sections; the verdict is not an SDS statement)"),
     ("brand_new_value", "Basis (unverified origin, not an SDS statement)"),
 ])
 def test_pair_basis_label(value, expected):
