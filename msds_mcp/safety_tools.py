@@ -10,7 +10,7 @@ from msds_mcp.app import _CARD_LINK_ORIGIN, mcp
 from msds_mcp.blocks import (_identity_candidate_lines, _no_hazard_basis_block, _pair_sides, _physical_form_disclosures_block, _precursor_disclosure_block, _precursor_index, _precursor_pair_facets, _precursor_pair_note, _query_form_disclosure_block, _rejected_products_block, _unresolved_block)
 from msds_mcp.calls import (_expose, _graceful_timeout, _intent_params, _language_note_of, _log_intent, _quick_chat, _reported, _response_kind, _strip_usage, _supplier_params, _with_usage)
 from msds_mcp.direct import (_direct_compat, _direct_compliance, _direct_emergency, _direct_exposure, _direct_ppe, _direct_risk, _direct_storage, _direct_transport)
-from msds_mcp.disclosures import (_form_disclosure_lines, _insufficient_lines, _storage_item_lines)
+from msds_mcp.disclosures import (_form_disclosure_lines, _insufficient_lines, _not_classified_sentence, _storage_item_lines)
 from msds_mcp.params import (Chemical, ChemicalList, Intent, Lang, QuickLang, Suppliers, _text_result)
 from msds_mcp.regulatory_lists import _unresolved_reason_note, _with_lookup_url
 from msds_mcp.render import (_chemicals_from_response, _doc_link_lookup, _format_sds_documents, _inline_sds, _pair_basis_label, _quick_result, _traceability_label)
@@ -520,7 +520,11 @@ async def get_ppe_recommendation(chemicals: ChemicalList, lang: Lang = None,
             # None — so this rendered the literal word "None" as if it were a level.
             # Absence of a measurement must read as absence, and must say so loudly
             # enough that a model relaying this does not fill the gap itself.
-            if item.get("insufficient_hazard_data") or item.get("minimum_ppe_level") is None:
+            if (item.get("insufficient_hazard_data") or item.get("minimum_ppe_level") is None) \
+                    and (nc := _not_classified_sentence(item)):
+                lines.append(f"- Minimum PPE level: **CANNOT BE DETERMINED** — {nc}. This is NOT a "
+                             "low-hazard finding. Do not infer protective equipment from general knowledge.")
+            elif item.get("insufficient_hazard_data") or item.get("minimum_ppe_level") is None:
                 lines.append(
                     "- Minimum PPE level: **CANNOT BE DETERMINED** — this SDS record "
                     "contains no hazard data (no H-codes, no signal word). This is NOT "

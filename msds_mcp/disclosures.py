@@ -96,6 +96,22 @@ def _content_source_lines(item: dict) -> list[str]:
     return [f"- **Answering SDS:** {cs['supplier']}{rev}"]
 
 
+def _not_classified_sentence(item: dict) -> str | None:
+    """The SDS answered from states "not classified" in Section 2 (backend `sds_not_classified`).
+
+    That is a statement the sheet makes, so "we have no hazard data on file" would be false; but it
+    is not a hazard basis either: not classified is not harmless, and nothing below may be read as
+    "no PPE / normal disposal". Only the quote is relayed.
+    """
+    nc = item.get("sds_not_classified")
+    if not isinstance(nc, dict) or not str(nc.get("quote") or "").strip():
+        return None
+    who = ", ".join(x for x in (nc.get("supplier"), nc.get("revision_date") and f"revised {nc['revision_date']}") if x)
+    return (f"the SDS on file{f' ({who})' if who else ''} states in Section 2: \"{str(nc['quote']).strip()}\". "
+            "Not classified is NOT the same as harmless, and this sheet gives no hazard information to "
+            "answer from")
+
+
 def _insufficient_lines(item: dict, what: str) -> list[str]:
     """CI-360: 把后端的「判不了」渲染成人看得懂的文字，而不是一行 `Data source: none`。
 
@@ -120,6 +136,10 @@ def _insufficient_lines(item: dict, what: str) -> list[str]:
     # **加开关反而会留下「哪些调用方传了」这份要人记得维护的名单**。
     # 📌 backend 有字面守卫钉这两句话（`test_ci679_no_record_wording.py`），但它**只扫 backend 仓**
     # ⇒ 跨不了仓，这处才活到今天。本仓自己的守卫在 `tests/rendering/test_storage_insufficient_disclosure.py`。
+    nc = _not_classified_sentence(item)
+    if nc:
+        return [f"- **{what}: CANNOT BE DETERMINED** — {nc}. This is NOT a low-hazard finding and NOT "
+                "permission to proceed. Do not infer it from general knowledge."]
     lines = [
         f"- **{what}: CANNOT BE DETERMINED** — we have no SDS hazard data on file "
         "for this substance that we can answer from. This is NOT a "
