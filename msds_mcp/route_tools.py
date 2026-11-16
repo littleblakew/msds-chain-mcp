@@ -11,7 +11,7 @@ from msds_mcp.blocks import (_precursor_disclosure_block, _precursor_index, _pre
 from msds_mcp.calls import (_expose, _graceful_timeout, _intent_params, _log_intent, _reported,
                             _strip_usage, _with_usage)
 from msds_mcp.direct import _direct_route_review, _direct_thermal_hazard
-from msds_mcp.disclosures import _form_disclosure_lines, _insufficient_lines
+from msds_mcp.disclosures import _form_disclosure_lines, _insufficient_lines, _not_classified_sentence
 from msds_mcp.params import Chemical, Intent, Lang, _require_api_key, _text_result
 from msds_mcp.render import _pair_basis_label
 
@@ -133,7 +133,10 @@ def _handling_block(handling: dict | None) -> list[str]:
         out.append("- PPE lookup failed for this call; use `get_ppe_recommendation`.")
     for item in ppe.get("results") or []:
         name = f"**{item.get('chemical_name', '?')}**"
-        if item.get("insufficient_hazard_data") or item.get("minimum_ppe_level") is None:
+        if (item.get("insufficient_hazard_data") or item.get("minimum_ppe_level") is None) \
+                and (nc := _not_classified_sentence(item)):
+            out.append(f"- {name} PPE: CANNOT BE DETERMINED ({nc}; this is not a low-hazard finding).")
+        elif item.get("insufficient_hazard_data") or item.get("minimum_ppe_level") is None:
             out.append(f"- {name} PPE: CANNOT BE DETERMINED (no hazard data on this record; "
                        "this is not a low-hazard finding).")
         else:
