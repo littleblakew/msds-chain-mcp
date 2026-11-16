@@ -219,3 +219,15 @@ def test_handling_off_by_default_sends_nothing(monkeypatch):
     res, sent = _run_route(monkeypatch, payload)
     assert sent["include_handling"] is False
     assert "Handling by chemical" not in res.content[0].text
+
+
+def test_same_step_note_reaches_the_reader(monkeypatch):
+    """The backend marks within-step flagged pairs with `same_step_note` (it may be the step's
+    intended reaction) without lowering the level; the note must be printed under the pair."""
+    p = _pair("acetone", "oxone", "incompatible", "Forms a peroxide")
+    p["same_step_note"] = "Both are in the same step. If this is the reaction the step is meant to run ..."
+    payload = _route("hazard_found", [p], [], "no_known_incompatibility_among_checked")
+    res, _ = _run_route(monkeypatch, payload)
+    text = res.content[0].text
+    assert "**acetone** + **oxone**: INCOMPATIBLE" in text
+    assert "  - Both are in the same step." in text
