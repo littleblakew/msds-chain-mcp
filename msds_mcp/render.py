@@ -274,7 +274,7 @@ def _unchecked_intents_directive(unchecked_intents, intent: str | None = None,
     return _UNCHECKED_INTENTS_DIRECTIVE.format(names=", ".join(names))
 
 
-# 🔴 CI-978：后端的出口检查刚刚在 `answer` 开头拼了一条**确定性更正**
+# 🔴 CI-978：后端的出口检查刚刚在模型正文前面拼了一条**确定性更正**
 # （「下面把 X 写成了来自 SDS 的样子，而本轮没为它跑过工具 ⇒ 那段没有出处」）。
 # 本仓这条指令的唯一作用是**不让它在重写中消失**。
 #
@@ -289,10 +289,13 @@ def _unchecked_intents_directive(unchecked_intents, intent: str | None = None,
 # 🔴 **不带 `_SKIP_INTENT_DIRECTIVE_ON` 那道闸**，与上面那条刻意不同：那道闸防的是
 # 「在拒答回合里邀请用户把刚被拒的那半再问一次」，而本条一个字的邀请都没有——
 # 它只说「上面那段更正不许丢」，在任何回合里都成立。
+# 🔴 **不说更正在哪个位置**：后端先拼更正，再把物质规程块、判定块等确定性块前置到它上面，
+# 所以它通常不在 `answer` 开头。说「开头有一段更正」会叫客户端模型去找一段不在那儿的文字。
+# 认它靠后端九种语言模板共同的开头 `🔴 **`（后端 `_ATTRIBUTION_OVERRIDE_TEMPLATES`）。
 _ATTRIBUTION_OVERRIDE_DIRECTIVE = (
-    "[attribution-correction] The answer below OPENS with a correction stating that part "
-    "of it was written as if it came from the SDS / our data, while NO tool was run for "
-    "that part in this turn.\n"
+    "[attribution-correction] The answer below contains a correction, a paragraph that "
+    "starts with 🔴, stating that the text after it presents part of the answer as if it "
+    "came from the SDS / our data, while NO tool was run for that part in this turn.\n"
     "That correction is ours and it is authoritative. You MUST keep it, in full, ABOVE "
     "the content it corrects. You MUST NOT drop it when summarizing, MUST NOT soften it, "
     "and MUST NOT re-attribute the corrected content to the SDS, to the tool results, or "
