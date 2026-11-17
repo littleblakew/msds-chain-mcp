@@ -595,6 +595,9 @@ async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToo
                     "preparation_percent_low": data.get("preparation_percent_low"),
                     "preparation_percent_text": data.get("preparation_percent_text"),
                     "preparation_disclosure": data.get("preparation_disclosure"),
+                    # CI-1598：修订日早于 GHS 全面实施（`None` ＝ 不知道修订日，不是「不老」）。
+                    "pre_ghs": data.get("pre_ghs"),
+                    "pre_ghs_disclosure": data.get("pre_ghs_disclosure"),
                     "pdf_url": full_url,
                     "expires_in_seconds": 300,
                     "open_cost_credits": open_cost,
