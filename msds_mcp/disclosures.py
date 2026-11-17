@@ -62,6 +62,11 @@ def _form_disclosure_lines(item: dict) -> list[str]:
     if note:
         out.append(f"- ⚠️ {note}")
     out.extend(_content_source_lines(item))
+    # CI-1598：作答那份 SDS 的修订日早于 GHS 全面实施 ⇒ 它的 H 码 / 象形图可能与现行不同。
+    # 排在出处行之后：它限定的正是那一行说的那份 SDS。`None` ＝ 不知道修订日或不老 ⇒ 不说。
+    # 后端句子自带 ⚠️ 前缀，剥掉再套本函数统一的 `- ⚠️ `，否则会叠成两个。
+    if old := item.get("pre_ghs_disclosure"):
+        out.append(f"- ⚠️ {str(old).removeprefix('⚠️').lstrip()}")
     return out
 
 
