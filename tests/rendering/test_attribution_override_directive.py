@@ -30,7 +30,7 @@ def test_directive_emitted_when_backend_says_it_overrode():
 
 def test_directive_sits_above_everything_else():
     """🔴 位置不是美学：CI-89-followup 在 prod 上实测过靠后的内容会被客户端模型丢掉，
-    而这条指令要保护的那段更正就在 `answer` 的开头。
+    而这条指令要保护的那段更正在 `answer` 里（不一定在开头，见下一条）。
     """
     text = _quick(
         unchecked_intent_attribution_overridden=True,
@@ -72,3 +72,14 @@ def test_flag_reaches_structured_content():
         "unchecked_intent_attribution_overridden": True,
     })
     assert res.structured_content["unchecked_intent_attribution_overridden"] is True
+
+
+def test_directive_does_not_claim_the_correction_opens_the_answer():
+    """后端把判定块、规程块、未查意图块前置到更正**上面**，更正通常不在 `answer` 开头。
+    指令若说「开头有一段更正」，客户端模型找不到它，读者看到的是一条指向空处的指令。
+    认它靠的是后端各语言模板共同的开头 `🔴`。
+    """
+    out = server._attribution_override_directive(True)
+    for claim in ("OPENS", "opens with", "at the top", "first paragraph"):
+        assert claim not in out, f"指令声称了更正的位置 {claim!r}：\n{out}"
+    assert "🔴" in out
