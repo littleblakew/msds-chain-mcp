@@ -12,6 +12,7 @@ host's model cannot rewrite.
 | `test_dockerfile_ships_the_module` | drop `ui_compat_card.py` from the Dockerfile COPY line |
 | `test_card_shows_the_reason_the_text_prints` | show the pair's `source` / `citation` (internal rule ids) instead of its `reason` |
 | `test_every_document_with_a_link_gets_one` | cap the number of linked documents again |
+| `test_precursor_hits_without_wording_stay_visible` | skip precursor entries that have no `statement` or are not dicts |
 | `test_same_wording_precursor_entries_fold` | drop the `_precursor_same_wording` fold (or fold entries that read differently) |
 | `test_only_https_links_on_the_allowed_origin_survive` | drop the `_allowed_link` filter in `card_payload` |
 | `test_caps_report_what_they_left_out` | drop the `omitted` counts |
@@ -142,6 +143,17 @@ def test_same_wording_precursor_entries_fold():
     assert [(x["tier"], x["also"]) for x in out] == [
         ("UN 1988 Table II", ["DEA List II"]), ("EU 2019/1148 Annex II", [])], out
     assert out[1]["statement"].startswith("Listed on EU 2019/1148"), "a different wording must stay whole"
+
+
+def test_precursor_hits_without_wording_stay_visible():
+    """The text answer never drops a flagged listing; neither may the card."""
+    entries = [{"cas": "75-44-5", "query_name": "phosgene", "regime": "cwc", "tier": "Schedule 3A"},
+               "garbled-entry"]
+    payload = {**_PAYLOAD, "precursor_disclosure": entries}
+    out = card.card_payload(payload, server._CARD_LINK_ORIGIN)["precursor"]
+    assert len(out) == 2, out
+    assert out[0]["chemical"] == "phosgene" and "Schedule 3A" in out[0]["statement"], out
+    assert "garbled-entry" in out[1]["statement"], out
 
 
 def test_only_https_links_on_the_allowed_origin_survive():

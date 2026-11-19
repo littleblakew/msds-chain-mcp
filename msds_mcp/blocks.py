@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 from msds_mcp.calls import _expose
-from msds_mcp.disclosures import _form_disclosure_lines, _precursor_same_wording
+from msds_mcp.disclosures import _form_disclosure_lines, _precursor_same_wording, _precursor_unworded
 
 
 
@@ -568,14 +568,7 @@ def _precursor_disclosure_block(data: dict) -> list[str]:
             # a hit with no `statement` is exactly when the reader most needs to be
             # told something was flagged. Fall back to the machine-readable facets
             # and say plainly that the wording did not arrive.
-            facets = " / ".join(
-                str(head[k]) for k in ("regime", "tier", "authority") if head.get(k))
-            lines.append(
-                f"- {label} — listed as a regulated precursor"
-                + (f" ({facets})" if facets else "")
-                + ". The disclosure text was not returned by the backend; treat this "
-                  "as a flagged listing and verify against the cited regime."
-            )
+            lines.append(f"- {label} — {_precursor_unworded(head)}")
             rest = items[1:]
         else:
             lines.append(f"- {label} — {statement}")
@@ -594,14 +587,7 @@ def _precursor_disclosure_block(data: dict) -> list[str]:
             if stmt:
                 lines.append(f"- {label} — {stmt}")
             else:
-                facets = " / ".join(
-                    str(e[k]) for k in ("regime", "tier", "authority") if e.get(k))
-                lines.append(
-                    f"- {label} — listed as a regulated precursor"
-                    + (f" ({facets})" if facets else "")
-                    + ". The disclosure text was not returned by the backend; treat this "
-                      "as a flagged listing and verify against the cited regime."
-                )
+                lines.append(f"- {label} — {_precursor_unworded(e)}")
     # 🔴 CI-570：截断提示**曾经写在这里**，于是它只在「这批里恰好有受管制前体」时才出现
     # ——一个与截断毫无关系的条件。没有前体命中的普通批次（绝大多数）全程沉默。
     # 现在它是 `_batch_truncation_block`，无条件渲染。别再往这里搬回来。

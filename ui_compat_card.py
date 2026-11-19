@@ -21,7 +21,7 @@ import json
 import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from msds_mcp.disclosures import _precursor_same_wording
+from msds_mcp.disclosures import _precursor_same_wording, _precursor_unworded
 from msds_mcp.ui_card_tokens import CARD_TOKENS_CSS
 
 # Any change to the HTML must ship under a new URI: hosts cache the template by URI, so an
@@ -149,7 +149,8 @@ def card_payload(data: dict, allowed_origin: str) -> dict:
             # The sentence the text answer prints as "Reason:", as the web card shows it.
             "reason": _str(p.get("reason")),
         })
-    all_precursor = _precursor_groups(_dicts(data.get("precursor_disclosure")))
+    raw = data.get("precursor_disclosure")
+    all_precursor = _precursor_groups(raw if isinstance(raw, list) else [])
     precursor = all_precursor[:_MAX_PRECURSOR]
     all_docs = _dicts(data.get("documents"))
     documents = []
@@ -170,15 +171,22 @@ def card_payload(data: dict, allowed_origin: str) -> dict:
     }
 
 
-def _precursor_groups(entries: list[dict]) -> list[dict]:
+def _precursor_groups(entries: list) -> list[dict]:
     """Regulated-precursor statements, one per distinct wording: a statement that differs from
     the chemical's first one only by the list name is folded into `also` (the list names), as
-    the text answer folds it. Entries without a statement are left to the text answer."""
+    the text answer folds it. Like the text answer, nothing is dropped: a hit without its
+    statement gets the flagged-listing sentence, an unrecognised entry is shown as such."""
     groups: dict = {}
-    for e in entries:
-        if e.get("statement"):
-            groups.setdefault(e.get("cas") or e.get("query_name"), []).append(e)
     out = []
+    for e in entries:
+        if not isinstance(e, dict):
+            out.append({"chemical": None, "tier": None, "also": [],
+                        "statement": f"Unrecognised disclosure entry, reported as received: {str(e)[:300]}"})
+        elif not (e.get("statement") or "").strip():
+            out.append({"chemical": e.get("query_name") or e.get("matched_name") or e.get("cas"),
+                        "tier": None, "also": [], "statement": _precursor_unworded(e)})
+        else:
+            groups.setdefault(e.get("cas") or e.get("query_name"), []).append(e)
     for items in groups.values():
         head, rest = items[0], items[1:]
         heads = [(head, [])]

@@ -251,3 +251,12 @@ def _precursor_same_wording(head: dict, e: dict) -> bool:
     head_tier, tier = head.get("tier") or "", e.get("tier") or ""
     return bool(statement and stmt and head_tier and tier
                 and stmt == statement.replace(head_tier, tier))
+
+
+def _precursor_unworded(e: dict) -> str:
+    """What to say for a precursor hit that arrived without its `statement`: a flagged listing
+    is exactly when the reader most needs to be told something, so it is never dropped."""
+    facets = " / ".join(str(e[k]) for k in ("regime", "tier", "authority") if e.get(k))
+    return ("listed as a regulated precursor" + (f" ({facets})" if facets else "")
+            + ". The disclosure text was not returned by the backend; treat this "
+              "as a flagged listing and verify against the cited regime.")
