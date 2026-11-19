@@ -166,7 +166,8 @@ def test_compliance_card_survives_the_usage_rebuild(monkeypatch):
     res = _call(monkeypatch, "check_regulatory_compliance", payload)
     assert res.structured_content.get("usage"), "precondition: the usage rebuild ran"
     assert res.meta[card.CARD_META_KEY]["kind"] == "compliance"
-    assert res.structured_content["results"][0]["view"] == fx.COMPLIANCE["view"]
+    assert res.meta[card.CARD_META_KEY]["items"][0]["view"] == fx.COMPLIANCE["view"]
+    assert "view" not in res.structured_content["results"][0]
 
 
 def test_unresolved_compliance_result_has_no_card(monkeypatch):
@@ -236,3 +237,12 @@ def test_tone_classes_come_from_an_allowlist():
     assert '(TONES[tone] ? tone : "pending")' in html
     assert "'<span class=\"chip t-' + tone" not in html
     assert "sc-' + esc(v.scenario)" not in html
+
+
+@pytest.mark.parametrize("tool", ["get_ppe_recommendation"])
+def test_view_reaches_the_card_but_not_structured_content(monkeypatch, tool):
+    """The card draws `view` from _meta; structuredContent would only repeat it to the model."""
+    result = _call(monkeypatch, tool)
+    assert (result.meta or {}).get(card.CARD_META_KEY), "precondition: the card was built"
+    sc = result.structured_content or {}
+    assert "view" not in sc and all("view" not in r for r in sc.get("results") or []), sc

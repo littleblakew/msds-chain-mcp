@@ -709,7 +709,7 @@ def _reported(fn):
             # 这个装饰器，新工具不必记得补一行。理由与代价见 `_relay_language_note`。
             # 🔴 赋回 `result` 是必须的：`finally` 里 `_response_text(result)` 记的就该是
             # **我们真正发出去的那串文本**，否则调用日志与客户端看到的不是一回事。
-            result = _relay_language_note(await fn(*args, **kwargs))
+            result = _drop_card_views(_relay_language_note(await fn(*args, **kwargs)))
             return result
         except Exception as e:  # noqa: BLE001 — 记完再抛，行为不变
             success, error_msg = False, _error_text(e)
@@ -1093,6 +1093,25 @@ def _language_note_of(items) -> dict:
             if isinstance(note, str) and note.strip():
                 return {"language_note": note}
     return {}
+
+
+def _drop_card_views(result):
+    """Take the backend's card `view` out of structuredContent: it is drawn by the card
+    (from `_meta`, which keeps it) and repeats the answer the text already gives, so in
+    structuredContent it would only make the model read the same content twice."""
+    sc = getattr(result, "structured_content", None)
+    if not isinstance(sc, dict):
+        return result
+
+    def strip(d):
+        return {k: v for k, v in d.items() if k != "view"} if isinstance(d, dict) else d
+    new = strip(sc)
+    if isinstance(sc.get("results"), list):
+        new["results"] = [strip(r) for r in sc["results"]]
+    if new == sc:
+        return result
+    return CallToolResult(content=list(getattr(result, "content", None) or []), structured_content=new,
+                          is_error=bool(getattr(result, "is_error", False)), meta=getattr(result, "meta", None))
 
 
 def _relay_language_note(result):
