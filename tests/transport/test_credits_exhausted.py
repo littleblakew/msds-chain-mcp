@@ -5,12 +5,14 @@ upgrade button restricted to one origin.
 
 | guard | what reverting makes it fail |
 |---|---|
-| `test_402_is_returned_as_an_errored_result_with_the_card` | drop the `except CreditsExhausted` in `_graceful_timeout` (the 402 is raised again, no card) |
+| `test_402_is_returned_as_a_non_error_result_with_the_card` | drop the `except CreditsExhausted` in `_graceful_timeout` (the 402 is raised again, no card), or flag the card tools' result as an error (ChatGPT then hides the card) |
+| `test_sds_section_gets_the_card_too` | leave `get_sds_section` out of `CARD_TOOLS` |
+| `test_both_links_say_where_they_were_shown` | drop `with_source_params` from the text link or the card link |
 | `test_card_is_on_the_wire_as_underscore_meta` | build the result without `meta=` |
 | `test_text_says_not_run_and_carries_the_link` | drop the "NOT run" sentence or the link from `_credits_exhausted_result` |
 | `test_off_origin_upgrade_link_is_replaced` | use the backend's `upgrade_url` without `allowed_upgrade_link` |
 | `test_retold_keeps_the_upgrade_target` | re-raise the report path's longer sentence as a plain `ToolReason` |
-| `test_tools_without_the_template_get_text_but_no_card` | attach the card payload regardless of `_CARD_TOOLS` |
+| `test_tools_without_the_template_get_text_but_no_card` | attach the card payload regardless of `CARD_TOOLS`, or drop the error flag on those tools |
 | `test_older_backend_without_link_falls_back_to_the_default_page` | drop the `or _UPGRADE_URL` fallback |
 | `test_card_link_check_fails_closed_without_an_origin` | let `safeUrl` default to the SDS origin when none is given |
 | `test_template_renders_the_exhausted_branch_and_pins_both_origins` | drop `renderExhausted`, or inject only one origin |
@@ -54,12 +56,18 @@ def _text(result):
     return "\n".join(getattr(b, "text", "") or "" for b in result.content)
 
 
-def test_402_is_returned_as_an_errored_result_with_the_card(monkeypatch):
+_CARD_UPGRADE = card.with_source_params(
+    "https://msdschain.lagentbot.com/pricing", "card", "check_chemical_compatibility")
+
+
+def test_402_is_returned_as_a_non_error_result_with_the_card(monkeypatch):
+    """ChatGPT renders a component only on results whose `isError` is false; on an errored
+    result the upgrade button never shows. The text still says the request was not run."""
     res = _call(monkeypatch)
-    assert res.is_error is True
+    assert res.is_error is False
     payload = (res.meta or {}).get(card.CARD_META_KEY)
     assert payload and payload["kind"] == "credits_exhausted", res.meta
-    assert payload["upgrade_url"] == "https://msdschain.lagentbot.com/pricing"
+    assert payload["upgrade_url"] == _CARD_UPGRADE
     assert payload["resets_at"] == _DETAIL["resets_at"]
     # The structuredContent slot holds the tool's own data shape; an error must not pose as one.
     assert res.structured_content is None
@@ -81,7 +89,7 @@ def test_off_origin_upgrade_link_is_replaced(monkeypatch):
     evil = dict(_DETAIL, upgrade_url="https://evil.example/pricing")
     res = _call(monkeypatch, evil)
     assert "evil.example" not in _text(res).split("\n\n", 1)[1]
-    assert res.meta[card.CARD_META_KEY]["upgrade_url"] == server._UPGRADE_URL
+    assert res.meta[card.CARD_META_KEY]["upgrade_url"] == _CARD_UPGRADE
 
 
 def test_retold_keeps_the_upgrade_target():
@@ -118,7 +126,30 @@ def test_tools_without_the_template_get_text_but_no_card(monkeypatch):
 def test_older_backend_without_link_falls_back_to_the_default_page(monkeypatch):
     res = _call(monkeypatch, {"error": "credit_floor", "balance": 0})
     assert server._UPGRADE_URL in _text(res)
-    assert res.meta[card.CARD_META_KEY]["upgrade_url"] == server._UPGRADE_URL
+    assert res.meta[card.CARD_META_KEY]["upgrade_url"] == _CARD_UPGRADE
+
+
+def test_sds_section_gets_the_card_too(monkeypatch):
+    async def _empty_wallet(*a, **kw):
+        return server._billed_json(_Resp402(_DETAIL))
+    monkeypatch.setattr(server, "_direct_sds_section", _empty_wallet)
+    res = asyncio.run(server.get_sds_section(chemical="acetone", section=7))
+    assert res.is_error is False and "NOT run" in _text(res)
+    payload = res.meta[card.CARD_META_KEY]
+    assert payload["kind"] == "credits_exhausted"
+    assert "utm_content=get_sds_section" in payload["upgrade_url"]
+
+
+def test_both_links_say_where_they_were_shown(monkeypatch):
+    res = _call(monkeypatch)
+    assert "utm_medium=text" in _text(res) and "utm_source=mcp" in _text(res)
+    assert "utm_medium=card" in res.meta[card.CARD_META_KEY]["upgrade_url"]
+
+
+def test_source_params_keep_what_the_link_already_has():
+    url = card.with_source_params("https://msdschain.lagentbot.com/pricing?plan=pro&utm_source=x",
+                                  "card", "t")
+    assert "plan=pro" in url and "utm_source=x" in url and "utm_source=mcp" not in url
 
 
 def test_card_link_check_fails_closed_without_an_origin():

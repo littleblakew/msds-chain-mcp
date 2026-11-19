@@ -109,14 +109,14 @@ _PROMPT_TAIL = (
 
 @mcp.resource(
     ui_compat_card.CARD_URI,
-    name="compat_card",
-    title="Compatibility card",
-    description="Inline card for check_chemical_compatibility: verdicts, precursor notices, source SDS.",
+    name="result_card",
+    title="Result card",
+    description="Inline card for compatibility checks, SDS sections and SDS documents, with the source SDS.",
     mime_type=ui_compat_card.CARD_MIME,
     meta=ui_compat_card.resource_meta(_CARD_LINK_ORIGIN, _UPGRADE_ORIGIN),
 )
 def compat_card() -> str:
-    """CI-1098：`check_chemical_compatibility` 的卡片模板（MCP Apps）。见 `ui_compat_card.py`。"""
+    """CI-1098 / CI-1618：`ui_compat_card.CARD_TOOLS` 共用的卡片模板（MCP Apps）。见 `ui_compat_card.py`。"""
     return ui_compat_card.card_html(_CARD_LINK_ORIGIN, _UPGRADE_ORIGIN)
 
 
