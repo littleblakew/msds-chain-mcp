@@ -11,7 +11,7 @@ import uuid
 from contextvars import ContextVar
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
-from request_identity import caller_headers, get_caller_credential, get_mcp_call_id, reset_mcp_call_id, set_mcp_call_id
+from request_identity import caller_headers, get_caller_credential, get_caller_user_agent, get_mcp_call_id, reset_mcp_call_id, set_mcp_call_id
 
 from msds_mcp.app import (API_URL, LANG, TIMEOUT_LLM, _UPGRADE_ORIGIN, _UPGRADE_URL, _log_secret_header, logger)
 from msds_mcp.params import (_normalize_catalog_lang, _normalize_lang, _normalize_suppliers, _require_api_key)
@@ -880,24 +880,27 @@ class CreditsExhausted(ToolReason):
         return CreditsExhausted(text, upgrade_url=self.upgrade_url, resets_at=self.resets_at)
 
 
-# Tools whose definition points at the card template. A card payload on any other tool's
-# result would reach no template, so it is left off.
-_CARD_TOOLS = frozenset({"check_chemical_compatibility"})
-
-
 def _credits_exhausted_result(e: CreditsExhausted, tool_name: str) -> CallToolResult:
-    """The errored result for an empty wallet: what happened and the link for the user, plus
-    the card payload on tools that have the card template. No `structured_content`: that slot
-    holds each tool's own data shape, and an error must not pose as one."""
+    """The result for an empty wallet: what happened and the link for the user, plus the card
+    payload on tools that have the card template. No `structured_content`: that slot holds
+    each tool's own data shape, and this result must not pose as one.
+
+    The result is flagged as an error, except on tools with the template when the caller is a
+    host that renders components only on non-error results (ChatGPT): there the flag would hide
+    the upgrade button the card exists to show, and the text still says the request was not
+    run. Every other client keeps the flag, which monitors, probes and retries rely on."""
     url = ui_compat_card.allowed_upgrade_link(e.upgrade_url, _UPGRADE_ORIGIN) or _UPGRADE_URL
+    text_url = ui_compat_card.with_source_params(url, "text", tool_name)
     text = (f"{e}\n\nThis check was NOT run: there is no MSDS Chain result for it. "
-            f"Give the user this link to upgrade or top up: {url}\n"
+            f"Give the user this link to upgrade or top up: {text_url}\n"
+            "Do not retry this request until the user has upgraded or the free credits have reset.\n"
             "If you add general knowledge, label it as general knowledge, not as an MSDS Chain result.")
-    meta = None
-    if tool_name in _CARD_TOOLS:
-        meta = {ui_compat_card.CARD_META_KEY: ui_compat_card.exhausted_payload(
-            str(e), url, e.resets_at, _UPGRADE_ORIGIN)}
-    return CallToolResult(content=[TextContent(type="text", text=text)], meta=meta, is_error=True)
+    if tool_name not in ui_compat_card.CARD_TOOLS:
+        return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
+    meta = {ui_compat_card.CARD_META_KEY: ui_compat_card.exhausted_payload(
+        str(e), ui_compat_card.with_source_params(url, "card", tool_name), e.resets_at, _UPGRADE_ORIGIN)}
+    flagged = not ui_compat_card.renders_card_only_on_success(get_caller_user_agent())
+    return CallToolResult(content=[TextContent(type="text", text=text)], meta=meta, is_error=flagged)
 
 
 def _rate_limited_message(res: "httpx.Response") -> str:

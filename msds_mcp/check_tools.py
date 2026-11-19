@@ -6,7 +6,8 @@ from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import BaseModel, Field
 from typing import Annotated
 
-from msds_mcp.app import API_URL, LANG, mcp
+import ui_compat_card
+from msds_mcp.app import _CARD_LINK_ORIGIN, API_URL, LANG, mcp
 from msds_mcp.blocks import (_batch_not_analysed, _batch_pair_structured, _batch_truncation_block, _no_hazard_basis_block, _pair_sides, _physical_form_disclosures_block, _precursor_disclosure_block, _precursor_index, _precursor_pair_note, _query_form_disclosure_block, _rejected_products_block, _unresolved_block)
 from msds_mcp.calls import (_expose, _graceful_timeout, _intent_params, _log_intent, _reported, _strip_usage, _supplier_params, _with_usage)
 from msds_mcp.direct import (_direct_batch, _direct_sds_document, _direct_sds_draft, _direct_validate_sds)
@@ -476,7 +477,9 @@ async def validate_sds(
                     success=success, error_message=error_msg)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get SDS Document", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get SDS Document", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False,
+          # CI-1618：链到内联卡片模板（与相容性同一份）。不渲染组件的宿主忽略它。
+          meta=ui_compat_card.tool_meta())
 @_graceful_timeout
 @_reported
 async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToolResult:
@@ -552,7 +555,8 @@ async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToo
             # 产出这两个键，而这里只把它们塞进 structuredContent、文本里一个字没有
             # ——多数客户端只把 text 喂给模型 ⇒ 用户拿到 HF 的 PDF 链接和出处，
             # 却读不到「这份是水溶液、无水的我们没有」。与本票其余六条同一条理由。
-            lines.extend(_form_disclosure_lines(data))
+            notices = _form_disclosure_lines(data)
+            lines.extend(notices)
             if document_kind == _REFERENCE_SHEET:
                 lines.insert(1, (
                     "- ⚠️ This is a **public reference fact sheet**, not the supplier's SDS. "
@@ -565,43 +569,49 @@ async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToo
                     "applies to the mixture as a whole and must not be extrapolated "
                     "to any individual ingredient."
                 ))
+            structured = {
+                "available": True,
+                "record_kind": kind,
+                "document_kind": document_kind,
+                "chemical_name": chem_name,
+                "cas": cas,
+                "supplier": supplier,
+                "revision_date": revision_date,
+                "region": region,
+                "record_id": data.get("record_id"),
+                # CI-308: sha256 of the raw PDF bytes — the only exact key for
+                # "is this the same physical file as get_sds_section returned",
+                # since record_id comes from a different table on each path.
+                "pdf_hash": data.get("pdf_hash"),
+                # CI-347 的形态披露（文本面见上方 `_form_disclosure_lines`；
+                # CI-572 之前这里**只有** structuredContent，文本里没有）
+                "physical_form": data.get("physical_form"),
+                "physical_form_disclosure": data.get("physical_form_disclosure"),
+                # 🔴 CI-615：这是一份**手写白名单**——后端新增的键不会自己出现在这里。
+                # 那票的原始复现就是打这个工具（水 → TMSP，成分段 0.03%），
+                # 而第一版只改了后端 ⇒ 这里漏抄 = 用户仍然什么都看不到。
+                # `null` ＝ 这份 SDS 没声明百分比，**不表示「就是纯的」**。
+                "preparation_percent": data.get("preparation_percent"),
+                # CI-1408：`preparation_percent` 是区间的**上界**——只给它，机器消费者
+                # 会把 `35–38%` 说成「含 38%」。下界与念给人看的区间文本一起抄。
+                "preparation_percent_low": data.get("preparation_percent_low"),
+                "preparation_percent_text": data.get("preparation_percent_text"),
+                "preparation_disclosure": data.get("preparation_disclosure"),
+                # CI-1598：修订日早于 GHS 全面实施（`None` ＝ 不知道修订日，不是「不老」）。
+                "pre_ghs": data.get("pre_ghs"),
+                "pre_ghs_disclosure": data.get("pre_ghs_disclosure"),
+                "pdf_url": full_url,
+                "expires_in_seconds": 300,
+                "open_cost_credits": open_cost,
+            }
+            # CI-1618：卡片只开公开源上的链接；`API_URL` 可以是内网地址，相对路径按公开源补全。
+            card_url = f"{_CARD_LINK_ORIGIN}{relative}" if relative.startswith("/") else full_url
             return CallToolResult(
                 content=[TextContent(type="text", text="\n".join(lines))],
-                structured_content={
-                    "available": True,
-                    "record_kind": kind,
-                    "document_kind": document_kind,
-                    "chemical_name": chem_name,
-                    "cas": cas,
-                    "supplier": supplier,
-                    "revision_date": revision_date,
-                    "region": region,
-                    "record_id": data.get("record_id"),
-                    # CI-308: sha256 of the raw PDF bytes — the only exact key for
-                    # "is this the same physical file as get_sds_section returned",
-                    # since record_id comes from a different table on each path.
-                    "pdf_hash": data.get("pdf_hash"),
-                    # CI-347 的形态披露（文本面见上方 `_form_disclosure_lines`；
-                    # CI-572 之前这里**只有** structuredContent，文本里没有）
-                    "physical_form": data.get("physical_form"),
-                    "physical_form_disclosure": data.get("physical_form_disclosure"),
-                    # 🔴 CI-615：这是一份**手写白名单**——后端新增的键不会自己出现在这里。
-                    # 那票的原始复现就是打这个工具（水 → TMSP，成分段 0.03%），
-                    # 而第一版只改了后端 ⇒ 这里漏抄 = 用户仍然什么都看不到。
-                    # `null` ＝ 这份 SDS 没声明百分比，**不表示「就是纯的」**。
-                    "preparation_percent": data.get("preparation_percent"),
-                    # CI-1408：`preparation_percent` 是区间的**上界**——只给它，机器消费者
-                    # 会把 `35–38%` 说成「含 38%」。下界与念给人看的区间文本一起抄。
-                    "preparation_percent_low": data.get("preparation_percent_low"),
-                    "preparation_percent_text": data.get("preparation_percent_text"),
-                    "preparation_disclosure": data.get("preparation_disclosure"),
-                    # CI-1598：修订日早于 GHS 全面实施（`None` ＝ 不知道修订日，不是「不老」）。
-                    "pre_ghs": data.get("pre_ghs"),
-                    "pre_ghs_disclosure": data.get("pre_ghs_disclosure"),
-                    "pdf_url": full_url,
-                    "expires_in_seconds": 300,
-                    "open_cost_credits": open_cost,
-                },
+                structured_content=structured,
+                meta=ui_compat_card.card_meta(
+                    ui_compat_card.sds_document_payload, {**structured, "pdf_url": card_url},
+                    ui_compat_card.notice_lines(notices), _CARD_LINK_ORIGIN),
             )
         else:
             message = data.get("message", "No SDS document available for this chemical.")
@@ -645,6 +655,8 @@ async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToo
             return CallToolResult(
                 content=[TextContent(type="text", text=f"**{display}**: {message}{hint}")],
                 structured_content=structured,
+                meta=ui_compat_card.card_meta(
+                    ui_compat_card.sds_document_payload, structured, [], _CARD_LINK_ORIGIN),
             )
     finally:
         _log_intent("get_sds_document", [chemical],

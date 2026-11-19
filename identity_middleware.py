@@ -1,7 +1,7 @@
-"""ASGI middleware: copy the inbound caller credential into the request contextvar."""
+"""ASGI middleware: copy the inbound caller credential and User-Agent into request contextvars."""
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from request_identity import set_caller_credential
+from request_identity import set_caller_credential, set_caller_user_agent
 
 
 class IdentityMiddleware:
@@ -19,4 +19,5 @@ class IdentityMiddleware:
                 set_caller_credential(auth)
             else:
                 set_caller_credential(None)
+            set_caller_user_agent(headers.get("user-agent"))
         await self.app(scope, receive, send)

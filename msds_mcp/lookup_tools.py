@@ -6,7 +6,8 @@ from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import Field
 from typing import Annotated
 
-from msds_mcp.app import API_URL, LANG, TIMEOUT, mcp
+import ui_compat_card
+from msds_mcp.app import _CARD_LINK_ORIGIN, API_URL, LANG, TIMEOUT, mcp
 from msds_mcp.blocks import (_no_hazard_basis_block, _pair_sides, _precursor_disclosure_block, _precursor_index, _precursor_pair_note, _query_form_disclosure_block, _unresolved_block)
 from msds_mcp.calls import (_graceful_timeout, _headers, _intent_params, _log_intent, _quick_chat, _reported, _strip_usage, _supplier_params)
 from msds_mcp.direct import (_direct_alternatives, _direct_compat, _direct_online_search, _direct_sds_section, _direct_waste, _format_alternatives)
@@ -290,7 +291,9 @@ async def search_msds_online(
                     success=success, error_message=error_msg)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get SDS Section", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get SDS Section", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False,
+          # CI-1618：链到内联卡片模板（与相容性同一份）。不渲染组件的宿主忽略它。
+          meta=ui_compat_card.tool_meta())
 @_graceful_timeout
 @_reported
 async def get_sds_section(
@@ -355,6 +358,7 @@ async def get_sds_section(
         chem_display = data.get("chemical", chemical)
         cas = data.get("cas", "N/A")
         content = data.get("content")
+        gap_note = None  # the sentence the answer gives instead of section text, if any
         lines = [
             f"**SDS Section {section}: {sec_name}**",
             f"Chemical: {chem_display} (CAS: {cas})\n",
@@ -371,7 +375,8 @@ async def get_sds_section(
             note = data.get("no_section_text_note")
             if data.get("no_section_text_reason") != "unresolved":
                 note = None
-            lines.append(note or _unresolved_boolean_note(lang))
+            gap_note = note or _unresolved_boolean_note(lang)
+            lines.append(gap_note)
         elif content:
             # CI-1102: the text below may come from a different SDS than the cited
             # record. Say so BEFORE the text — a note placed after it is read as
@@ -389,10 +394,9 @@ async def get_sds_section(
             #
             # 🔴 为什么必须说清「这是数据缺口，不是危害结论」：本项目栽过——
             # 「空」在下游被读成「无危害」，40% HF 的储存建议因此掉进普通柜。
-            lines.append(
-                data.get("no_section_text_note")
-                or "No data available for this section in the canonical SDS."
-            )
+            gap_note = (data.get("no_section_text_note")
+                        or "No data available for this section in the canonical SDS.")
+            lines.append(gap_note)
         # CI-308: this section's text may come from a different underlying SDS
         # record than get_sds_document's — surface the supplier/revision here too
         # so a mismatch between the two tools is visible without reading the raw
@@ -428,11 +432,16 @@ async def get_sds_section(
         # 别编一句「本品为某某形态」出来。
         # CI-572：改走 `_form_disclosure_lines`（此前是与它逐字相同的手写一份）。
         # 格式留两份 ⇒ 改一处漏另一处，七条工具的披露会长成两个样子。
-        lines.extend(_form_disclosure_lines(data))
+        notices = _form_disclosure_lines(data)
+        lines.extend(notices)
         lines.append(f"\n*Data source: {data.get('data_source', 'unknown')}*")
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
+            # CI-1618：卡片通道，内容都是上面文本里已有的。
+            meta=ui_compat_card.card_meta(
+                ui_compat_card.sds_section_payload, data, section, sec_name,
+                ui_compat_card.notice_lines(notices), gap_note),
         )
     finally:
         _log_intent("get_sds_section", [chemical],
