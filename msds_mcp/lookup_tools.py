@@ -7,6 +7,7 @@ from pydantic import Field
 from typing import Annotated
 
 import ui_compat_card
+from msds_mcp import ui_card_views
 from msds_mcp.app import _CARD_LINK_ORIGIN, API_URL, LANG, TIMEOUT, mcp
 from msds_mcp.blocks import (_no_hazard_basis_block, _pair_sides, _precursor_disclosure_block, _precursor_index, _precursor_pair_note, _query_form_disclosure_block, _unresolved_block)
 from msds_mcp.calls import (_graceful_timeout, _headers, _intent_params, _log_intent, _quick_chat, _reported, _strip_usage, _supplier_params)
@@ -449,7 +450,7 @@ async def get_sds_section(
                     success=success, error_message=error_msg)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Chemical Alternatives", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get Chemical Alternatives", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False, meta=ui_compat_card.tool_meta())
 @_graceful_timeout
 @_reported
 async def get_chemical_alternatives(
@@ -535,6 +536,7 @@ async def get_chemical_alternatives(
             content=[TextContent(type="text",
                                  text=_format_alternatives(data, chemical))],
             structured_content=_strip_usage(data),
+            meta=ui_compat_card.card_meta(ui_card_views.safety_payload, "substitution", [data], data.get("documents"), _CARD_LINK_ORIGIN),
         )
     finally:
         _log_intent("get_chemical_alternatives", [chemical],
@@ -877,7 +879,7 @@ async def check_mixing_order(
                     success=success, error_message=error_msg)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Waste Disposal Guidance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get Waste Disposal Guidance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False, meta=ui_compat_card.tool_meta())
 @_graceful_timeout
 @_reported
 async def get_waste_disposal(chemicals: ChemicalList, suppliers: Suppliers = None,
@@ -925,6 +927,7 @@ async def get_waste_disposal(chemicals: ChemicalList, suppliers: Suppliers = Non
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
+            meta=ui_compat_card.card_meta(ui_card_views.safety_payload, "waste", data.get("results"), data.get("documents"), _CARD_LINK_ORIGIN),
         )
     finally:
         _log_intent("get_waste_disposal", chemicals,

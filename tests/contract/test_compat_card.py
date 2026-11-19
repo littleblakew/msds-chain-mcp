@@ -215,6 +215,7 @@ _TEMPLATE_PINS = {
     "ui://msds-chain/compat-card-v3.html": "c951300812010d6f",
     "ui://msds-chain/result-card-v1.html": "e404c5a62e72ddc8",
     "ui://msds-chain/result-card-v2.html": "2c2abebcb5f9d979",
+    "ui://msds-chain/result-card-v3.html": "e0417093bdd57843",
 }
 
 
