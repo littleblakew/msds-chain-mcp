@@ -147,13 +147,17 @@ def test_same_wording_precursor_entries_fold():
 
 def test_precursor_hits_without_wording_stay_visible():
     """The text answer never drops a flagged listing; neither may the card."""
-    entries = [{"cas": "75-44-5", "query_name": "phosgene", "regime": "cwc", "tier": "Schedule 3A"},
+    entries = [{"cas": "67-64-1", "query_name": "acetone", "regime": "drug_precursor", "tier": "Tier A"},
+               {"cas": "67-64-1", "query_name": "acetone", "tier": "Tier B", "statement": "On Tier B."},
+               {"cas": "67-64-1", "query_name": "acetone", "tier": "Tier C", "statement": "On Tier C."},
                "garbled-entry"]
-    payload = {**_PAYLOAD, "precursor_disclosure": entries}
-    out = card.card_payload(payload, server._CARD_LINK_ORIGIN)["precursor"]
-    assert len(out) == 2, out
-    assert out[0]["chemical"] == "phosgene" and "Schedule 3A" in out[0]["statement"], out
-    assert "garbled-entry" in out[1]["statement"], out
+    out = card.card_payload({"precursor_disclosure": entries}, server._CARD_LINK_ORIGIN)["precursor"]
+    # Same order and grouping as the text answer: garbled first, then the unworded head, and
+    # nothing folds under a head that has no wording.
+    assert [x["statement"][:14] for x in out] == [
+        "Unrecognised d", "listed as a re", "On Tier B.", "On Tier C."], out
+    assert "Tier A" in out[1]["statement"] and "garbled-entry" in out[0]["statement"], out
+    assert all(x["also"] == [] for x in out), out
 
 
 def test_only_https_links_on_the_allowed_origin_survive():

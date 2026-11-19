@@ -172,33 +172,30 @@ def card_payload(data: dict, allowed_origin: str) -> dict:
 
 
 def _precursor_groups(entries: list) -> list[dict]:
-    """Regulated-precursor statements, one per distinct wording: a statement that differs from
-    the chemical's first one only by the list name is folded into `also` (the list names), as
-    the text answer folds it. Like the text answer, nothing is dropped: a hit without its
-    statement gets the flagged-listing sentence, an unrecognised entry is shown as such."""
+    """The regulated-precursor notices in the order and grouping the text answer prints them
+    (`_precursor_disclosure_block`): unrecognised entries first, then per chemical its first
+    entry, with later entries that differ from it only by the list name folded into `also`.
+    Nothing is dropped: a hit without its statement gets the flagged-listing sentence."""
+    out = [{"chemical": None, "tier": None, "also": [],
+            "statement": f"Unrecognised disclosure entry, reported as received: {str(e)[:300]}"}
+           for e in entries if not isinstance(e, dict)]
     groups: dict = {}
-    out = []
     for e in entries:
-        if not isinstance(e, dict):
-            out.append({"chemical": None, "tier": None, "also": [],
-                        "statement": f"Unrecognised disclosure entry, reported as received: {str(e)[:300]}"})
-        elif not (e.get("statement") or "").strip():
-            out.append({"chemical": e.get("query_name") or e.get("matched_name") or e.get("cas"),
-                        "tier": None, "also": [], "statement": _precursor_unworded(e)})
-        else:
+        if isinstance(e, dict):
             groups.setdefault(e.get("cas") or e.get("query_name"), []).append(e)
+
+    def entry(e: dict, also: list) -> dict:
+        worded = (e.get("statement") or "").strip()
+        return {"chemical": e.get("query_name") or e.get("matched_name") or e.get("cas"),
+                "tier": e.get("tier") if worded else None,
+                "statement": worded or _precursor_unworded(e),
+                "also": [t for t in also if t]}
+
     for items in groups.values():
-        head, rest = items[0], items[1:]
-        heads = [(head, [])]
-        for e in rest:
-            if _precursor_same_wording(head, e):
-                heads[0][1].append(e.get("tier"))
-            else:
-                heads.append((e, []))
-        for h, also in heads:
-            out.append({"chemical": h.get("query_name") or h.get("matched_name"),
-                        "tier": h.get("tier"), "statement": h.get("statement"),
-                        "also": [t for t in also if t]})
+        head = items[0]
+        same = [e for e in items[1:] if _precursor_same_wording(head, e)]
+        out.append(entry(head, [e.get("tier") for e in same]))
+        out.extend(entry(e, []) for e in items[1:] if not _precursor_same_wording(head, e))
     return out
 
 
