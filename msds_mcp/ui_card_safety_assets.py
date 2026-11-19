@@ -151,7 +151,9 @@ SAFETY_CARDS_JS = r"""
   function glyph(key, px){
     return GL[key] ? '<svg class="gl" viewBox="0 0 24 24" width="' + px + '" height="' + px + '" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' + GL[key] + "</svg>" : "";
   }
-  function toneChip(tone, label, wrap){ return '<span class="chip t-' + tone + (wrap ? " wrap" : "") + '">' + tx(label) + "</span>"; }
+  // Tones come from backend data in places (e.g. risk_tone): only the four known classes reach the markup.
+  var TONES = {bad: 1, warn: 1, info: 1, pending: 1};
+  function toneChip(tone, label, wrap){ return '<span class="chip t-' + (TONES[tone] ? tone : "pending") + (wrap ? " wrap" : "") + '">' + tx(label) + "</span>"; }
   function sigTone(w){ return /danger|危险|危險|gefahr|bahaya|危険|위험|опасно|peligro/i.test(w) ? "bad" : "warn"; }
   function statusChips(signal, v, extra){
     return (signal ? toneChip(sigTone(signal), signal) : "") + (extra || "") + toneChip(STATUS_TONE[v.status] || "pending", v.status_label);
@@ -400,7 +402,7 @@ SAFETY_CARDS_JS = r"""
   SAFETY.emergency = function(p){
     return stack(p, function(it){
       var v = it.view, gen = v.status === "insufficient" || v.status === "general";
-      var scn = v.scenario ? '<span class="scn sc-' + esc(v.scenario) + '">' + esc(v.scenario.charAt(0).toUpperCase() + v.scenario.slice(1)) + "</span>" : "";
+      var scn = v.scenario ? '<span class="scn sc-' + (/^[a-z_]+$/.test(v.scenario) ? v.scenario : "other") + '">' + esc(v.scenario.charAt(0).toUpperCase() + v.scenario.slice(1)) + "</span>" : "";
       var h = vhead(v, "Emergency response", statusChips(v.signal_word, v, scn));
       if (arr(v.protocol).length)
         h += '<div class="brandbox">' + v.protocol.map(function(x){ return "<p>" + md(x.text) + "</p>"; }).join("")

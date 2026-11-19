@@ -211,3 +211,28 @@ def test_credits_exhausted_gets_the_card_on_new_tools(monkeypatch):
         monkeypatch.setattr(server, direct, _empty)
         res = asyncio.run(getattr(server, tool)(**kwargs))
         assert res.meta[card.CARD_META_KEY]["kind"] == "credits_exhausted", tool
+
+
+def test_document_with_another_cas_is_never_linked_even_if_the_name_matches():
+    """A shared name does not make two records the same substance."""
+    item = {"chemical_name": "Ethanol", "cas": "64-17-5"}
+    other = {"chemical_name": "Ethanol", "cas": "67-64-1", "sds_document_url": "x"}
+    assert ui_card_views._document_for(item, [other]) is None
+    same = {"chemical_name": "Ethanol", "cas": "64-17-5", "sds_document_url": "y"}
+    assert ui_card_views._document_for(item, [other, same]) is same
+
+
+def test_name_match_without_cas_must_be_unambiguous():
+    item = {"chemical_name": "Ethanol"}
+    a = {"chemical_name": "Ethanol", "cas": "64-17-5"}
+    b = {"chemical": "ethanol", "cas": "67-64-1"}
+    assert ui_card_views._document_for(item, [a]) is a
+    assert ui_card_views._document_for(item, [a, b]) is None
+
+
+def test_tone_classes_come_from_an_allowlist():
+    """Some tones are backend data (risk_tone); a quote in one must not reach the class attribute."""
+    html = card.card_html("https://api.msdschain.lagentbot.com", "https://msdschain.lagentbot.com")
+    assert '(TONES[tone] ? tone : "pending")' in html
+    assert "'<span class=\"chip t-' + tone" not in html
+    assert "sc-' + esc(v.scenario)" not in html

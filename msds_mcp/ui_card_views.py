@@ -42,12 +42,19 @@ def _usable(kind: str, view) -> bool:
 
 
 def _document_for(item: dict, documents: list[dict]) -> dict | None:
-    keys = {str(k).casefold() for k in (item.get("cas"), item.get("cas_number"), item.get("chemical_name"),
-                                        item.get("chemical")) if k}
-    for d in documents:
-        if keys & {str(k).casefold() for k in (d.get("cas"), d.get("chemical_name"), d.get("chemical")) if k}:
-            return d
-    return None
+    """The document behind this item, or None. When both sides carry a CAS they must be equal
+    (a shared name does not make two records the same substance); a name match is used only
+    when a side has no CAS, and only if exactly one document matches."""
+    cas = str(item.get("cas") or item.get("cas_number") or "").strip()
+    if cas:
+        same = [d for d in documents if str(d.get("cas") or "").strip() == cas]
+        if same:
+            return same[0]
+    names = {str(k).casefold() for k in (item.get("chemical_name"), item.get("chemical")) if k}
+    hits = [d for d in documents
+            if not (cas and str(d.get("cas") or "").strip())
+            and names & {str(k).casefold() for k in (d.get("chemical_name"), d.get("chemical")) if k}]
+    return hits[0] if len(hits) == 1 else None
 
 
 def _source(item: dict, documents: list[dict], allowed_origin: str) -> dict | None:
