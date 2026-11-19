@@ -10,7 +10,9 @@ host's model cannot rewrite.
 | `test_card_payload_survives_the_language_note_rebuild` | drop `meta=` in `_relay_language_note` |
 | `test_meta_goes_on_the_wire_as_underscore_meta` | (SDK) the field serializing under another name |
 | `test_dockerfile_ships_the_module` | drop `ui_compat_card.py` from the Dockerfile COPY line |
-| `test_card_basis_is_the_field_the_text_prints` | read `citation` (or anything but `source`) for the pair basis |
+| `test_card_shows_the_reason_the_text_prints` | show the pair's `source` / `citation` (internal rule ids) instead of its `reason` |
+| `test_every_document_with_a_link_gets_one` | cap the number of linked documents again |
+| `test_same_wording_precursor_entries_fold` | drop the `_precursor_same_wording` fold (or fold entries that read differently) |
 | `test_only_https_links_on_the_allowed_origin_survive` | drop the `_allowed_link` filter in `card_payload` |
 | `test_caps_report_what_they_left_out` | drop the `omitted` counts |
 | `test_verdict_is_lowercased_for_the_css_class` | drop `.lower()` on the verdict |
@@ -83,8 +85,6 @@ def test_card_payload_survives_the_usage_rebuild(monkeypatch):
     assert payload["pairs"][0]["a"] == "thionyl chloride", payload["pairs"]
     assert payload["pairs"][0]["verdict"] == "incompatible"
     assert payload["precursor"][0]["statement"] == "Listed on CWC Schedule 3B."
-    # at most two calls to action on an inline card
-    assert [d["url"] is not None for d in payload["documents"]] == [True, True, False]
 
 
 def test_card_payload_survives_the_language_note_rebuild(monkeypatch):
@@ -113,12 +113,35 @@ def test_dockerfile_ships_the_module():
     assert any("ui_compat_card.py" in line for line in copy_lines), copy_lines
 
 
-def test_card_basis_is_the_field_the_text_prints(monkeypatch):
-    result = _call(monkeypatch)
+def test_card_shows_the_reason_the_text_prints(monkeypatch):
+    payload = {**_PAYLOAD, "pairs": [{**_PAYLOAD["pairs"][0],
+                                      "reason": "Oxidizer + flammable liquid: fire risk",
+                                      "source": "reactive_group_rule"}]}
+    result = _call(monkeypatch, payload=payload)
     pair = result.meta[card.CARD_META_KEY]["pairs"][0]
-    assert pair["source"] == "Supplier X SDS rev 2020-01-01", pair
-    assert "citation" not in pair, pair
-    assert pair["source"] in result.content[0].text, "card basis must be text the answer already shows"
+    assert pair["reason"] == "Oxidizer + flammable liquid: fire risk", pair
+    assert "source" not in pair and "citation" not in pair, pair
+    assert pair["reason"] in result.content[0].text, "card reason must be text the answer already shows"
+    assert "reactive_group_rule" not in str(result.meta[card.CARD_META_KEY])
+
+
+def test_every_document_with_a_link_gets_one(monkeypatch):
+    """The supplier name is the link (as on the web card), so each source opens its own original."""
+    payload = _call(monkeypatch).meta[card.CARD_META_KEY]
+    assert [d["url"] for d in payload["documents"]] == [
+        server._CARD_LINK_ORIGIN + "/msds/token/" + x for x in "abc"]
+
+
+def test_same_wording_precursor_entries_fold():
+    base = "This substance is listed on {} and is monitored."
+    entries = [{"cas": "67-64-1", "query_name": "acetone", "tier": t, "statement": base.format(t)}
+               for t in ("UN 1988 Table II", "DEA List II")]
+    entries.append({"cas": "67-64-1", "query_name": "acetone", "tier": "EU 2019/1148 Annex II",
+                    "statement": "Listed on EU 2019/1148 Annex II. Suspicious transactions are reportable."})
+    out = card.card_payload({"precursor_disclosure": entries}, server._CARD_LINK_ORIGIN)["precursor"]
+    assert [(x["tier"], x["also"]) for x in out] == [
+        ("UN 1988 Table II", ["DEA List II"]), ("EU 2019/1148 Annex II", [])], out
+    assert out[1]["statement"].startswith("Listed on EU 2019/1148"), "a different wording must stay whole"
 
 
 def test_only_https_links_on_the_allowed_origin_survive():
@@ -175,6 +198,7 @@ _TEMPLATE_PINS = {
     "ui://msds-chain/compat-card-v2.html": "d10c99c3aaa5db0e",
     "ui://msds-chain/compat-card-v3.html": "c951300812010d6f",
     "ui://msds-chain/result-card-v1.html": "e404c5a62e72ddc8",
+    "ui://msds-chain/result-card-v2.html": "2c2abebcb5f9d979",
 }
 
 

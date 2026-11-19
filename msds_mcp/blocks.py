@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 from msds_mcp.calls import _expose
-from msds_mcp.disclosures import _form_disclosure_lines
+from msds_mcp.disclosures import _form_disclosure_lines, _precursor_same_wording
 
 
 
@@ -581,16 +581,9 @@ def _precursor_disclosure_block(data: dict) -> list[str]:
             lines.append(f"- {label} — {statement}")
             rest = items[1:]
 
-        head_tier = head.get("tier") or ""
         same, different = [], []
         for e in rest:
-            stmt = (e.get("statement") or "").strip()
-            tier = e.get("tier") or ""
-            if statement and stmt and head_tier and tier and \
-                    stmt == statement.replace(head_tier, tier):
-                same.append(e)
-            else:
-                different.append(e)
+            (same if _precursor_same_wording(head, e) else different).append(e)
         if same:
             listed = " · ".join(
                 (e.get("tier") or "?") + (f" ({e['authority']})" if e.get("authority") else "")

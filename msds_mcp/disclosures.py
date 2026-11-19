@@ -240,3 +240,14 @@ def _storage_item_lines(item: dict) -> list[str]:
         lines.append("- **NFPA ratings:** " + ", ".join(f"{k.title()} {v}" for k, v in nfpa.items()))
     lines.append("")
     return lines
+
+
+def _precursor_same_wording(head: dict, e: dict) -> bool:
+    """True when `e`'s statement is `head`'s with only the list name swapped in, so it can be
+    folded into an "also listed on" line. Anything that reads differently (another regime,
+    a threshold) is not folded. Shared by the text answer and the result card."""
+    statement = (head.get("statement") or "").strip()
+    stmt = (e.get("statement") or "").strip()
+    head_tier, tier = head.get("tier") or "", e.get("tier") or ""
+    return bool(statement and stmt and head_tier and tier
+                and stmt == statement.replace(head_tier, tier))

@@ -21,12 +21,13 @@ import json
 import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from msds_mcp.disclosures import _precursor_same_wording
 from msds_mcp.ui_card_tokens import CARD_TOKENS_CSS
 
 # Any change to the HTML must ship under a new URI: hosts cache the template by URI, so an
 # edited template under the old one keeps serving the stale copy. A pinned hash in
 # tests/contract/test_compat_card.py goes red when the template changes and the URI does not.
-CARD_URI = "ui://msds-chain/result-card-v1.html"
+CARD_URI = "ui://msds-chain/result-card-v2.html"
 CARD_MIME = "text/html;profile=mcp-app"
 # Key under the tool result's `_meta` that carries the card payload.
 CARD_META_KEY = "msdschain/compat_card"
@@ -37,8 +38,6 @@ CARD_TOOLS = frozenset({"check_chemical_compatibility", "get_sds_section", "get_
 _MAX_PAIRS = 12
 _MAX_PRECURSOR = 8
 _MAX_DOCS = 12
-# The compatibility card is limited to two calls to action, so at most two documents get a link.
-_MAX_LINKED_DOCS = 2
 # SDS section text beyond this is cut in the card (the full text is in the answer).
 _MAX_SECTION_CHARS = 6000
 
@@ -147,22 +146,16 @@ def card_payload(data: dict, allowed_origin: str) -> dict:
         pairs.append({
             "a": p.get("chemical_a"), "b": p.get("chemical_b"),
             "verdict": verdict.lower() if isinstance(verdict, str) else verdict,
-            # The text answer prints this pair's `source` as its basis line.
-            "source": p.get("source"),
+            # The sentence the text answer prints as "Reason:", as the web card shows it.
+            "reason": _str(p.get("reason")),
         })
-    all_precursor = [d for d in _dicts(data.get("precursor_disclosure")) if d.get("statement")]
-    precursor = [
-        {"chemical": d.get("query_name") or d.get("matched_name"), "tier": d.get("tier"),
-         "statement": d.get("statement")}
-        for d in all_precursor[:_MAX_PRECURSOR]
-    ]
+    all_precursor = _precursor_groups(_dicts(data.get("precursor_disclosure")))
+    precursor = all_precursor[:_MAX_PRECURSOR]
     all_docs = _dicts(data.get("documents"))
     documents = []
-    linked = 0
     for d in all_docs[:_MAX_DOCS]:
-        url = _allowed_link(d.get("sds_document_url"), allowed_origin) \
-            if linked < _MAX_LINKED_DOCS else None
-        linked += bool(url)
+        # The supplier name is the link to the original, as on the web card.
+        url = _allowed_link(d.get("sds_document_url"), allowed_origin)
         documents.append({
             "chemical": d.get("chemical_name") or d.get("chemical"),
             "supplier": d.get("supplier"),
@@ -175,6 +168,30 @@ def card_payload(data: dict, allowed_origin: str) -> dict:
                     "precursor": len(all_precursor) - len(precursor),
                     "documents": len(all_docs) - len(documents)},
     }
+
+
+def _precursor_groups(entries: list[dict]) -> list[dict]:
+    """Regulated-precursor statements, one per distinct wording: a statement that differs from
+    the chemical's first one only by the list name is folded into `also` (the list names), as
+    the text answer folds it. Entries without a statement are left to the text answer."""
+    groups: dict = {}
+    for e in entries:
+        if e.get("statement"):
+            groups.setdefault(e.get("cas") or e.get("query_name"), []).append(e)
+    out = []
+    for items in groups.values():
+        head, rest = items[0], items[1:]
+        heads = [(head, [])]
+        for e in rest:
+            if _precursor_same_wording(head, e):
+                heads[0][1].append(e.get("tier"))
+            else:
+                heads.append((e, []))
+        for h, also in heads:
+            out.append({"chemical": h.get("query_name") or h.get("matched_name"),
+                        "tier": h.get("tier"), "statement": h.get("statement"),
+                        "also": [t for t in also if t]})
+    return out
 
 
 def card_meta(build, *args) -> dict | None:
@@ -283,14 +300,15 @@ body{margin:0;background:transparent;font:13px/18px -apple-system,BlinkMacSystem
 .sds .body{margin-top:6px;white-space:pre-wrap;color:rgb(var(--s-label));line-height:1.6}
 .cut{display:inline-flex;margin-top:6px;padding:0 6px;border-radius:4px;background:rgb(var(--c-warn)/.10);color:rgb(var(--s-warn-ink));font-size:12px;font-weight:500}
 .src{margin-top:12px;padding-top:10px;border-top:1px solid rgb(var(--s-line));color:rgb(var(--s-label-3));display:flex;flex-wrap:wrap;gap:2px 8px;align-items:baseline}
-.src+.src,.src.row{margin-top:4px;padding-top:0;border-top:0}.src .sup{color:rgb(var(--s-brand-ink))}
+.src+.src,.src.row{margin-top:4px;padding-top:0;border-top:0}
+.sup{font:inherit;border:0;padding:0;background:transparent;color:inherit;text-align:left}
+button.sup{color:rgb(var(--s-brand-ink));cursor:pointer}button.sup:hover{text-decoration:underline}
 .doc{display:flex;align-items:center;gap:12px;width:100%;box-sizing:border-box;text-align:left;font:inherit;border:1px solid rgb(var(--s-line));border-radius:12px;background:rgb(var(--s-surface));padding:12px;color:inherit}
 button.doc{cursor:pointer}button.doc:hover{background:rgb(var(--s-field))}
 .doc .ic{flex:none;width:40px;height:40px;border-radius:8px;background:rgb(var(--s-brand-500)/.10);color:rgb(var(--s-brand-ink));display:flex;align-items:center;justify-content:center}
 .doc .tx{flex:1;min-width:0}.doc .tt{font-size:15px;line-height:1.47;font-weight:500;color:rgb(var(--s-label))}
 .doc .mt{color:rgb(var(--s-label-3))}
 .go{display:inline-flex;align-items:center;margin-top:10px;font:inherit;font-weight:600;border:0;border-radius:8px;padding:6px 14px;background:rgb(var(--s-brand-500));color:#fff;cursor:pointer}
-.lnk{font:inherit;font-size:12px;border:1px solid rgb(var(--s-line));border-radius:6px;background:transparent;color:rgb(var(--s-brand-ink));padding:0 8px;line-height:20px;cursor:pointer}
 .more{margin-top:6px;font-size:12px;color:rgb(var(--s-label-3))}
 </style></head>
 <body><div id="root"></div>
@@ -349,7 +367,7 @@ button.doc{cursor:pointer}button.doc:hover{background:rgb(var(--s-field))}
       p.pairs.forEach(function(x){
         var tone = TONE[x.verdict] || "pending";
         h += '<div class="pair"><div><div class="who">' + esc(x.a) + " + " + esc(x.b) + "</div>"
-          + (x.source ? '<div class="cap">Basis: ' + esc(x.source) + "</div>" : "")
+          + (x.reason ? '<div class="cap">' + esc(x.reason) + "</div>" : "")
           + '</div><span class="chip t-' + tone + '">' + esc(String(x.verdict || "").replace(/_/g, " ")) + "</span></div>";
       });
       h += more(om.pairs, "pairs");
@@ -357,7 +375,8 @@ button.doc{cursor:pointer}button.doc:hover{background:rgb(var(--s-field))}
     if (p.precursor && p.precursor.length){
       h += '<div class="sec">Regulated precursor notice</div>';
       p.precursor.forEach(function(x){
-        h += '<div class="strip"><b>' + esc(x.chemical) + (x.tier ? " (" + esc(x.tier) + ")" : "") + "</b> · " + esc(x.statement) + "</div>";
+        var also = (x.also || []).length ? '<div class="cap">Also listed on: ' + esc(x.also.join(" · ")) + " (same wording)</div>" : "";
+        h += '<div class="strip"><b>' + esc(x.chemical) + (x.tier ? " (" + esc(x.tier) + ")" : "") + "</b> · " + esc(x.statement) + also + "</div>";
       });
       h += more(om.precursor, "notices");
     }
@@ -365,16 +384,21 @@ button.doc{cursor:pointer}button.doc:hover{background:rgb(var(--s-field))}
       h += '<div class="sec">Source SDS</div>';
       p.documents.forEach(function(d){
         var u = safeUrl(d.url, ALLOWED_ORIGIN);
-        h += '<div class="src row"><span>' + esc(d.chemical) + '</span><span class="sup">' + esc(d.supplier || "unknown supplier") + "</span>"
-          + (d.revision_date ? "<span>Revision date: " + esc(d.revision_date) + "</span>" : "")
-          + (u ? '<button class="lnk" data-a="' + action(u, ALLOWED_ORIGIN) + '">Open SDS</button>' : "") + "</div>";
+        h += '<div class="src row"><span>' + esc(d.chemical) + "</span>" + supplier(d.supplier || (u ? "Original SDS" : "unknown supplier"), u)
+          + (d.revision_date ? "<span>Revision date: " + esc(d.revision_date) + "</span>" : "") + "</div>";
       });
       h += more(om.documents, "documents");
     }
     return h ? '<div class="shell">' + h + "</div>" : "";
   }
+  // The supplier name is the link to the original when there is one (as on the web card);
+  // without one it is plain text, so it never looks clickable.
+  function supplier(name, url){
+    return url ? '<button class="sup" data-a="' + action(url, ALLOWED_ORIGIN) + '">' + esc(name) + " \u2197</button>"
+               : '<span class="sup">' + esc(name) + "</span>";
+  }
   function srcLine(label, s){
-    return '<div class="src"><span>' + esc(label) + '</span><span class="sup">' + esc(s.supplier || s.who) + (s.region ? " · " + esc(s.region) : "") + "</span>"
+    return '<div class="src"><span>' + esc(label) + "</span>" + supplier((s.supplier || s.who) + (s.region ? " · " + s.region : ""), null)
       + (s.revision_date ? "<span>Revision date: " + esc(s.revision_date) + "</span>" : "") + "</div>";
   }
   function renderSection(p){
