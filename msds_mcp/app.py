@@ -182,14 +182,16 @@ mcp = _Server(
         MSDS Chain provides chemical safety intelligence backed by traceable, sourced SDS data.
 
         WHICH TOOL:
-        - For any general safety question — hazards, PPE, first aid, storage, disposal,
-          "is X safe", "what do I need to handle Y" — call ask_chemical_safety FIRST.
-          It returns ONE answer grounded in a specific supplier SDS. Do NOT chain
-          search + risk-warnings + PPE for a broad question; that is slower, fragmented,
-          and loses the single sourced citation.
-        - Use the granular tools (get_chemical_risk_warnings, get_ppe_recommendation,
-          get_storage_guidance, search_chemical_database) only when the user explicitly
-          wants that one structured field, or to drill down.
+        - A question about ONE topic that has its own tool: call that tool. PPE / what
+          to wear -> get_ppe_recommendation; storage -> get_storage_guidance; first aid,
+          spill or exposure response -> get_emergency_response; transport ->
+          get_transport_classification; exposure limits -> get_exposure_limits; disposal
+          -> get_waste_disposal; safer alternatives -> get_chemical_alternatives.
+        - For a broad or mixed safety question (hazards in general, "is X safe", several
+          topics at once) call ask_chemical_safety FIRST. It returns ONE answer grounded
+          in a specific supplier SDS. Do NOT chain search + risk-warnings + other granular
+          tools for a broad question; that is slower, fragmented, and loses the single
+          sourced citation.
         - check_chemical_compatibility for mixing/storing pairs; check_regulatory_compliance
           for multi-region legal status; get_sds_document for the original signed PDF link.
 

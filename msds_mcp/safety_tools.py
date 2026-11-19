@@ -421,20 +421,17 @@ async def check_regulatory_compliance(
 async def ask_chemical_safety(
     question: Annotated[str, Field(
     description='A chemical safety question in natural language, e.g. "What are the main '
-                'hazards and PPE for TMAH?", "How should I store acetone and methanol in '
-                'the same cabinet?", "A worker got hydrofluoric acid on their skin — first aid?"',
+                'hazards of TMAH and how do I handle it safely?", "Is it safe to heat '
+                'acetone on a hot plate?", "What should I know before using hydrofluoric acid?"',
     )],
     lang: QuickLang = None,
 ) -> str:
     """
-    PREFERRED first tool for any general chemical-safety question — hazards, PPE,
-    first aid, spill/exposure response, storage, disposal, "is X safe", "what do I
-    need to handle Y", GHS interpretation, MSDS lookup.
-
-    Use this FIRST for broad questions instead of chaining search_chemical_database
-    + get_chemical_risk_warnings + get_ppe_recommendation — those are slower, produce
-    a fragmented answer, and lose the single sourced citation. Reach for the granular
-    tools only when the user explicitly wants just that one structured field.
+    PREFERRED first tool for a broad or mixed chemical-safety question: hazards in
+    general, "is X safe", several topics at once, GHS interpretation, MSDS lookup.
+    A question about ONE topic with its own tool (PPE, storage, first aid, transport,
+    exposure limits, disposal) goes to that tool. For a broad question, use this
+    rather than chaining granular tools: one sourced answer instead of fragments.
 
     When presenting the answer, cite the returned source and do not add hazard,
     medical, or regulatory claims that are not in the tool output.
@@ -443,8 +440,6 @@ async def ask_chemical_safety(
     non-empty `unchecked` list, you MUST say so before any conclusion and MUST NOT state
     or imply whether data exists for those — this turn did not look them up. Tell the
     user to ask about them separately.
-
-    Reference:
 
     Returns ONE answer grounded in a specific supplier SDS, with the source
     (supplier + revision date) cited and any general knowledge clearly separated
@@ -484,9 +479,10 @@ async def get_ppe_recommendation(chemicals: ChemicalList, lang: Lang = None,
     Returns specific glove types, eye protection, respiratory protection, and
     body protection requirements based on MSDS Section 8 data and GHS hazard codes.
 
-    DRILL-DOWN tool: use this only when the user explicitly wants a standalone PPE
-    list. A broad "what are the hazards and what PPE" question is answered in one
-    sourced call by `ask_chemical_safety` — prefer that over chaining tools.
+    Use this for a question about what to wear / PPE for one or more chemicals
+    ("What PPE do I need to handle sulfuric acid?"). A broad question that also asks
+    about hazards, storage or other topics is answered in one sourced call by
+    `ask_chemical_safety`; prefer that over chaining tools.
 
     Args:
         chemicals: List of chemical names or CAS numbers, e.g.

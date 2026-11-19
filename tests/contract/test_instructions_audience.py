@@ -44,8 +44,8 @@ import server
 
 # The pin. Update it **only after** answering the question in the failure
 # message; a blind refresh here re-arms the exact trap the test exists to catch.
-_PINNED_LEN = 2136
-_PINNED_SHA256 = "cbff71bff0a965592da8dec4d84414a4b0d4399426d77ff33628e1f8e95de056"
+_PINNED_LEN = 2299
+_PINNED_SHA256 = "e6e6750fb996007ed26162d201908b374e3c4bb6b5b394f5c8e177a89209c7f4"
 
 
 def _wire_instructions() -> str:
