@@ -114,8 +114,7 @@ def test_402_special_case_still_wins(monkeypatch):
     monkeypatch.setattr(server.httpx, "AsyncClient",
                         _client_returning(_Resp({"detail": {"balance": 0}}, status=402)))
     res = asyncio.run(server.check_chemical_compatibility(chemicals=["a", "b"]))
-    # CI-1403：402 返回结果、不再抛；CI-1618：挂了卡片模板的工具不标错（ChatGPT 只在非错误结果上渲染组件）
-    assert res.is_error is False
+    assert res.is_error is True  # CI-1403：402 返回 is_error 结果，不再抛
     assert "Credit balance exhausted" in res.content[0].text
 
 
@@ -128,8 +127,7 @@ def test_402_relays_the_backend_message(monkeypatch):
     monkeypatch.setattr(server.httpx, "AsyncClient", _client_returning(
         _Resp({"detail": {"error": "credit_floor", "balance": 0, "message": message}}, status=402)))
     res = asyncio.run(server.check_chemical_compatibility(chemicals=["a", "b"]))
-    # CI-1403：402 返回结果、不再抛；CI-1618：挂了卡片模板的工具不标错（ChatGPT 只在非错误结果上渲染组件）
-    assert res.is_error is False
+    assert res.is_error is True  # CI-1403：402 返回 is_error 结果，不再抛
     text = res.content[0].text
     assert "Credit balance exhausted" in text and message in text, text
     assert "Top up at" not in text, text

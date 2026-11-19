@@ -5,6 +5,8 @@ r"""The card's colour roles are generated from the web app's design tokens, neve
 | `test_tokens_match_the_sources` | edit `msds_mcp/ui_card_tokens.py` by hand, or change a source token without regenerating |
 | `test_generator_reads_overrides_and_light_values` | drop the web `:root` override layer or the `html.light` layer from `collect` |
 | `test_generator_refuses_a_missing_role` | let a missing role through (the card would fall back to browser defaults) |
+| `test_conditional_and_listed_selectors_are_not_base_values` | match `:root` anywhere (inside `@media`, or in a selector list) instead of top-level rules only |
+| `test_tone_key_must_be_exact_and_unique` | match a key that merely ends in the tone name, or take the first of several |
 | `test_every_role_the_template_uses_is_defined` | use a `--s-*` / `--c-*` variable in the template that the tokens do not define |
 
 `test_tokens_match_the_sources` needs the source files (`CARD_TOKENS_SHELL_CSS`,
@@ -40,6 +42,19 @@ def test_generator_reads_overrides_and_light_values():
     assert dark["bad-ink"] == "9 9 9" and dark["label"] == "1 1 1"
     assert light["label"] == "0 0 0" and light["surface"] == "7 7 7" and light["bad-ink"] == "9 9 9"
     assert fills["warn"] == "10 11 12"
+
+
+def test_conditional_and_listed_selectors_are_not_base_values():
+    shell = _SHELL + "@media (min-width: 1px){:root{--s-label: 5 5 5;}}\n:root, .x{--s-label: 6 6 6;}"
+    dark, _, _ = gen.collect(shell, _WEB_CSS, _TW)
+    assert dark["label"] == "1 1 1", dark["label"]
+
+
+def test_tone_key_must_be_exact_and_unique():
+    _, _, fills = gen.collect(_SHELL, _WEB_CSS, "notok: { DEFAULT: '#ffffff' },\n" + _TW)
+    assert fills["ok"] == "10 11 12"
+    with pytest.raises(SystemExit):
+        gen.collect(_SHELL, _WEB_CSS, _TW + "\nok: { DEFAULT: '#ffffff' },")
 
 
 def test_generator_refuses_a_missing_role():

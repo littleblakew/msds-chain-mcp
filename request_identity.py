@@ -11,6 +11,9 @@ _caller_credential: ContextVar[str | None] = ContextVar("caller_credential", def
 # as `X-MCP-Call-Id` on every request the tool makes and into the call-log POST, so the
 # backend's audit rows (precursor_hits) can be joined to the reply we logged for that call.
 _mcp_call_id: ContextVar[str | None] = ContextVar("mcp_call_id", default=None)
+# The inbound User-Agent. Only used to decide how a result is flagged for hosts with known
+# rendering rules (see `ui_compat_card.renders_card_only_on_success`), never for identity.
+_caller_user_agent: ContextVar[str | None] = ContextVar("caller_user_agent", default=None)
 
 
 def set_caller_credential(value: str | None) -> None:
@@ -19,6 +22,14 @@ def set_caller_credential(value: str | None) -> None:
 
 def get_caller_credential() -> str | None:
     return _caller_credential.get()
+
+
+def set_caller_user_agent(value: str | None) -> None:
+    _caller_user_agent.set(value)
+
+
+def get_caller_user_agent() -> str | None:
+    return _caller_user_agent.get()
 
 
 def set_mcp_call_id(value: str | None):

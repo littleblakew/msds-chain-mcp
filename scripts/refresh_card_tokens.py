@@ -37,12 +37,32 @@ def _strip_comments(css: str) -> str:
     return re.sub(r"/\*.*?\*/", "", css, flags=re.S)
 
 
+def _top_level_rules(css: str) -> list[tuple[str, str]]:
+    """(selector, body) of every rule at nesting depth 0. Rules inside `@media` / `@layer` /
+    `@supports` apply only conditionally, so they are never read as the base values."""
+    rules, depth, start, sel = [], 0, 0, ""
+    for i, ch in enumerate(css):
+        if ch == "{":
+            if depth == 0:
+                sel, start = css[start:i].strip(), i + 1
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                rules.append((sel, css[start:i]))
+                start = i + 1
+        elif ch == ";" and depth == 0:
+            start = i + 1  # a top-level statement such as `@import …;` or `@tailwind …;`
+    return rules
+
+
 def _block(css: str, selector: str) -> str:
-    """Bodies of every rule whose selector is exactly `selector`, in source order (a later
-    block overrides an earlier one, as in the browser)."""
-    bodies = re.findall(r"(?<![\w.:-])" + re.escape(selector) + r"\s*\{([^}]*)\}", css)
+    """Bodies of every top-level rule whose selector is exactly `selector`, in source order (a
+    later block overrides an earlier one, as in the browser). A selector list that merely
+    contains `selector` is not a match."""
+    bodies = [body for sel, body in _top_level_rules(css) if sel == selector]
     if not bodies:
-        raise SystemExit(f"no `{selector}` block found")
+        raise SystemExit(f"no top-level `{selector}` block found")
     return "\n".join(bodies)
 
 
@@ -57,10 +77,11 @@ def collect(shell_css: str, web_index_css: str, tailwind_config: str) -> tuple[d
     light = {**dark, **_vars(_block(web_index_css, "html.light"))}
     fills = {}
     for tone in TONES:
-        m = re.search(tone + r"\s*:\s*\{\s*DEFAULT\s*:\s*'#([0-9a-fA-F]{6})'", tailwind_config)
-        if not m:
-            raise SystemExit(f"no DEFAULT colour for `{tone}` in tailwind.config.js")
-        h = m.group(1)
+        found = re.findall(r"(?<![\w'\"-])" + tone + r"\s*:\s*\{\s*DEFAULT\s*:\s*'#([0-9a-fA-F]{6})'",
+                           tailwind_config)
+        if len(found) != 1:
+            raise SystemExit(f"expected one `{tone}: {{ DEFAULT: '#…' }}` in tailwind.config.js, found {len(found)}")
+        h = found[0]
         fills[tone] = " ".join(str(int(h[i:i + 2], 16)) for i in (0, 2, 4))
     missing = [r for r in ROLES if r not in dark]
     if missing:

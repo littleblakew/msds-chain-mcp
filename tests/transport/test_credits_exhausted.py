@@ -5,7 +5,9 @@ upgrade button restricted to one origin.
 
 | guard | what reverting makes it fail |
 |---|---|
-| `test_402_is_returned_as_a_non_error_result_with_the_card` | drop the `except CreditsExhausted` in `_graceful_timeout` (the 402 is raised again, no card), or flag the card tools' result as an error (ChatGPT then hides the card) |
+| `test_402_is_returned_with_the_card` | drop the `except CreditsExhausted` in `_graceful_timeout` (the 402 is raised again, no card) |
+| `test_chatgpt_gets_an_unflagged_result` | flag the result as an error for ChatGPT too (it then hides the card) |
+| `test_other_clients_keep_the_error_flag` | drop the flag for every client (probes and retries then read an empty wallet as success), or match the Codex User-Agent as ChatGPT |
 | `test_sds_section_gets_the_card_too` | leave `get_sds_section` out of `CARD_TOOLS` |
 | `test_both_links_say_where_they_were_shown` | drop `with_source_params` from the text link or the card link |
 | `test_card_is_on_the_wire_as_underscore_meta` | build the result without `meta=` |
@@ -21,9 +23,22 @@ upgrade button restricted to one origin.
 Async cases use `asyncio.run` (no pytest-asyncio in requirements-dev.txt).
 """
 import asyncio
+import contextlib
 
+import request_identity
 import server
 import ui_compat_card as card
+
+_CHATGPT_UA = "openai-mcp/1.0.0"
+
+
+@contextlib.contextmanager
+def _user_agent(ua):
+    token = request_identity._caller_user_agent.set(ua)
+    try:
+        yield
+    finally:
+        request_identity._caller_user_agent.reset(token)
 
 _DETAIL = {
     "error": "credit_floor", "balance": 0.0,
@@ -60,17 +75,30 @@ _CARD_UPGRADE = card.with_source_params(
     "https://msdschain.lagentbot.com/pricing", "card", "check_chemical_compatibility")
 
 
-def test_402_is_returned_as_a_non_error_result_with_the_card(monkeypatch):
-    """ChatGPT renders a component only on results whose `isError` is false; on an errored
-    result the upgrade button never shows. The text still says the request was not run."""
+def test_402_is_returned_with_the_card(monkeypatch):
     res = _call(monkeypatch)
-    assert res.is_error is False
     payload = (res.meta or {}).get(card.CARD_META_KEY)
     assert payload and payload["kind"] == "credits_exhausted", res.meta
     assert payload["upgrade_url"] == _CARD_UPGRADE
     assert payload["resets_at"] == _DETAIL["resets_at"]
     # The structuredContent slot holds the tool's own data shape; an error must not pose as one.
     assert res.structured_content is None
+
+
+def test_chatgpt_gets_an_unflagged_result(monkeypatch):
+    """ChatGPT renders a component only on results whose `isError` is false; on an errored
+    result the upgrade button never shows. The text still says the request was not run."""
+    with _user_agent(_CHATGPT_UA):
+        res = _call(monkeypatch)
+    assert res.is_error is False and "NOT run" in _text(res)
+
+
+def test_other_clients_keep_the_error_flag(monkeypatch):
+    for ua in (None, "openai-mcp/1.0.0 (Codex)", "Claude-User", "codex-mcp-client/0.163.0"):
+        with _user_agent(ua):
+            res = _call(monkeypatch)
+        assert res.is_error is True, ua
+        assert res.meta[card.CARD_META_KEY]["kind"] == "credits_exhausted", ua
 
 
 def test_card_is_on_the_wire_as_underscore_meta(monkeypatch):
@@ -133,7 +161,8 @@ def test_sds_section_gets_the_card_too(monkeypatch):
     async def _empty_wallet(*a, **kw):
         return server._billed_json(_Resp402(_DETAIL))
     monkeypatch.setattr(server, "_direct_sds_section", _empty_wallet)
-    res = asyncio.run(server.get_sds_section(chemical="acetone", section=7))
+    with _user_agent(_CHATGPT_UA):
+        res = asyncio.run(server.get_sds_section(chemical="acetone", section=7))
     assert res.is_error is False and "NOT run" in _text(res)
     payload = res.meta[card.CARD_META_KEY]
     assert payload["kind"] == "credits_exhausted"
@@ -150,6 +179,7 @@ def test_source_params_keep_what_the_link_already_has():
     url = card.with_source_params("https://msdschain.lagentbot.com/pricing?plan=pro&utm_source=x",
                                   "card", "t")
     assert "plan=pro" in url and "utm_source=x" in url and "utm_source=mcp" not in url
+    assert url.startswith("https://msdschain.lagentbot.com/pricing?plan=pro&utm_source=x&")
 
 
 def test_card_link_check_fails_closed_without_an_origin():

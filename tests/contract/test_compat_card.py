@@ -174,7 +174,7 @@ def test_link_origin_is_the_public_one_not_the_backend_call_url():
 _TEMPLATE_PINS = {
     "ui://msds-chain/compat-card-v2.html": "d10c99c3aaa5db0e",
     "ui://msds-chain/compat-card-v3.html": "c951300812010d6f",
-    "ui://msds-chain/result-card-v1.html": "851f0ae400ea2cb6",
+    "ui://msds-chain/result-card-v1.html": "e404c5a62e72ddc8",
 }
 
 

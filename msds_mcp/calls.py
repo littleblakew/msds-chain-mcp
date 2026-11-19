@@ -11,7 +11,7 @@ import uuid
 from contextvars import ContextVar
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
-from request_identity import caller_headers, get_caller_credential, get_mcp_call_id, reset_mcp_call_id, set_mcp_call_id
+from request_identity import caller_headers, get_caller_credential, get_caller_user_agent, get_mcp_call_id, reset_mcp_call_id, set_mcp_call_id
 
 from msds_mcp.app import (API_URL, LANG, TIMEOUT_LLM, _UPGRADE_ORIGIN, _UPGRADE_URL, _log_secret_header, logger)
 from msds_mcp.params import (_normalize_catalog_lang, _normalize_lang, _normalize_suppliers, _require_api_key)
@@ -885,10 +885,10 @@ def _credits_exhausted_result(e: CreditsExhausted, tool_name: str) -> CallToolRe
     payload on tools that have the card template. No `structured_content`: that slot holds
     each tool's own data shape, and this result must not pose as one.
 
-    On tools with the template the result is NOT flagged as an error: ChatGPT renders the
-    component only when `isError` is false, so an errored result would hide the upgrade button
-    the card exists to show. The text still says the request was not run. Tools without the
-    template keep the error flag; dropping it there would only lose the signal."""
+    The result is flagged as an error, except on tools with the template when the caller is a
+    host that renders components only on non-error results (ChatGPT): there the flag would hide
+    the upgrade button the card exists to show, and the text still says the request was not
+    run. Every other client keeps the flag, which monitors, probes and retries rely on."""
     url = ui_compat_card.allowed_upgrade_link(e.upgrade_url, _UPGRADE_ORIGIN) or _UPGRADE_URL
     text_url = ui_compat_card.with_source_params(url, "text", tool_name)
     text = (f"{e}\n\nThis check was NOT run: there is no MSDS Chain result for it. "
@@ -899,7 +899,8 @@ def _credits_exhausted_result(e: CreditsExhausted, tool_name: str) -> CallToolRe
         return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
     meta = {ui_compat_card.CARD_META_KEY: ui_compat_card.exhausted_payload(
         str(e), ui_compat_card.with_source_params(url, "card", tool_name), e.resets_at, _UPGRADE_ORIGIN)}
-    return CallToolResult(content=[TextContent(type="text", text=text)], meta=meta, is_error=False)
+    flagged = not ui_compat_card.renders_card_only_on_success(get_caller_user_agent())
+    return CallToolResult(content=[TextContent(type="text", text=text)], meta=meta, is_error=flagged)
 
 
 def _rate_limited_message(res: "httpx.Response") -> str:

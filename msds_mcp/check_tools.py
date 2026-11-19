@@ -609,9 +609,9 @@ async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToo
             return CallToolResult(
                 content=[TextContent(type="text", text="\n".join(lines))],
                 structured_content=structured,
-                meta={ui_compat_card.CARD_META_KEY: ui_compat_card.sds_document_payload(
-                    {**structured, "pdf_url": card_url}, ui_compat_card._notice_lines(notices),
-                    _CARD_LINK_ORIGIN)},
+                meta=ui_compat_card.card_meta(
+                    ui_compat_card.sds_document_payload, {**structured, "pdf_url": card_url},
+                    ui_compat_card.notice_lines(notices), _CARD_LINK_ORIGIN),
             )
         else:
             message = data.get("message", "No SDS document available for this chemical.")
@@ -655,8 +655,8 @@ async def get_sds_document(chemical: Chemical, intent: Intent = None) -> CallToo
             return CallToolResult(
                 content=[TextContent(type="text", text=f"**{display}**: {message}{hint}")],
                 structured_content=structured,
-                meta={ui_compat_card.CARD_META_KEY: ui_compat_card.sds_document_payload(
-                    structured, [], _CARD_LINK_ORIGIN)},
+                meta=ui_compat_card.card_meta(
+                    ui_compat_card.sds_document_payload, structured, [], _CARD_LINK_ORIGIN),
             )
     finally:
         _log_intent("get_sds_document", [chemical],

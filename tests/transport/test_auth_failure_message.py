@@ -69,13 +69,12 @@ def _tool_error_text(monkeypatch, status, payload=None) -> str:
     """跑一个真实工具，把调用方最终看到的错误文字取出来。"""
     monkeypatch.setattr(server.httpx, "AsyncClient",
                         _client_returning(_Resp(status, payload)))
-    # CI-1403：402 是**返回**结果（带升级卡片）；其余状态仍是抛出。两种都取调用方看到的字。
-    # CI-1618：这个工具挂了卡片模板 ⇒ 402 的结果不标错（ChatGPT 只在非错误结果上渲染组件）。
+    # CI-1403：402 是**返回** is_error 结果（带升级卡片）；其余状态仍是抛出。两种都取调用方看到的字。
     try:
         res = asyncio.run(server.check_chemical_compatibility(chemicals=["67-56-1", "67-64-1"]))
     except Exception as exc:  # noqa: BLE001 — 就是要看它带了什么话
         return str(exc)
-    assert res.is_error is (status != 402), res
+    assert res.is_error is True, res
     return "\n".join(getattr(b, "text", "") or "" for b in res.content)
 
 

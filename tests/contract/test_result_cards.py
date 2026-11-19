@@ -7,6 +7,8 @@ template, and their results carry a card payload built only from what the text a
 | `test_section_card_carries_the_text_and_its_source` | build the section payload without the text, the source or the disclosure lines |
 | `test_section_card_marks_a_borrowed_text` | drop `cited_only` / `source_differs_note` (the card then credits the cited supplier with borrowed text) |
 | `test_section_card_without_text_carries_the_why` | drop `note` (an empty card reads as "nothing hazardous") |
+| `test_unresolved_section_card_says_what_the_answer_says` | build the card's note from the payload instead of the answer's own sentence (an unresolved name then gets an empty card) |
+| `test_a_broken_payload_drops_the_card_not_the_answer` | build the payload inline instead of through `card_meta` |
 | `test_section_card_is_cut_and_says_so` | drop the `_MAX_SECTION_CHARS` cut or the `truncated` flag |
 | `test_document_card_opens_only_the_public_origin` | build the card link from `API_URL` (an internal address) instead of `_CARD_LINK_ORIGIN` |
 | `test_document_card_states_the_price` | drop `open_cost_credits` from the document payload |
@@ -87,6 +89,24 @@ def test_section_card_without_text_carries_the_why(monkeypatch):
     p = _section(monkeypatch, {**_SECTION, "content": None, "no_section_text_note": why,
                                "no_section_text_reason": "section_not_present"}).meta[card.CARD_META_KEY]
     assert p["text"] is None and p["note"] == why
+
+
+def test_unresolved_section_card_says_what_the_answer_says(monkeypatch):
+    res = _section(monkeypatch, {"chemical": "xq-71", "unresolved": True,
+                                 "no_section_text_reason": "no_sections_parsed",
+                                 "no_section_text_note": "We hold this SDS but its sections were not parsed."})
+    p = res.meta[card.CARD_META_KEY]
+    assert p["text"] is None and p["source"] is None
+    assert p["note"] and p["note"] in _text(res), p
+    assert "were not parsed" not in p["note"], "the reason written for another cause leaked into the card"
+
+
+def test_a_broken_payload_drops_the_card_not_the_answer(monkeypatch):
+    def _boom(*a, **kw):
+        raise ValueError("bad payload")
+    monkeypatch.setattr(card, "sds_section_payload", _boom)
+    res = _section(monkeypatch, _SECTION)
+    assert res.meta is None and _SECTION["content"] in _text(res) and not res.is_error
 
 
 def test_section_card_is_cut_and_says_so(monkeypatch):

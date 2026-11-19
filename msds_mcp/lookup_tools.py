@@ -358,6 +358,7 @@ async def get_sds_section(
         chem_display = data.get("chemical", chemical)
         cas = data.get("cas", "N/A")
         content = data.get("content")
+        gap_note = None  # the sentence the answer gives instead of section text, if any
         lines = [
             f"**SDS Section {section}: {sec_name}**",
             f"Chemical: {chem_display} (CAS: {cas})\n",
@@ -374,7 +375,8 @@ async def get_sds_section(
             note = data.get("no_section_text_note")
             if data.get("no_section_text_reason") != "unresolved":
                 note = None
-            lines.append(note or _unresolved_boolean_note(lang))
+            gap_note = note or _unresolved_boolean_note(lang)
+            lines.append(gap_note)
         elif content:
             # CI-1102: the text below may come from a different SDS than the cited
             # record. Say so BEFORE the text — a note placed after it is read as
@@ -392,10 +394,9 @@ async def get_sds_section(
             #
             # 🔴 为什么必须说清「这是数据缺口，不是危害结论」：本项目栽过——
             # 「空」在下游被读成「无危害」，40% HF 的储存建议因此掉进普通柜。
-            lines.append(
-                data.get("no_section_text_note")
-                or "No data available for this section in the canonical SDS."
-            )
+            gap_note = (data.get("no_section_text_note")
+                        or "No data available for this section in the canonical SDS.")
+            lines.append(gap_note)
         # CI-308: this section's text may come from a different underlying SDS
         # record than get_sds_document's — surface the supplier/revision here too
         # so a mismatch between the two tools is visible without reading the raw
@@ -438,8 +439,9 @@ async def get_sds_section(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
             # CI-1618：卡片通道，内容都是上面文本里已有的。
-            meta={ui_compat_card.CARD_META_KEY: ui_compat_card.sds_section_payload(
-                data, section, sec_name, ui_compat_card._notice_lines(notices))},
+            meta=ui_compat_card.card_meta(
+                ui_compat_card.sds_section_payload, data, section, sec_name,
+                ui_compat_card.notice_lines(notices), gap_note),
         )
     finally:
         _log_intent("get_sds_section", [chemical],

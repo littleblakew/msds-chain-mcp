@@ -18,6 +18,7 @@ generated, not hand-copied.
 from __future__ import annotations
 
 import json
+import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from msds_mcp.ui_card_tokens import CARD_TOKENS_CSS
@@ -43,6 +44,18 @@ _MAX_SECTION_CHARS = 6000
 
 # Where an upgrade link was shown, so visits to the pricing page can be attributed.
 _SOURCE_PARAMS = {"utm_source": "mcp", "utm_campaign": "credits_exhausted"}
+
+
+# ChatGPT's conversation traffic. Codex sends the same prefix with a " (Codex)" suffix and renders
+# no components, so the match is exact.
+_RENDERS_ONLY_ON_SUCCESS = re.compile(r"openai-mcp/[0-9][0-9.]*")
+
+
+def renders_card_only_on_success(user_agent: str | None) -> bool:
+    """True for a host known to render the card only on results whose `isError` is false.
+    Only for such a host is an empty-wallet result sent unflagged; every other client (and
+    stdio, which has no User-Agent) keeps the error flag that monitors and retries rely on."""
+    return bool(user_agent) and _RENDERS_ONLY_ON_SUCCESS.fullmatch(user_agent.strip()) is not None
 
 
 def tool_meta() -> dict:
@@ -98,10 +111,13 @@ def with_source_params(url: str, medium: str, tool: str) -> str:
     """The upgrade link tagged with where it was shown (`medium`: card or text) and from which
     tool. Parameters already on the link are kept; ours are added only where absent."""
     parts = urlsplit(url)
-    query = dict(parse_qsl(parts.query, keep_blank_values=True))
-    for k, v in {**_SOURCE_PARAMS, "utm_medium": medium, "utm_content": tool}.items():
-        query.setdefault(k, v)
-    return urlunsplit(parts._replace(query=urlencode(query)))
+    present = {k for k, _ in parse_qsl(parts.query, keep_blank_values=True)}
+    extra = urlencode({k: v for k, v in {**_SOURCE_PARAMS, "utm_medium": medium, "utm_content": tool}.items()
+                       if k not in present})
+    if not extra:
+        return url
+    # Appended, not re-encoded: the existing query stays byte-for-byte as the backend sent it.
+    return urlunsplit(parts._replace(query=f"{parts.query}&{extra}" if parts.query else extra))
 
 
 def exhausted_payload(message: str, upgrade_url: str | None, resets_at: str | None,
@@ -161,7 +177,16 @@ def card_payload(data: dict, allowed_origin: str) -> dict:
     }
 
 
-def _notice_lines(lines: list[str]) -> list[str]:
+def card_meta(build, *args) -> dict | None:
+    """`_meta` holding the card payload, or None when building it fails. The card is an extra
+    channel: a payload error must drop the card, never the text answer it accompanies."""
+    try:
+        return {CARD_META_KEY: build(*args)}
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def notice_lines(lines: list[str]) -> list[str]:
     """The text answer's disclosure bullets (`- ⚠️ …`) as plain sentences for the card."""
     out = []
     for line in lines:
@@ -171,9 +196,11 @@ def _notice_lines(lines: list[str]) -> list[str]:
     return out
 
 
-def sds_section_payload(data: dict, section: int, title: str, notices: list[str]) -> dict:
+def sds_section_payload(data: dict, section: int, title: str, notices: list[str],
+                        gap_note: str | None) -> dict:
     """`get_sds_section` card: the section text with the source it came from. Every field is
-    one the text answer prints; `notices` are the answer's own disclosure lines."""
+    one the text answer prints; `notices` are the answer's own disclosure lines and `gap_note`
+    is the sentence it gives instead of section text (why there is none)."""
     content = _str(data.get("content"))
     unresolved = bool(data.get("unresolved"))
     differs = bool(content and data.get("section_source_differs"))
@@ -188,11 +215,6 @@ def sds_section_payload(data: dict, section: int, title: str, notices: list[str]
         source = {"supplier": data["supplier"], "region": _str(data.get("region")),
                   "revision_date": _str(data.get("revision_date")),
                   "cited_only": differs}
-    note = None
-    if not content:
-        note = _str(data.get("no_section_text_note"))
-        if unresolved and data.get("no_section_text_reason") != "unresolved":
-            note = None
     text = content[:_MAX_SECTION_CHARS] if content and not unresolved else None
     return {
         "kind": "sds_section",
@@ -200,7 +222,7 @@ def sds_section_payload(data: dict, section: int, title: str, notices: list[str]
         "section": section, "title": title,
         "text": text, "truncated": bool(text and len(content) > len(text)),
         "source_differs_note": _str(data.get("section_source_note")) if differs else None,
-        "note": note, "unresolved": unresolved,
+        "note": None if text else _str(gap_note), "unresolved": unresolved,
         "source": source, "text_source": text_source,
         "notices": notices,
     }
@@ -261,7 +283,7 @@ body{margin:0;background:transparent;font:13px/18px -apple-system,BlinkMacSystem
 .sds .body{margin-top:6px;white-space:pre-wrap;color:rgb(var(--s-label));line-height:1.6}
 .cut{display:inline-flex;margin-top:6px;padding:0 6px;border-radius:4px;background:rgb(var(--c-warn)/.10);color:rgb(var(--s-warn-ink));font-size:12px;font-weight:500}
 .src{margin-top:12px;padding-top:10px;border-top:1px solid rgb(var(--s-line));color:rgb(var(--s-label-3));display:flex;flex-wrap:wrap;gap:2px 8px;align-items:baseline}
-.src+.src{margin-top:4px;padding-top:0;border-top:0}.src .sup{color:rgb(var(--s-brand-ink))}
+.src+.src,.src.row{margin-top:4px;padding-top:0;border-top:0}.src .sup{color:rgb(var(--s-brand-ink))}
 .doc{display:flex;align-items:center;gap:12px;width:100%;box-sizing:border-box;text-align:left;font:inherit;border:1px solid rgb(var(--s-line));border-radius:12px;background:rgb(var(--s-surface));padding:12px;color:inherit}
 button.doc{cursor:pointer}button.doc:hover{background:rgb(var(--s-field))}
 .doc .ic{flex:none;width:40px;height:40px;border-radius:8px;background:rgb(var(--s-brand-500)/.10);color:rgb(var(--s-brand-ink));display:flex;align-items:center;justify-content:center}
@@ -343,7 +365,7 @@ button.doc{cursor:pointer}button.doc:hover{background:rgb(var(--s-field))}
       h += '<div class="sec">Source SDS</div>';
       p.documents.forEach(function(d){
         var u = safeUrl(d.url, ALLOWED_ORIGIN);
-        h += '<div class="src" style="margin-top:4px;padding-top:0;border-top:0"><span>' + esc(d.chemical) + '</span><span class="sup">' + esc(d.supplier || "unknown supplier") + "</span>"
+        h += '<div class="src row"><span>' + esc(d.chemical) + '</span><span class="sup">' + esc(d.supplier || "unknown supplier") + "</span>"
           + (d.revision_date ? "<span>Revision date: " + esc(d.revision_date) + "</span>" : "")
           + (u ? '<button class="lnk" data-a="' + action(u, ALLOWED_ORIGIN) + '">Open SDS</button>' : "") + "</div>";
       });
