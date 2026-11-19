@@ -22,18 +22,24 @@ import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from msds_mcp.disclosures import _precursor_same_wording, _precursor_unworded
+from msds_mcp.ui_card_safety_assets import SAFETY_CARDS_CSS, SAFETY_CARDS_JS
 from msds_mcp.ui_card_tokens import CARD_TOKENS_CSS
 
 # Any change to the HTML must ship under a new URI: hosts cache the template by URI, so an
 # edited template under the old one keeps serving the stale copy. A pinned hash in
 # tests/contract/test_compat_card.py goes red when the template changes and the URI does not.
-CARD_URI = "ui://msds-chain/result-card-v2.html"
+CARD_URI = "ui://msds-chain/result-card-v3.html"
 CARD_MIME = "text/html;profile=mcp-app"
 # Key under the tool result's `_meta` that carries the card payload.
 CARD_META_KEY = "msdschain/compat_card"
 # Tools whose definition points at the template. A payload on any other tool's result would
 # reach no template, so it is left off.
-CARD_TOOLS = frozenset({"check_chemical_compatibility", "get_sds_section", "get_sds_document"})
+CARD_TOOLS = frozenset({
+    "check_chemical_compatibility", "get_sds_section", "get_sds_document",
+    "get_ppe_recommendation", "check_regulatory_compliance", "get_storage_guidance",
+    "get_emergency_response", "get_transport_classification", "get_waste_disposal",
+    "get_exposure_limits", "get_chemical_alternatives",
+})
 
 _MAX_PAIRS = 12
 _MAX_PRECURSOR = 8
@@ -201,11 +207,13 @@ def _precursor_groups(entries: list) -> list[dict]:
 
 def card_meta(build, *args) -> dict | None:
     """`_meta` holding the card payload, or None when building it fails. The card is an extra
-    channel: a payload error must drop the card, never the text answer it accompanies."""
+    channel: a payload error must drop the card, never the text answer it accompanies. A
+    builder that returns None has nothing to show, which also means no card."""
     try:
-        return {CARD_META_KEY: build(*args)}
+        payload = build(*args)
     except Exception:  # noqa: BLE001
         return None
+    return None if payload is None else {CARD_META_KEY: payload}
 
 
 def notice_lines(lines: list[str]) -> list[str]:
@@ -315,7 +323,7 @@ button.doc{cursor:pointer}button.doc:hover{background:rgb(var(--s-field))}
 .doc .mt{color:rgb(var(--s-label-3))}
 .go{display:inline-flex;align-items:center;margin-top:10px;font:inherit;font-weight:600;border:0;border-radius:8px;padding:6px 14px;background:rgb(var(--s-brand-500));color:#fff;cursor:pointer}
 .more{margin-top:6px;font-size:12px;color:rgb(var(--s-label-3))}
-</style></head>
+__SAFETY_CSS__</style></head>
 <body><div id="root"></div>
 <script>
 (function(){
@@ -437,7 +445,7 @@ button.doc{cursor:pointer}button.doc:hover{background:rgb(var(--s-field))}
     var notes = (p.product ? ["Formulated product: its classification applies to the mixture as a whole, not to any single ingredient."] : []).concat(p.notices || []);
     return h + strips(notes);
   }
-  function findPayload(meta){
+__SAFETY_JS__  function findPayload(meta){
     if (!meta) return null;
     var cands = [meta, meta.call_tool_result, meta.mcp_tool_result];
     for (var i = 0; i < cands.length; i++){
@@ -464,6 +472,7 @@ button.doc{cursor:pointer}button.doc:hover{background:rgb(var(--s-field))}
     var html = p.kind === "credits_exhausted" ? renderExhausted(p)
       : p.kind === "sds_section" ? renderSection(p)
       : p.kind === "sds_document" ? renderDocument(p)
+      : SAFETY[p.kind] ? SAFETY[p.kind](p)
       : renderCompat(p);
     var root = document.getElementById("root");
     root.innerHTML = html;
@@ -503,6 +512,8 @@ button.doc{cursor:pointer}button.doc:hover{background:rgb(var(--s-field))}
 
 
 def card_html(allowed_origin: str, upgrade_origin: str) -> str:
-    return (_CARD_HTML_TEMPLATE.replace("__TOKENS__", CARD_TOKENS_CSS)
+    return (_CARD_HTML_TEMPLATE.replace("__SAFETY_CSS__", SAFETY_CARDS_CSS)
+            .replace("__SAFETY_JS__", SAFETY_CARDS_JS)
+            .replace("__TOKENS__", CARD_TOKENS_CSS)
             .replace("__ALLOWED_ORIGIN__", json.dumps(allowed_origin))
             .replace("__UPGRADE_ORIGIN__", json.dumps(upgrade_origin)))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json as _json
 import ui_compat_card
+from msds_mcp import ui_card_views
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import Field
 from typing import Annotated, Literal
@@ -267,7 +268,7 @@ def _format_region_results(region_results: list[dict]) -> list[str]:
     return lines
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Compliance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Check Regulatory Compliance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False, meta=ui_compat_card.tool_meta())
 @_graceful_timeout
 @_reported
 async def check_regulatory_compliance(
@@ -406,6 +407,8 @@ async def check_regulatory_compliance(
                 # 要显式从 `results` 里推出来，`_relay_language_note` 才够得着文本面。
                 **_language_note_of(results),
             },
+            # Card channel: the backend `view` of each result, hidden from the host's model.
+            meta=ui_compat_card.card_meta(ui_card_views.safety_payload, "compliance", results, [], _CARD_LINK_ORIGIN),
         ), {"_usage": _usage})
     finally:
         _log_intent("check_regulatory_compliance", chemicals,
@@ -469,7 +472,7 @@ async def ask_chemical_safety(
                     response_kind=_response_kind(data))
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get PPE Recommendation", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get PPE Recommendation", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False, meta=ui_compat_card.tool_meta())
 @_graceful_timeout
 @_reported
 async def get_ppe_recommendation(chemicals: ChemicalList, lang: Lang = None,
@@ -558,6 +561,7 @@ async def get_ppe_recommendation(chemicals: ChemicalList, lang: Lang = None,
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=sc,
+            meta=ui_compat_card.card_meta(ui_card_views.safety_payload, "ppe", data.get("results"), documents, _CARD_LINK_ORIGIN),
         )
     finally:
         _log_intent("get_ppe_recommendation", chemicals,
@@ -565,7 +569,7 @@ async def get_ppe_recommendation(chemicals: ChemicalList, lang: Lang = None,
                     success=success, error_message=error_msg)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Storage Guidance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get Storage Guidance", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False, meta=ui_compat_card.tool_meta())
 @_graceful_timeout
 @_reported
 async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None,
@@ -597,6 +601,7 @@ async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None,
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
+            meta=ui_compat_card.card_meta(ui_card_views.safety_payload, "storage", data.get("results"), data.get("documents"), _CARD_LINK_ORIGIN),
         )
     finally:
         _log_intent("get_storage_guidance", chemicals,
@@ -604,7 +609,7 @@ async def get_storage_guidance(chemicals: ChemicalList, lang: Lang = None,
                     success=success, error_message=error_msg)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Emergency Response", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get Emergency Response", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False, meta=ui_compat_card.tool_meta())
 @_graceful_timeout
 @_reported
 async def get_emergency_response(
@@ -733,6 +738,7 @@ async def get_emergency_response(
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
+            meta=ui_compat_card.card_meta(ui_card_views.safety_payload, "emergency", [data], data.get("documents"), _CARD_LINK_ORIGIN),
         )
     finally:
         _log_intent("get_emergency_response", [chemical],
@@ -868,7 +874,7 @@ def _transport_item_lines(item: dict) -> list[str]:
     return lines + note + ev_lines
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Exposure Limits", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get Exposure Limits", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False, meta=ui_compat_card.tool_meta())
 @_graceful_timeout
 @_reported
 async def get_exposure_limits(
@@ -916,6 +922,7 @@ async def get_exposure_limits(
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
+            meta=ui_compat_card.card_meta(ui_card_views.safety_payload, "exposure", data.get("results"), data.get("documents"), _CARD_LINK_ORIGIN),
         )
     finally:
         _log_intent("get_exposure_limits", chemicals,
@@ -923,7 +930,7 @@ async def get_exposure_limits(
                     success=success, error_message=error_msg)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Get Transport Classification", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Get Transport Classification", read_only_hint=True, destructive_hint=False, open_world_hint=False), structured_output=False, meta=ui_compat_card.tool_meta())
 @_graceful_timeout
 @_reported
 async def get_transport_classification(chemicals: ChemicalList,
@@ -955,6 +962,7 @@ async def get_transport_classification(chemicals: ChemicalList,
         return CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content=_strip_usage(data),
+            meta=ui_compat_card.card_meta(ui_card_views.safety_payload, "transport", data.get("results"), data.get("documents"), _CARD_LINK_ORIGIN),
         )
     finally:
         _log_intent("get_transport_classification", chemicals,
