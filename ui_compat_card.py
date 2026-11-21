@@ -29,6 +29,14 @@ from msds_mcp.ui_card_tokens import CARD_TOKENS_CSS
 # edited template under the old one keeps serving the stale copy. A pinned hash in
 # tests/contract/test_compat_card.py goes red when the template changes and the URI does not.
 CARD_URI = "ui://msds-chain/result-card-v4.html"
+# URIs published before CARD_URI. A host keeps calling the template a reviewed snapshot of the
+# tool definition names (ChatGPT does, until the app's next review), so each stays served with
+# the current template; an unknown URI there is "Couldn't open app" on every card tool.
+LEGACY_CARD_URIS = (
+    "ui://msds-chain/compat-card-v2.html", "ui://msds-chain/compat-card-v3.html",
+    "ui://msds-chain/result-card-v1.html", "ui://msds-chain/result-card-v2.html",
+    "ui://msds-chain/result-card-v3.html",
+)
 CARD_MIME = "text/html;profile=mcp-app"
 # Key under the tool result's `_meta` that carries the card payload.
 CARD_META_KEY = "msdschain/compat_card"

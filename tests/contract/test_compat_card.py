@@ -256,3 +256,14 @@ def test_card_names_the_preparation_the_text_states(monkeypatch):
     assert forms == [{"chemical": "ethanol", "preparation": "1–5%",
                       "lines": [_PREP.removeprefix("⚠️ ")]}], forms
     assert forms[0]["lines"][0] in result.content[0].text, "card notice must be text the answer shows"
+
+
+def test_earlier_template_uris_are_still_served():
+    """A host that holds a reviewed snapshot of the tool definition keeps asking for the URI that
+    snapshot names; an unknown resource there fails every card."""
+    for uri in card.LEGACY_CARD_URIS:
+        contents = list(asyncio.run(server.mcp.read_resource(uri)))
+        assert contents and getattr(contents[0], "mime_type", None) == card.CARD_MIME, uri
+        assert str(contents[0].content) == str(list(asyncio.run(server.mcp.read_resource(card.CARD_URI)))[0].content)
+    assert set(card.LEGACY_CARD_URIS) == set(_TEMPLATE_PINS) - {card.CARD_URI}, \
+        "every URI ever pinned (published) must stay served"
