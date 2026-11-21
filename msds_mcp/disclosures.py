@@ -10,6 +10,13 @@ from __future__ import annotations
 # Tools
 # ---------------------------------------------------------------------------
 
+def _unwarned(text) -> str | None:
+    """Backend sentence without its own leading warning sign; the caller adds exactly one."""
+    if not isinstance(text, str):
+        return None
+    return text.strip().removeprefix("⚠️").strip() or None
+
+
 def _form_disclosure_lines(item: dict) -> list[str]:
     """CI-572：把后端的 `physical_form_disclosure` 渲染进**文本**面。
 
@@ -51,7 +58,8 @@ def _form_disclosure_lines(item: dict) -> list[str]:
     # 所以储存这类根本不带 documents 的工具也拿得到。原样念，措辞归后端 catalog。
     if conc := item.get("concentration_disclosure"):
         out.append(f"- ⚠️ {conc}")
-    if prep := item.get("preparation_disclosure"):
+    # 后端这句自带行首 ⚠️（网页端同样先剥再加），不剥就印成「⚠️ ⚠️」。
+    if prep := _unwarned(item.get("preparation_disclosure")):
         out.append(f"- ⚠️ {prep}")
     note = item.get("physical_form_disclosure")
     # 🔴 **不给整句再套一层 `**`**：这句话在 zh/ja/de/id 四种语言里**自带**加粗标记，
