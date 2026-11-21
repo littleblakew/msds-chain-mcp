@@ -120,6 +120,17 @@ def compat_card() -> str:
     return ui_compat_card.card_html(_CARD_LINK_ORIGIN, _UPGRADE_ORIGIN)
 
 
+for _legacy_uri in ui_compat_card.LEGACY_CARD_URIS:
+    mcp.resource(
+        _legacy_uri,
+        name=f"result_card_{_legacy_uri.rsplit('/', 1)[-1].removesuffix('.html').replace('-', '_')}",
+        title="Result card",
+        description="Same card as result_card, under a URI an earlier tool definition named.",
+        mime_type=ui_compat_card.CARD_MIME,
+        meta=ui_compat_card.resource_meta(_CARD_LINK_ORIGIN, _UPGRADE_ORIGIN),
+    )(compat_card)
+
+
 @mcp.prompt(
     name="lab_protocol_audit",
     title="Lab protocol safety audit",
