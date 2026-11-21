@@ -237,7 +237,8 @@ def _physical_form_disclosures_block(data: dict) -> list[str]:
     **记录驱动**形态披露渲染进文本面。
 
     后端给顶层 `physical_form_disclosures: [{chemical, cas, physical_form,
-    physical_form_disclosure}]`；`_expose()` 会把它带进 structuredContent，但模型读的是
+    physical_form_disclosure, preparation_percent, preparation_percent_low,
+    preparation_percent_text, preparation_disclosure}]`（`preparation_disclosure_tail` 在入口被剥）；`_expose()` 会把它带进 structuredContent，但模型读的是
     text ⇒ 不渲染就等于没修（CI-553 / CI-842 同一个形状）。单项渲染走
     `_form_disclosure_lines` 这一个出口，批量里有多个化学品，所以每行前面加化学品名
     （句子本身只说「这份 SDS」，不带名字就分不清在说哪一个）。

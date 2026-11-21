@@ -20,6 +20,7 @@ host's model cannot rewrite.
 | `test_template_initializes_checks_sender_and_pins_origin` | drop the `ui/initialize` handshake, the `e.source` check or the origin injection |
 | `test_link_origin_is_the_public_one_not_the_backend_call_url` | derive the card's link origin from `API_URL` again |
 | `test_template_change_ships_under_a_new_uri` | edit the template without bumping `CARD_URI` (or bump without re-pinning) |
+| `test_card_names_the_preparation_the_text_states` | drop `forms` from `card_payload`, or derive the concentration label from `preparation_percent` |
 | `test_template_follows_host_theme_and_reports_size` | drop the `color-scheme` declaration, the `hostContext.theme` read or the `size-changed` report |
 
 Async cases use `asyncio.run` (no pytest-asyncio in requirements-dev.txt, see test_response_kind.py).
@@ -216,6 +217,7 @@ _TEMPLATE_PINS = {
     "ui://msds-chain/result-card-v1.html": "e404c5a62e72ddc8",
     "ui://msds-chain/result-card-v2.html": "2c2abebcb5f9d979",
     "ui://msds-chain/result-card-v3.html": "e0417093bdd57843",
+    "ui://msds-chain/result-card-v4.html": "92677828df7d2ff6",
 }
 
 
@@ -228,3 +230,29 @@ def test_template_change_ships_under_a_new_uri():
     assert card.CARD_URI in _TEMPLATE_PINS, f"new URI {card.CARD_URI}: add it to _TEMPLATE_PINS with {got}"
     assert _TEMPLATE_PINS[card.CARD_URI] == got, (
         f"template changed under {card.CARD_URI}: bump CARD_URI and pin the new one with {got}")
+
+
+_PREP = ("⚠️ The SDS this answer is based on describes a PREPARATION containing this substance "
+         "at 1–5% by weight, not the pure substance.")
+
+
+def test_card_names_the_preparation_the_text_states(monkeypatch):
+    """A dilute-preparation SDS behind one side of a pair is said in the text and on the card,
+    and the card's concentration label is the backend's range text, not one recomputed from
+    the upper bound (`preparation_percent`)."""
+    payload = {**_PAYLOAD, "physical_form_disclosures": [
+        {"chemical": "thionyl chloride", "physical_form": None,
+         "physical_form_disclosure": None, "preparation_percent": None,
+         "preparation_percent_low": None, "preparation_percent_text": None,
+         "preparation_disclosure": None},
+        {"chemical": "ethanol", "physical_form": None,
+         "physical_form_disclosure": None, "preparation_percent": 5,
+         "preparation_percent_low": 1, "preparation_percent_text": "1–5%",
+         "preparation_disclosure": _PREP}]}
+    result = _call(monkeypatch, payload=payload)
+    assert "- ⚠️ ethanol: The SDS this answer is based on describes a PREPARATION" in result.content[0].text
+    assert "⚠️ ⚠️" not in result.content[0].text
+    forms = result.meta[card.CARD_META_KEY]["forms"]
+    assert forms == [{"chemical": "ethanol", "preparation": "1–5%",
+                      "lines": [_PREP.removeprefix("⚠️ ")]}], forms
+    assert forms[0]["lines"][0] in result.content[0].text, "card notice must be text the answer shows"

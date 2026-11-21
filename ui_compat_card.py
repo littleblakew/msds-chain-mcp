@@ -21,14 +21,14 @@ import json
 import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from msds_mcp.disclosures import _precursor_same_wording, _precursor_unworded
+from msds_mcp.disclosures import _form_disclosure_lines, _precursor_same_wording, _precursor_unworded
 from msds_mcp.ui_card_safety_assets import SAFETY_CARDS_CSS, SAFETY_CARDS_JS
 from msds_mcp.ui_card_tokens import CARD_TOKENS_CSS
 
 # Any change to the HTML must ship under a new URI: hosts cache the template by URI, so an
 # edited template under the old one keeps serving the stale copy. A pinned hash in
 # tests/contract/test_compat_card.py goes red when the template changes and the URI does not.
-CARD_URI = "ui://msds-chain/result-card-v3.html"
+CARD_URI = "ui://msds-chain/result-card-v4.html"
 CARD_MIME = "text/html;profile=mcp-app"
 # Key under the tool result's `_meta` that carries the card payload.
 CARD_META_KEY = "msdschain/compat_card"
@@ -169,12 +169,32 @@ def card_payload(data: dict, allowed_origin: str) -> dict:
             "revision_date": d.get("revision_date"),
             "url": url,
         })
+    all_forms = _form_notices(data)
+    forms = all_forms[:_MAX_DOCS]
     return {
-        "pairs": pairs, "precursor": precursor, "documents": documents,
+        "pairs": pairs, "precursor": precursor, "documents": documents, "forms": forms,
+        "form_lookup_failed": bool(data.get("physical_form_lookup_failed")),
         "omitted": {"pairs": len(all_pairs) - len(pairs),
                     "precursor": len(all_precursor) - len(precursor),
-                    "documents": len(all_docs) - len(documents)},
+                    "documents": len(all_docs) - len(documents),
+                    "forms": len(all_forms) - len(forms)},
     }
+
+
+def _form_notices(data: dict) -> list[dict]:
+    """What the SDS on file is (a dilute preparation, a particular physical form), per chemical,
+    as the text answer prints it (`_physical_form_disclosures_block`, same renderer). The
+    concentration label is the backend's `preparation_percent_text` (a range such as `1–5%`);
+    the card never derives one from `preparation_percent`, which is only the upper bound."""
+    out = []
+    for item in _dicts(data.get("physical_form_disclosures")):
+        lines = notice_lines(_form_disclosure_lines(item))
+        if lines:
+            out.append({"chemical": _str(item.get("chemical")) or _str(item.get("cas")),
+                        "preparation": (_str(item.get("preparation_percent_text"))
+                                        if item.get("preparation_disclosure") else None),
+                        "lines": lines})
+    return out
 
 
 def _precursor_groups(entries: list) -> list[dict]:
@@ -384,6 +404,16 @@ __SAFETY_CSS__</style></head>
           + '</div><span class="chip t-' + tone + '">' + esc(String(x.verdict || "").replace(/_/g, " ")) + "</span></div>";
       });
       h += more(om.pairs, "pairs");
+    }
+    if ((p.forms && p.forms.length) || p.form_lookup_failed){
+      h += '<div class="sec">What the SDS on file describes</div>';
+      (p.forms || []).forEach(function(x){
+        h += '<div class="strip"><b>' + esc(x.chemical) + "</b>"
+          + (x.preparation ? ' <span class="chip t-warn">' + esc(x.preparation) + " preparation</span>" : "")
+          + (x.lines || []).map(function(t){ return '<div class="cap">' + esc(t) + "</div>"; }).join("") + "</div>";
+      });
+      if (p.form_lookup_failed) h += '<div class="strip">The physical-form check for the SDS on file could not run for this request; which form the cited sheet describes is not confirmed.</div>';
+      h += more(om.forms, "notices");
     }
     if (p.precursor && p.precursor.length){
       h += '<div class="sec">Regulated precursor notice</div>';
