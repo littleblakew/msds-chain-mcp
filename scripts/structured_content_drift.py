@@ -81,6 +81,9 @@ CASES = [
 _OURS = {"usage", "chemicals", "summary", "query", "expires_in_seconds", "regions",
          "regions_defaulted", "results", "documents", "pairs"}
 _INTERNAL = {"_usage"}
+# 卡片通道的键：`calls._drop_card_views` 对每个工具都把它从 structuredContent 拿掉（卡片从
+# `_meta` 画，正文已经给了同样的答案），所以不按工具逐个申报。
+_CARD_CHANNEL = {"view"}
 
 
 def _keys(d) -> set[str]:
@@ -107,7 +110,7 @@ async def main() -> int:
 
         sc = getattr(result, "structured_content", None) or {}
         declared = set(RESHAPED.get(name, {}))
-        dropped = _keys(backend) - _keys(sc) - _INTERNAL - declared
+        dropped = _keys(backend) - _keys(sc) - _INTERNAL - _CARD_CHANNEL - declared
         line = f"{'✅' if not dropped else '❌'} {name:32}"
         if dropped:
             problems.append(f"{name} 顶层丢: {sorted(dropped)}")
@@ -124,7 +127,7 @@ async def main() -> int:
                 print(f"   ❌ {path}: 后端 {len(b_items)} 条 → 我们 0 条")
                 continue
             b_keys = {rename.get(k, k) for k in _keys(b_items[0])}
-            nd = b_keys - _keys(s_items[0]) - _INTERNAL
+            nd = b_keys - _keys(s_items[0]) - _INTERNAL - _CARD_CHANNEL
             if nd:
                 problems.append(f"{name}.{path} 丢: {sorted(nd)}")
                 print(f"   ❌ {path} 丢 {sorted(nd)}")
