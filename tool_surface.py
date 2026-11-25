@@ -48,14 +48,24 @@ def extract_surface(tools) -> dict[str, dict[str, list[str]]]:
     return surface
 
 
-def diff_surface(baseline: dict, current: dict) -> dict[str, list[str]]:
+def diff_surface(baseline: dict, current: dict,
+                 aliases: dict[str, str] | None = None) -> dict[str, list[str]]:
     """把 baseline→current 的差异分成 breaking / additive 两栏（各是人话字符串）。
 
     两栏都为空 ⇒ 工具面没动过。任一非空 ⇒ 上架条目（以及所有已连接的客户端）
     与线上不再一致，需要一次**显式决定**：更新基线，并判断要不要重交条目。
+
+    `aliases`（旧名 → 新名，即 `msds_mcp.app.TOOL_ALIASES`）：旧名不在 `tools/list`
+    里但仍可调用 ⇒ 旧客户端按旧名调时拿到的是新工具的参数面，按这个参数面照常比对。
     """
     breaking: list[str] = []
     additive: list[str] = []
+
+    current = dict(current)
+    for old, new in (aliases or {}).items():
+        if old in baseline and old not in current and new in current:
+            current[old] = current[new]
+            additive.append(f"改名：{old} → {new}（旧名留作隐藏别名，旧客户端照常能调）")
 
     for name in sorted(set(baseline) - set(current)):
         breaking.append(f"工具消失或改名：{name}（旧客户端调它会直接失败）")

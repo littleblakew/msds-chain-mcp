@@ -456,7 +456,7 @@ EXPECTED_TOOLS = frozenset({
     "upload_msds_pdf",
     "batch_safety_check",
     "check_regulatory_lists",
-    "search_msds_online",
+    "lookup_pubchem_hazards",
     "draft_sds_sections",
     "validate_sds", "review_synthesis_route", "assess_thermal_hazard",
 })
@@ -1380,7 +1380,7 @@ def test_get_audit_report_relative_url_prefixed_with_api_url(monkeypatch):
     assert "/sessions/DEMO-ABC456/report/pdf?t=tok" in sc["report_url"]
 
 
-def test_search_msds_online_found(monkeypatch):
+def test_lookup_pubchem_hazards_found(monkeypatch):
     """found → labelled PubChem result (source=pubchem, not-a-signed-SDS note)."""
     async def fake_direct(chemical_name="", cas_number=""):
         return {
@@ -1395,7 +1395,7 @@ def test_search_msds_online_found(monkeypatch):
     from request_identity import set_caller_credential
     set_caller_credential("sk-msds-test")
     monkeypatch.setattr(server, "_direct_online_search", fake_direct)
-    res = asyncio.run(server.search_msds_online(chemical_name="acetonitrile"))
+    res = asyncio.run(server.lookup_pubchem_hazards(chemical_name="acetonitrile"))
 
     assert isinstance(res, CallToolResult)
     assert res.structured_content["source"] == "pubchem"
@@ -1405,7 +1405,7 @@ def test_search_msds_online_found(monkeypatch):
     assert "not a" in text.lower() and "sds" in text.lower()  # labelled unverified
 
 
-def test_search_msds_online_not_found(monkeypatch):
+def test_lookup_pubchem_hazards_not_found(monkeypatch):
     """not_found → returns the message (no fabricated hazards)."""
     async def fake_direct(chemical_name="", cas_number=""):
         return {"status": "not_found", "message": "'zzz' not found on PubChem. Upload an SDS or skip."}
@@ -1413,7 +1413,7 @@ def test_search_msds_online_not_found(monkeypatch):
     from request_identity import set_caller_credential
     set_caller_credential("sk-msds-test")
     monkeypatch.setattr(server, "_direct_online_search", fake_direct)
-    res = asyncio.run(server.search_msds_online(chemical_name="zzz"))
+    res = asyncio.run(server.lookup_pubchem_hazards(chemical_name="zzz"))
     assert isinstance(res, str)
     assert "not found on PubChem" in res
 

@@ -128,7 +128,7 @@ _MINIMAL_ARGS = {
     "create_audit_session": {"experiment_name": "e", "chemicals": ["a"]},
     "get_audit_report": {"session_id": "S"},
     "search_chemical_database": {"query": "q"},
-    "search_msds_online": {"chemical_name": "c"},
+    "lookup_pubchem_hazards": {"chemical_name": "c"},
     "get_sds_section": {"chemical": "a", "section": 4},
     "get_chemical_alternatives": {"chemical": "a"},
     "validate_protocol_chemicals": {"protocol_text": "t"},
