@@ -1144,7 +1144,7 @@
     "idempotentHint": null,
     "openWorldHint": true,
     "readOnlyHint": true,
-    "title": "Search MSDS Online (PubChem)"
+    "title": "Look Up Hazards on PubChem"
    },
    "description": "Look up GHS hazard data for a chemical NOT in the MSDS Chain database, via PubChem.\n\nUse this ONLY as a fallback when search_chemical_database returns no result. The\ndata is PubChem's AGGREGATED GHS classification, clearly labelled source=\"pubchem\"\n— it is NOT a signed supplier SDS. Present it to the user as PubChem-sourced and\nunverified; prefer uploading a real SDS (upload_msds_pdf) when accuracy matters.",
    "execution": null,
@@ -1177,10 +1177,10 @@
       "title": "Intent"
      }
     },
-    "title": "search_msds_onlineArguments",
+    "title": "lookup_pubchem_hazardsArguments",
     "type": "object"
    },
-   "name": "search_msds_online",
+   "name": "lookup_pubchem_hazards",
    "outputSchema": null,
    "title": null
   },

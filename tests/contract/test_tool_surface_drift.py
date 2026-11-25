@@ -132,7 +132,8 @@ def test_pending_listing_batch_is_additive_only():
       ⇒ 改 JSON 的 `tools` 对它零影响，变异会「安静地什么都没做」而看起来像守卫漏了。
       要从这个方向造，得去改 `server.py`。
     """
-    pending = diff_surface(_listing(), _current())
+    from msds_mcp.app import TOOL_ALIASES
+    pending = diff_surface(_listing(), _current(), TOOL_ALIASES)
     assert not pending["breaking"], (
         "上架条目还没重交，而线上已经出现**破坏性**改动 ⇒ 从目录安装的用户此刻就在坏，"
         f"且另一条守卫看不见这一维：{pending['breaking']}\n"

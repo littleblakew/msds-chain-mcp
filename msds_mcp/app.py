@@ -152,6 +152,15 @@ def client_description(doc: str | None) -> str:
     return _ARGS_SECTION.sub("", inspect.cleandoc(doc or "")).rstrip()
 
 
+# 改过名的工具：旧名 → 新名（CI-1303）。旧名不进 `tools/list`，但照样能调。
+# 外部客户端拿的是工具面快照（ChatGPT 目录条目、claude.ai 连接器、Teams 包里的静态
+# 工具清单），它们会一直按旧名调，直到重新拍快照；删掉一行之前先查
+# `tool_alias_call` 那条日志，确认旧名已经没人调。
+TOOL_ALIASES: dict[str, str] = {
+    "search_msds_online": "lookup_pubchem_hazards",
+}
+
+
 class _Server(MCPServer):
     def tool(self, name=None, title=None, description=None, **kwargs):
         if callable(name):  # 裸 `@mcp.tool`：照 SDK 的做法当场报错，别静默吞掉这个工具
@@ -161,6 +170,12 @@ class _Server(MCPServer):
             text = description if description is not None else client_description(fn.__doc__)
             return MCPServer.tool(self, name, title, text, **kwargs)(fn)
         return register
+
+    async def call_tool(self, name, arguments, context=None):
+        if (target := TOOL_ALIASES.get(name)) is not None:
+            logger.info("tool_alias_call %s -> %s", name, target)
+            name = target
+        return await super().call_tool(name, arguments, context)
 
 # mcp 2.x: `host`/`port`/`transport_security` are no longer ctor args — they moved to
 # streamable_http_app()/sse_app() (see server_remote.py). host/port were already dead

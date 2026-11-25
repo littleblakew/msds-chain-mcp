@@ -53,7 +53,7 @@ SUPPORTED = {
 # 后端实测**不认** lang 的端点 → 这些工具**不该**有 lang 参数。
 # value = 实测证据，改这张表之前先重跑那个对比。
 UNSUPPORTED = {
-    "search_msds_online": "online-search：en/zh 均 1599 字节、零中文",
+    "lookup_pubchem_hazards": "online-search：en/zh 均 1599 字节、零中文",
     "get_transport_classification": "transport-classification：en/zh 均 325 字节、零中文",
     "get_waste_disposal": "waste-disposal：en/zh 均 792 字节、零中文",
 }

@@ -115,7 +115,7 @@
         "intent"
       ]
     },
-    "search_msds_online": {
+    "lookup_pubchem_hazards": {
       "required": [],
       "optional": [
         "cas_number",

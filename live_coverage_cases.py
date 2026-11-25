@@ -36,7 +36,7 @@ CASES: dict[str, dict] = {
         "expect_mentions": ['acetone'],
         "note": "签名 URL 通路——可追溯性的落点，断了等于拿不出原始 PDF",
     },
-    "search_msds_online": {
+    "lookup_pubchem_hazards": {
         "args": {"chemical_name": "benzene"},
         "expect_mentions": ['benzene'],
         "note": "PubChem 兜底（库里没有时不至于死路）；走外部网络，失败可能是对方的问题",

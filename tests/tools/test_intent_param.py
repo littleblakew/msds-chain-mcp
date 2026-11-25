@@ -106,7 +106,7 @@ def _call(name, **extra):
     """
     args = dict(CASES[name]["args"], **extra)
     # 🔴 必须带凭证：没有它的话 `create_audit_session` / `search_chemical_database` /
-    # `search_msds_online` / `check_regulatory_lists` / `get_sds_document` 会在
+    # `lookup_pubchem_hazards` / `check_regulatory_lists` / `get_sds_document` 会在
     # `_require_api_key()` 那里直接返回一句提示，**根本走不到作答那条路** ⇒ 泄漏守卫
     # 对这 5 个工具恒绿（review 实测：给 `search_chemical_database` 造一个真的泄漏，
     # 整个文件仍是 6 passed）。全局的 `assert seen` 挡不住这个——另外 12 个工具在发请求。

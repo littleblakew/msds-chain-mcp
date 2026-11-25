@@ -223,10 +223,10 @@ async def search_chemical_database(query: Annotated[str, Field(
                     success=success, error_message=error_msg)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Search MSDS Online (PubChem)", read_only_hint=True, destructive_hint=False, open_world_hint=True), structured_output=False)
+@mcp.tool(annotations=ToolAnnotations(title="Look Up Hazards on PubChem", read_only_hint=True, destructive_hint=False, open_world_hint=True), structured_output=False)
 @_graceful_timeout
 @_reported
-async def search_msds_online(
+async def lookup_pubchem_hazards(
     chemical_name: Annotated[str, Field(
         description='Chemical name to look up on PubChem, e.g. "acetonitrile". '
                     'Supply this or cas_number (or both).',
@@ -287,7 +287,7 @@ async def search_msds_online(
             },
         )
     finally:
-        _log_intent("search_msds_online", [chemical_name or cas_number],
+        _log_intent("lookup_pubchem_hazards", [chemical_name or cas_number],
                     _intent_params({"chemical_name": chemical_name, "cas_number": cas_number}, intent),
                     success=success, error_message=error_msg)
 
