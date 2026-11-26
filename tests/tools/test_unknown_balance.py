@@ -78,13 +78,9 @@ def _cred(monkeypatch):
     set_caller_credential(None)
 
 
-# 🔴 **必须挑真的会渲染用量行的工具**。只有 5 个工具走 `_with_usage`
-# （`check_chemical_compatibility` / `get_chemical_risk_warnings` /
-# `check_regulatory_compliance` / `get_audit_report` / `batch_safety_check`）；
-# 别的工具走 `_strip_usage`，**压根不打印这一行** ⇒ 拿它们当用例，
-# 「没说没扣费」会恒真，守卫全程绿而什么都没测（本仓
-# [[guard-cases-must-let-later-key-terms-decide]]：用例要让该决胜的条件真的决胜）。
-# 我第一版挑的就是 `get_storage_guidance`，三条当场红在「连用量行都没有」上。
+# 🔴 **必须挑真的会渲染用量行的工具**（用例要让该决胜的条件真的决胜）。
+# CI-1661 起所有被计费的工具都由 `_reported` 补这一行，这里仍用自己渲染的那几个；
+# 兜底那条路的用例在 `test_usage_line_everywhere.py`。
 def _text_of(monkeypatch, headers, tool="get_chemical_risk_warnings", args=None):
     """跑一个真实工具，返回调用方最终看到的那段文字。"""
     monkeypatch.setattr(server.httpx, "AsyncClient", _client(headers))

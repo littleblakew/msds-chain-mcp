@@ -305,8 +305,8 @@ async def get_audit_report(
                 "report on that session."
             )
         lines.append("Open in a browser or `curl -O` to download the PDF.")
-        # CI-892: 与另外 19 个取值型工具一致——`_with_usage` 在文本尾部补 `💳` 那行、
-        # 并把 `usage` 放进 structuredContent。后端没计量时它自己 no-op。
+        # CI-892: `_with_usage` 在文本尾部补 `💳` 那行、并把 `usage` 放进 structuredContent。
+        # 后端没计量时它自己 no-op。没自己补的工具由 `_reported` 兜（CI-1661）。
         return _with_usage(CallToolResult(
             content=[TextContent(type="text", text="\n".join(lines))],
             structured_content={
