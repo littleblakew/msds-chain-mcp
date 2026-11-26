@@ -101,6 +101,30 @@ def test_fan_out_sums_cost_and_keeps_lowest_balance():
     assert acc["cost"] == 3.0 and acc["balance"] == 17.0, acc
 
 
+@pytest.mark.parametrize("order", [("subscription", ""), ("", "subscription")])
+def test_mixed_reasons_never_claim_included_in_plan(order):
+    """一次真扣费混进订阅调用时，汇总不许说「没扣费」（CI-904 那句话）。"""
+    async def run():
+        token = calls._call_usage.set({})
+        try:
+            calls._note_call_usage({"cost": 0.0, "balance": None, "reason": order[0]})
+            calls._note_call_usage({"cost": 2.0, "balance": None, "reason": order[1]})
+            acc = calls._call_usage.get()
+            return calls._usage_line({"cost": acc["cost"], "balance": acc["balance"],
+                                      "reason": acc["reason"]})
+        finally:
+            calls._call_usage.reset(token)
+    line = asyncio.run(run())
+    assert "no credits deducted" not in line and "used 2 credits" in line, line
+
+
+def test_emoji_in_tool_text_does_not_suppress_the_line(monkeypatch):
+    """判「工具已渲染」靠结构标记，不靠在正文里找 💳。"""
+    monkeypatch.setitem(_PAYLOAD, "content", "Card 💳 mentioned in SDS text.")
+    text, _ = _call(monkeypatch, _METERED, "get_sds_section", {"chemical": "acetone", "section": 7})
+    assert "Balance: 19 credits remaining" in text, text[-300:]
+
+
 def test_hosted_instructions_tell_the_model_calls_cost_credits():
     text = (server_root() / "hosted_instructions.txt").read_text(encoding="utf-8")
     assert "CREDITS:" in text and "get_sds_section" in text and "💳" in text

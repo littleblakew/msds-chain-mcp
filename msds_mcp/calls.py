@@ -603,17 +603,23 @@ _call_usage: ContextVar[dict | None] = ContextVar("mcp_call_usage", default=None
 
 
 def _note_call_usage(usage: dict) -> None:
-    """累计一次后端调用的扣费：cost 求和，余额取最小（并行时最后回来的不一定最新）。"""
+    """累计一次后端调用的扣费：cost 求和，余额取最小（并行时最后回来的不一定最新）。
+
+    🔴 `reason` 只有**每一次**都是 subscription 才记 subscription：混着一次真扣费时
+    说「Included in your plan」就是 CI-904 那句对用户有利的假话。
+    """
     acc = _call_usage.get()
     if acc is None:
         return
+    first = "cost" not in acc
     acc["cost"] = (acc.get("cost") or 0) + (usage.get("cost") or 0)
     bal = usage.get("balance")
     if bal is not None:
         acc["balance"] = bal if acc.get("balance") is None else min(acc["balance"], bal)
     else:
         acc.setdefault("balance", None)
-    acc["reason"] = usage.get("reason", "")
+    reason = usage.get("reason", "")
+    acc["reason"] = reason if first or acc.get("reason") == reason else ""
 
 
 def _log_intent(tool_name: str, chemicals: list[str] | None,
@@ -1069,6 +1075,10 @@ def _with_usage(result: "CallToolResult", data: dict) -> "CallToolResult":
     usage = (data or {}).get("_usage")
     if not usage:
         return result
+    # CI-1661：告诉 `_reported` 这一轮已经渲染过，别再补第二行。
+    acc = _call_usage.get()
+    if acc is not None:
+        acc["rendered"] = True
     content = list(result.content or [])
     line = _usage_line(usage)
     if content and isinstance(content[0], TextContent):
@@ -1088,15 +1098,15 @@ def _append_call_usage(result):
     `is_error` 不补（撞额度那条已经在讲余额和去路）。
     """
     acc = _call_usage.get()
-    if not acc or "cost" not in acc:
+    if not acc or "cost" not in acc or acc.get("rendered"):
         return result
     usage = {"cost": acc["cost"], "balance": acc.get("balance"), "reason": acc.get("reason", "")}
     if isinstance(result, str):
-        return result if "💳" in result else result + _usage_line(usage)
+        return result + _usage_line(usage)
     if not isinstance(result, CallToolResult) or result.is_error:
         return result
     content = list(result.content or [])
-    if not content or not isinstance(content[0], TextContent) or "💳" in content[0].text:
+    if not content or not isinstance(content[0], TextContent):
         return result
     return _with_usage(result, {"_usage": usage})
 
