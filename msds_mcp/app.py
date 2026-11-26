@@ -9,6 +9,8 @@ import ui_compat_card
 from mcp.server import MCPServer
 from mcp.server.caching import CacheHint
 
+from msds_mcp.skills_ext import Skills
+
 
 
 
@@ -183,6 +185,8 @@ class _Server(MCPServer):
 mcp = _Server(
     "MSDS Chain",
     version=__version__,
+    # CI-1651：把 `skills/` 从 server 下发（Skills over MCP），只连 connector 的用户也拿得到。
+    extensions=[Skills()],
     # 只列我们真正提供的两个：resources/prompts 一个都没注册（`CACHEABLE_METHODS` 里其余
     # 四个方法在本服务上没有 handler），凭空给它们 hint 是写一份永远不执行的配置。
     cache_hints={"tools/list": _LIST_CACHE, "server/discover": _LIST_CACHE},

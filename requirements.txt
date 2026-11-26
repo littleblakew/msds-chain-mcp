@@ -13,3 +13,5 @@ uvicorn>=0.30.0
 # mcp 只要求 `starlette>=0.27`，所以干净解析器现在就会装到 **1.6.0**（不是这次改的，
 # main 上同样如此，已实测），下一个大版本随时可能把这两处挪走而没人 review 过。
 starlette>=0.38.0,<2
+# CI-1651：`msds_mcp/skills_ext.py` 解析 SKILL.md 的 YAML frontmatter（spec 要求原样下发成 JSON）。
+PyYAML>=6.0
