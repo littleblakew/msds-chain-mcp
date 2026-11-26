@@ -37,7 +37,7 @@ After presenting the safety brief, offer:
 > - **Mixing order** — safe addition sequence for specific pairs
 > - **Alternatives** — safer substitutes for hazardous chemicals
 > - **Emergency response** — spill/fire/exposure procedures
-> - **Full audit** — create a signed session with PDF report (requires API key)
+> - **Full audit** — create a signed session with PDF report
 
 ## Deep Dive (On Request)
 
@@ -69,7 +69,7 @@ inhalation, eye contact and ingestion all map to `exposure`; a burn *on a person
 protocol (e.g. calcium gluconate for HF) — picking `spill` for a contact incident
 silently returns cleanup guidance instead of the antidote.
 
-### Full Audit Session (Requires API Key)
+### Full Audit Session
 When the user requests a formal audit:
 ```
 create_audit_session(experiment_name="PCR Buffer Preparation", chemicals=["Tris", "HCl", "EDTA", "KCl"])
@@ -78,4 +78,4 @@ Then:
 ```
 get_audit_report(session_id="<returned session_id>")
 ```
-This generates a signed PDF report. If API key is not configured, follow [setup-guide.md](setup-guide.md#api-key-upgrade).
+This generates a signed PDF report. If the call fails with a sign-in or credit error, follow [setup-guide.md](setup-guide.md#sign-in-and-credits).
