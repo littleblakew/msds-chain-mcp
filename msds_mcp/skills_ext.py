@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -73,13 +74,14 @@ class _Skill:
         }
 
 
+_FRONTMATTER = re.compile(r"\A\ufeff?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
+
+
 def _frontmatter(text: str, where: Path) -> dict[str, Any]:
-    if not text.startswith("---\n"):
-        raise ValueError(f"{where}: SKILL.md must start with a YAML frontmatter block")
-    block, sep, _ = text[4:].partition("\n---")
-    if not sep:
-        raise ValueError(f"{where}: SKILL.md frontmatter is not closed")
-    data = yaml.safe_load(block)
+    m = _FRONTMATTER.match(text)
+    if m is None:
+        raise ValueError(f"{where}: SKILL.md must start with a closed YAML frontmatter block")
+    data = yaml.safe_load(m.group(1))
     if not isinstance(data, dict) or not data.get("name") or not data.get("description"):
         raise ValueError(f"{where}: frontmatter needs `name` and `description`")
     return data
@@ -91,6 +93,11 @@ def _mime(path: Path) -> str:
     return mimetypes.guess_type(path.name)[0] or "text/plain"
 
 
+def _ignored(path: Path, skill_dir: Path) -> bool:
+    """Editor and interpreter litter (`.DS_Store`, `__pycache__/`) is not part of a skill."""
+    return any(part.startswith(".") or part == "__pycache__" for part in path.relative_to(skill_dir).parts)
+
+
 def load_skills(root: Path = SKILLS_DIR) -> tuple[_Skill, ...]:
     skills = []
     for skill_md in sorted(root.glob("*/SKILL.md")):
@@ -99,7 +106,7 @@ def load_skills(root: Path = SKILLS_DIR) -> tuple[_Skill, ...]:
         if front["name"] != skill_dir.name:
             raise ValueError(f"{skill_md}: frontmatter name {front['name']!r} != directory {skill_dir.name!r}")
         files = []
-        for path in sorted(p for p in skill_dir.rglob("*") if p.is_file()):
+        for path in sorted(p for p in skill_dir.rglob("*") if p.is_file() and not _ignored(p, skill_dir)):
             raw = path.read_bytes()
             rel = path.relative_to(skill_dir).as_posix()
             files.append(_File(

@@ -53,6 +53,8 @@ def test_every_local_module_and_data_file_is_copied():
     needed = {"server_remote.py"}
     _local_imports(ROOT / "server_remote.py", needed)
     needed.add("hosted_instructions.txt")  # read by server_remote in edge mode
-    needed.add("skills/")  # read at import by msds_mcp/skills_ext.py (Skills over MCP)
+    from msds_mcp.skills_ext import SKILLS_DIR  # read at import (Skills over MCP)
+    assert SKILLS_DIR.parent == ROOT and SKILLS_DIR.is_dir(), SKILLS_DIR
+    needed.add(f"{SKILLS_DIR.name}/")
     missing = sorted(needed - _copied())
     assert not missing, f"Dockerfile COPY is missing {missing}"

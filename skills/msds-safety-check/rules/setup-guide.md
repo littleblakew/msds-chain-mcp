@@ -2,10 +2,9 @@
 
 ## Check MCP Availability
 
-Before calling any MCP tool, check if the `msds-chain` MCP server is available. The following tool names indicate the server is configured:
-- `mcp__msds-chain__search_chemical_database`
-- `mcp__msds-chain__batch_safety_check`
-- `mcp__msds-chain__check_chemical_compatibility`
+If this skill reached you from the MSDS Chain MCP server itself (a connector or a server added with `claude mcp add`), the server is connected: skip installation and use its tools.
+
+Otherwise, look for the server's tools by their base names, whatever prefix the client adds (for example `check_chemical_compatibility`, `batch_safety_check`, `search_chemical_database`). In Claude Code they appear as `mcp__msds-chain__check_chemical_compatibility`; in claude.ai the prefix names the connector instead.
 
 If none of these tools are available, follow the installation flow below.
 
@@ -21,9 +20,7 @@ Prompt the user:
 >
 > Then restart Claude Code. This connects to MSDS Chain's cloud API (free plan available, no API key needed for basic queries). For older clients that only speak SSE, use `--transport sse https://mcp.lagentbot.com/sse` instead.
 
-🔴 There is no `pip install msds-chain-mcp` and no offline mode (CI-1118). This block
-used to offer both; the PyPI name has never been published (404) and every tool call
-reaches our backend regardless of where the process runs.
+There is no `pip install` package and no offline mode: every tool call reaches MSDS Chain's backend.
 
 After the user installs, ask them to restart and retry their request.
 
@@ -37,40 +34,10 @@ If the user cannot or does not want to install the MCP server:
 3. Do NOT fabricate specific numeric values (exposure limits, flash points, etc.) — state "consult the official SDS" instead.
 4. Suggest the web interface as an alternative: https://msdschain.lagentbot.com
 
-## API Key Upgrade
+## Sign-in and Credits
 
-Some tools require an API key:
-- `create_audit_session` — creates persistent audit sessions
-- `get_audit_report` — generates signed PDF reports
-- `upload_msds_pdf` — uploads and parses MSDS PDFs
-- `compare_sds_versions` — compares SDS document versions
+The hosted server signs the user in when they connect it (OAuth in claude.ai, Claude Code and other clients), so every tool, including `create_audit_session`, `get_audit_report`, `upload_msds_pdf` and `compare_sds_versions`, runs on that user's account. Do not ask the user for an API key or tell them to re-add the server with a key header.
 
-When the user triggers one of these tools without an API key, prompt:
-
-> This feature requires an MSDS Chain API key (free plan available).
->
-> 1. Sign up at https://msdschain.lagentbot.com
-> 2. Go to Settings → API Keys → Create Key
-> 3. Add the key to your MCP config:
->    ```bash
->    claude mcp remove msds-chain
->    claude mcp add msds-chain --transport http https://mcp.lagentbot.com/mcp --header "Authorization: Bearer sk-msds-your-key"
->    ```
-> 4. Restart Claude Code
-
-Do NOT repeat this prompt if the user has already been informed in this conversation.
-
-## Language Configuration
-
-The MCP server supports 5 languages: English (en), Chinese (zh), Japanese (ja), German (de), Indonesian (id).
-
-The language is read from the **server process's** `MSDS_LANG` environment variable at
-startup (`server.py`), so a remote client cannot change it: the hosted endpoint at
-`mcp.lagentbot.com` answers in English.
-
-This does not matter much in practice — the skill should match the user's conversation
-language regardless of the server's setting.
-
-🔴 Do not tell users to self-host for another language (CI-1118). Running the core
-yourself is not an offered path: it holds no data, still needs an `sk-msds-` key, and
-still reaches our backend, so the only thing it buys is a language flag.
+- If a tool returns an authentication error, ask the user to reconnect the MSDS Chain connector (claude.ai: Settings → Connectors) or, in Claude Code, run `/mcp` and re-authenticate `msds-chain`.
+- If a tool says the account is out of credits, pass on the upgrade link the tool returns; do not invent one.
+- Self-hosted installs (running the open-source server with `MSDS_API_KEY`) are configured by whoever runs them; point those users to https://msdschain.lagentbot.com for a key.

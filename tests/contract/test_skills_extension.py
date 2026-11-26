@@ -87,3 +87,15 @@ def test_skill_dir_must_match_frontmatter_name(tmp_path):
     (d / "SKILL.md").write_text("---\nname: other\ndescription: x\n---\nbody\n", encoding="utf-8")
     with pytest.raises(ValueError, match="frontmatter name"):
         skills_ext.load_skills(tmp_path)
+
+
+def test_frontmatter_accepts_crlf_and_bom_and_skips_litter(tmp_path):
+    d = tmp_path / "ok-skill"
+    (d / "__pycache__").mkdir(parents=True)
+    (d / "SKILL.md").write_bytes("\ufeff---\r\nname: ok-skill\r\ndescription: x\r\n---\r\nbody\r\n".encode("utf-8"))
+    (d / ".DS_Store").write_bytes(b"\x00\x87binary")
+    (d / "__pycache__" / "x.pyc").write_bytes(b"\x00\xff")
+    (skill,) = skills_ext.load_skills(tmp_path)
+    assert skill.frontmatter == {"name": "ok-skill", "description": "x"}
+    assert [f.uri for f in skill.files] == ["skill://ok-skill/SKILL.md"]
+

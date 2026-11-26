@@ -187,9 +187,9 @@ mcp = _Server(
     version=__version__,
     # CI-1651：把 `skills/` 从 server 下发（Skills over MCP），只连 connector 的用户也拿得到。
     extensions=[Skills()],
-    # 只列我们真正提供的两个：resources/prompts 一个都没注册（`CACHEABLE_METHODS` 里其余
-    # 四个方法在本服务上没有 handler），凭空给它们 hint 是写一份永远不执行的配置。
-    cache_hints={"tools/list": _LIST_CACHE, "server/discover": _LIST_CACHE},
+    # 清单类方法的内容每个镜像内是常量（工具、卡片模板、skill 文件都在 import 时注册）⇒ 同一份 hint。
+    # `resources/read` 不给：卡片模板靠换 URI 失效（见 ui_compat_card.CARD_URI），skill 文件靠 digest。
+    cache_hints={"tools/list": _LIST_CACHE, "server/discover": _LIST_CACHE, "resources/list": _LIST_CACHE},
     # 🔴 CI-1101: this copy is served to **self-hosted / stdio** installs only.
     # Hosted clients read `hosted_instructions.txt` instead: with MSDS_MCP_EDGE=1
     # `server_remote.py` swaps it in (until the edge takes over, the distribution

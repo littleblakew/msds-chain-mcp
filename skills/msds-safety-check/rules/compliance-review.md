@@ -47,7 +47,7 @@ get_waste_disposal(chemicals=["Chemical A", "Chemical B"])
 ```
 Returns: Waste classification, disposal method, incompatible waste streams.
 
-### Step 5: Generate Audit Report (Requires API Key)
+### Step 5: Generate Audit Report
 
 ```
 create_audit_session(experiment_name="<user-provided name>", chemicals=["Chemical A", "Chemical B"])
@@ -59,7 +59,7 @@ get_audit_report(session_id="<returned session_id>")
 
 Format all results as a **detailed report** (see [output-formats.md](output-formats.md#detailed-report)).
 
-If API key is not configured, present the gathered data in narrative form and suggest registering for signed reports (see [setup-guide.md](setup-guide.md#api-key-upgrade)).
+If the report call fails with a sign-in or credit error, present the gathered data in narrative form and handle the error as in [setup-guide.md](setup-guide.md#sign-in-and-credits).
 
 ## SDS Version Comparison (On Request)
 
