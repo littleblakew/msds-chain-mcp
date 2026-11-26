@@ -595,6 +595,26 @@ async def _log_call(tool_name: str, chemicals: list[str] | None, duration_ms: in
 # 自动 dump 入参会直接把客户文档字节写进日志表。
 _log_slot: ContextVar[dict | None] = ContextVar("mcp_log_slot", default=None)
 
+# CI-1661：本次工具调用里后端回过的计费 header 汇总到这里，`_reported` 在返回前把
+# `💳` 那行补到**每个**被计费工具的文本尾部（工具自己已经渲染过的除外）。
+# 🔴 存的是**可变 dict**：扇出工具用 `asyncio.gather` 起子任务，子任务拷的是 context，
+# 只有改同一个对象，子任务里的扣费才回得到这里。
+_call_usage: ContextVar[dict | None] = ContextVar("mcp_call_usage", default=None)
+
+
+def _note_call_usage(usage: dict) -> None:
+    """累计一次后端调用的扣费：cost 求和，余额取最小（并行时最后回来的不一定最新）。"""
+    acc = _call_usage.get()
+    if acc is None:
+        return
+    acc["cost"] = (acc.get("cost") or 0) + (usage.get("cost") or 0)
+    bal = usage.get("balance")
+    if bal is not None:
+        acc["balance"] = bal if acc.get("balance") is None else min(acc["balance"], bal)
+    else:
+        acc.setdefault("balance", None)
+    acc["reason"] = usage.get("reason", "")
+
 
 def _log_intent(tool_name: str, chemicals: list[str] | None,
                 input_params: str | None = None, *,
@@ -698,6 +718,7 @@ def _reported(fn):
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
         token = _log_slot.set(None)
+        usage_token = _call_usage.set({})
         # CI-548：每次工具调用一个 id，本次调用里打后端的每个请求都带上（`caller_headers`），
         # 上报日志时同值写进 `mcp_call_id` ⇒ 后端的审计行能接回这次的回复正文。
         call_id = uuid.uuid4().hex
@@ -709,7 +730,10 @@ def _reported(fn):
             # 这个装饰器，新工具不必记得补一行。理由与代价见 `_relay_language_note`。
             # 🔴 赋回 `result` 是必须的：`finally` 里 `_response_text(result)` 记的就该是
             # **我们真正发出去的那串文本**，否则调用日志与客户端看到的不是一回事。
-            result = _drop_card_views(_relay_language_note(await fn(*args, **kwargs)))
+            # CI-1661：`💳` 那行同理挂在这里——此前只有 6 个判断类工具自己补，查询类
+            # （`get_sds_section` 每次 1 credit）不说，模型一问并行几十次、一次烧光每日额度。
+            result = _drop_card_views(_relay_language_note(
+                _append_call_usage(await fn(*args, **kwargs))))
             return result
         except Exception as e:  # noqa: BLE001 — 记完再抛，行为不变
             success, error_msg = False, _error_text(e)
@@ -736,6 +760,7 @@ def _reported(fn):
                 # 上报被取消（CancelledError 落在 `await _log_call` 上）时也要复位，否则这个
                 # task 之后再打后端，会带着这次调用的 id 和日志槽。
                 _log_slot.reset(token)
+                _call_usage.reset(usage_token)
                 reset_mcp_call_id(call_token)
     return wrapper
 
@@ -1015,6 +1040,8 @@ def _billed_json(res: "httpx.Response") -> dict:
     _raise_for_status_with_reason(res)
     data = _drop_tail_keys(res.json())
     usage = _parse_usage(res)
+    if usage:
+        _note_call_usage(usage)
     if usage and isinstance(data, dict):
         data["_usage"] = usage
     return data
@@ -1051,6 +1078,27 @@ def _with_usage(result: "CallToolResult", data: dict) -> "CallToolResult":
         sc = {**sc, "usage": usage}
     # `meta` 是只给组件的通道（CI-1098），重建时不带上就会静默丢掉。
     return CallToolResult(content=content, structured_content=sc, meta=result.meta)
+
+
+def _append_call_usage(result):
+    """CI-1661：本次调用被计费、而工具自己没渲染 `💳` 那行时，由 `_reported` 补上。
+
+    模型看不到单价就不会省着调——查询类工具每次扣费却一字不提，模型会为一个问题
+    并行发几十次。工具已经渲染过（`_with_usage` 或扇出工具自己拼的）就原样返回；
+    `is_error` 不补（撞额度那条已经在讲余额和去路）。
+    """
+    acc = _call_usage.get()
+    if not acc or "cost" not in acc:
+        return result
+    usage = {"cost": acc["cost"], "balance": acc.get("balance"), "reason": acc.get("reason", "")}
+    if isinstance(result, str):
+        return result if "💳" in result else result + _usage_line(usage)
+    if not isinstance(result, CallToolResult) or result.is_error:
+        return result
+    content = list(result.content or [])
+    if not content or not isinstance(content[0], TextContent) or "💳" in content[0].text:
+        return result
+    return _with_usage(result, {"_usage": usage})
 
 
 # ---------------------------------------------------------------------------
